@@ -47,4 +47,5 @@ pub trait InputBackend {
 pub trait KeyMatrix {
     fn poll_raw_mask(&self) -> u32;
     fn reset_pins(&self);
+    fn now_ms(&self) -> u32;
 }

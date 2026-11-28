@@ -2,7 +2,8 @@ name = "Panic"
 output = "panic.mod"
 author = "KERN-SYS"
 type = "module"
-profile = "p0"
+profile = "p1"
+page_size = 2048
 icon = "APP_ABOUT"
 caps = [
     "STORAGE_READ", "STORAGE_WRITE", "DISPLAY_DIRECT", "SERIAL_COMM", "USB_COMM", "POWER_MANAGE",
@@ -11,7 +12,7 @@ caps = [
 src = "src"
 root = "panic.c"
 root_max = 4096
-leaves = [
+blocks = [
     "leaf1_prep.c",
     "leaf2_cause.c",
     "leaf3_disasm.c",

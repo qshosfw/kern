@@ -257,26 +257,45 @@ pub fn bpe_expand(dict: &[u8; BPE_DICT_BYTES], src: &[u8], out: &mut [u8]) -> Op
     Some(w)
 }
 
-/// Decode escape-run RLE (`esc <count>` skips `count` `esc` bytes; else literal) into `dst`
-/// starting at logical byte offset `start`.
-pub fn decode_rle_escape(src: &[u8], esc: u8, start: usize, dst: &mut [u8]) {
-    dst.fill(esc);
+/// Decode a PackBits stream into `dst` starting at logical byte offset `start`.
+pub fn packbits_decompress_range(src: &[u8], start: usize, dst: &mut [u8]) -> usize {
     let end = start + dst.len();
     let mut pos = 0usize;
-    let mut i = 0usize;
-    while i < src.len() && pos < end {
-        let b = src[i];
-        i += 1;
-        if b == esc {
-            pos += src[i] as usize;
-            i += 1;
-        } else {
-            if pos >= start {
-                dst[pos - start] = b;
+    let mut r = 0usize;
+    let mut written = 0usize;
+    while r < src.len() && pos < end {
+        let hdr = src[r];
+        r += 1;
+        if hdr <= 127 {
+            let n = ((hdr as usize) + 1).min(src.len() - r);
+            let seg_end = pos + n;
+            if seg_end > start {
+                let s0 = start.saturating_sub(pos);
+                let s1 = (end - pos).min(n);
+                let d0 = (pos + s0) - start;
+                let take = s1 - s0;
+                dst[d0..d0 + take].copy_from_slice(&src[r + s0..r + s1]);
+                written = written.max(d0 + take);
             }
-            pos += 1;
+            r += n;
+            pos = seg_end;
+        } else if hdr > 128 && r < src.len() {
+            let n = 257 - (hdr as usize);
+            let b = src[r];
+            r += 1;
+            let seg_end = pos + n;
+            if seg_end > start {
+                let s0 = start.saturating_sub(pos);
+                let s1 = (end - pos).min(n);
+                let d0 = (pos + s0) - start;
+                let take = s1 - s0;
+                dst[d0..d0 + take].fill(b);
+                written = written.max(d0 + take);
+            }
+            pos = seg_end;
         }
     }
+    written
 }
 
 #[cfg(test)]
@@ -284,14 +303,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rle_escape_decodes_full_and_partial_ranges() {
-        let mut out = [0u8; 6];
-        let enc = [0xAA, 0xFF, 0x04, 0xBB];
-        decode_rle_escape(&enc, 0xFF, 0, &mut out);
-        assert_eq!(out, [0xAA, 0xFF, 0xFF, 0xFF, 0xFF, 0xBB]);
-        let mut sub = [0u8; 2];
-        decode_rle_escape(&enc, 0xFF, 4, &mut sub);
-        assert_eq!(sub, [0xFF, 0xBB]);
+    fn packbits_range_decodes_subranges() {
+        let data = b"AAAAABcdeFFFFFF00000000xyz";
+        let mut comp = [0u8; 64];
+        let clen = packbits_compress(data, &mut comp).unwrap();
+        let mut sub = [0u8; 8];
+        let n = packbits_decompress_range(&comp[..clen], 5, &mut sub);
+        assert_eq!(n, 8);
+        assert_eq!(&sub, &data[5..13]);
     }
 
     #[test]

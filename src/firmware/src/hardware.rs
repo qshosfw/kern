@@ -1,6 +1,6 @@
 //! System Hardware Abstraction & Dirty Config Synchronization.
 
-use crate::services::{PowerServiceConfigExt, SystemStorage};
+use crate::services::PowerServiceConfigExt;
 use drivers::audio::AudioAmplifier;
 use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
@@ -27,6 +27,67 @@ impl SystemSerialPort {
 pub static mut SERIAL_ROUTER: kernel::service::SerialRouter<2> =
     kernel::service::SerialRouter::new();
 
+#[cfg(feature = "usb")]
+static mut ACTIVE_USB_DRIVER: *mut drivers::usb::UsbDriver<bsp::BspUsbBus> = core::ptr::null_mut();
+
+#[cfg(feature = "usb")]
+pub fn register_active_usb_driver(driver: *mut drivers::usb::UsbDriver<bsp::BspUsbBus>) {
+    unsafe {
+        ACTIVE_USB_DRIVER = driver;
+    }
+}
+
+#[cfg(feature = "usb")]
+#[inline(always)]
+pub fn on_usb_irq() {
+    let ptr = unsafe { ACTIVE_USB_DRIVER };
+    if !ptr.is_null() {
+        unsafe {
+            (*ptr).handle_irq();
+        }
+    }
+}
+
+#[cfg(feature = "usb")]
+fn active_usb_driver() -> Option<&'static drivers::usb::UsbDriver<bsp::BspUsbBus>> {
+    let ptr = unsafe { ACTIVE_USB_DRIVER };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &*ptr })
+    }
+}
+
+#[cfg(feature = "usb")]
+pub fn is_active_usb_connected() -> bool {
+    active_usb_driver().is_some_and(|d| d.is_connected())
+}
+
+#[cfg(feature = "usb")]
+pub fn is_active_usb_configured() -> bool {
+    active_usb_driver().is_some_and(|d| d.is_configured())
+}
+
+#[cfg(feature = "usb")]
+pub fn active_usb_read(buf: &mut [u8]) -> usize {
+    let ptr = unsafe { ACTIVE_USB_DRIVER };
+    if !ptr.is_null() {
+        unsafe { (*ptr).cdc_read(buf) }
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "usb")]
+pub fn active_usb_write(data: &[u8]) -> usize {
+    let ptr = unsafe { ACTIVE_USB_DRIVER };
+    if !ptr.is_null() {
+        unsafe { (*ptr).cdc_write(data) }
+    } else {
+        0
+    }
+}
+
 #[inline(always)]
 pub fn serial_router_mut() -> &'static mut kernel::service::SerialRouter<2> {
     unsafe { &mut *core::ptr::addr_of_mut!(SERIAL_ROUTER) }
@@ -35,11 +96,10 @@ pub fn serial_router_mut() -> &'static mut kernel::service::SerialRouter<2> {
 impl kernel::service::SerialPort for SystemSerialPort {
     fn write(&mut self, _data: &[u8]) {
         #[cfg(feature = "usb_cdc")]
-        if self.active_interface == 1
-            || (self.active_interface == 0 && drivers::usb::is_active_usb_configured())
+        if self.active_interface == 1 || (self.active_interface == 0 && is_active_usb_configured())
         {
-            if drivers::usb::is_active_usb_configured() {
-                let _ = drivers::usb::active_usb_write(_data);
+            if is_active_usb_configured() {
+                let _ = active_usb_write(_data);
                 return;
             }
         }
@@ -59,8 +119,8 @@ impl kernel::service::SerialPort for SystemSerialPort {
         if router.ports[kernel::service::PortId::UsbCdc as usize].mode
             == kernel::service::PortMode::RigWire
         {
-            if drivers::usb::is_active_usb_configured() || drivers::usb::is_active_usb_connected() {
-                let count = drivers::usb::active_usb_read(_buf);
+            if is_active_usb_configured() || is_active_usb_connected() {
+                let count = active_usb_read(_buf);
                 if count > 0 {
                     self.active_interface = 1;
                     return count;
@@ -102,10 +162,10 @@ impl kernel::service::SerialPort for SystemSerialPort {
 pub struct SystemHardware<'a> {
     pub backlight: BacklightController<bsp::BspBacklight>,
     pub audio: AudioAmplifier<bsp::BspAudioPa>,
-    pub filesystem: &'a mut SystemStorage<'a>,
-    pub key_scanner: KeypadScanner,
+    pub filesystem: &'a mut kernfs::KernFS<'a, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    pub key_scanner: KeypadScanner<bsp::BspKeyMatrix>,
     #[cfg(feature = "usb")]
-    pub usb: drivers::usb::UsbDriver,
+    pub usb: drivers::usb::UsbDriver<bsp::BspUsbBus>,
     pub orchestrator: crate::orchestrator::Orchestrator,
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     pub wire: kernel::wire::WireEngine<SystemSerialPort>,
@@ -123,6 +183,18 @@ pub fn apply_audio_hardware(
     radio.set_tone_gain((audio_cfg.beep_gain as u16 * 12).min(127) as u8);
     radio.set_mic_gain(audio_cfg.mic_gain);
     radio.set_audio_profile(audio_cfg.audio_profile);
+}
+
+#[inline(always)]
+pub fn is_torch_on() -> bool {
+    #[cfg(target_arch = "arm")]
+    {
+        bsp::pins::FLASHLIGHT.is_high()
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        false
+    }
 }
 
 #[inline(always)]
@@ -191,7 +263,7 @@ impl<'a> SystemHardware<'a> {
 
     #[cfg(feature = "usb")]
     pub fn sync_usb_telemetry(
-        usb: &mut drivers::usb::UsbDriver,
+        usb: &mut drivers::usb::UsbDriver<bsp::BspUsbBus>,
         cfg: &crate::config::MasterConfig,
     ) {
         usb.update_device_identity(cfg.system.model_str(), cfg.system.tag_str());
@@ -228,6 +300,32 @@ impl<'a> SystemHardware<'a> {
             }
             let radio_ev = state.coord.tick_10ms(&mut self.radio);
             state.rssi_dbm = state.coord.vfo_rssi(state.coord.listening_vfo);
+            let mut view = crate::services::radio::RADIO_VIEW.read();
+            let vfo_a = state
+                .coord
+                .vfo_channel(kernel::service::radio::VfoSlot::VfoA);
+            let vfo_b = state
+                .coord
+                .vfo_channel(kernel::service::radio::VfoSlot::VfoB);
+            let act = state.coord.vfo_channel(state.coord.active_vfo);
+            view.vfo_a_hz = vfo_a.effective_rx_freq().raw();
+            view.vfo_b_hz = vfo_b.effective_rx_freq().raw();
+            view.active_freq_hz = act.effective_rx_freq().raw();
+            view.rssi_dbm = state.rssi_dbm;
+            view.active_vfo = state.coord.active_vfo as u8;
+            view.listening_vfo = state.coord.listening_vfo as u8;
+            view.squelch_level = act.squelch_level;
+            view.tx_power = act.power as u8;
+            view.flags = if state.coord.is_transmitting {
+                kernel::service::radio::RADIO_FLAG_TX
+            } else {
+                0
+            } | if state.coord.is_slot_rx_active(state.coord.listening_vfo) {
+                kernel::service::radio::RADIO_FLAG_RX_OPEN
+            } else {
+                0
+            };
+            crate::services::radio::RADIO_VIEW.write(view);
             if let Some(bus_ev) = radio_ev.to_bus_event(2) {
                 crate::system::enqueue_event(kernel::event::Event::Bus(bus_ev));
             }

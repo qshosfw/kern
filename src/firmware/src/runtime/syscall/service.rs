@@ -661,9 +661,6 @@ pub unsafe fn op_proc_ctl(a0: usize, a1: usize, a2: usize) -> usize {
 pub unsafe fn op_proc_exec(a0: usize, a1: usize, a2: usize) -> usize {
     use ::abi::sub::proc_exec;
     let sub = a0 as u8;
-    if sub == proc_exec::LEAF {
-        return super::super::native_runner::krx_leaf_call((a0 >> 8) as u8, a1 as u32) as usize;
-    }
     #[cfg(feature = "krx_paged")]
     {
         match sub {
@@ -680,7 +677,7 @@ pub unsafe fn op_proc_exec(a0: usize, a1: usize, a2: usize) -> usize {
     }
     #[cfg(not(feature = "krx_paged"))]
     {
-        let _ = (a1, a2);
+        let _ = (sub, a1, a2);
         0
     }
 }

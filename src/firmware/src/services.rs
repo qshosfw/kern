@@ -1,10 +1,35 @@
 pub mod calibration;
-#[cfg(feature = "filesystem")]
+#[cfg(all(feature = "filesystem", feature = "i18n"))]
 pub mod lang;
+#[cfg(not(all(feature = "filesystem", feature = "i18n")))]
+pub mod lang {
+    #[inline(always)]
+    pub fn zone_a_end_bytes() -> usize {
+        0
+    }
+    #[inline(always)]
+    pub fn reset_arena_cache() {}
+    #[inline(always)]
+    pub fn reload_os<D: kernfs::BlockDevice>(
+        _storage: &mut kernfs::KernFS<'_, D>,
+        _sys: &crate::config::SystemConfig,
+    ) {
+    }
+    #[inline(always)]
+    pub fn bind_app<D: kernfs::BlockDevice>(_storage: &mut kernfs::KernFS<'_, D>, _path: &str) {}
+    #[inline(always)]
+    pub fn unbind_app() {}
+    #[cfg(feature = "text_input")]
+    #[inline(always)]
+    pub fn load_locale_keymap<D: kernfs::BlockDevice, T>(
+        _storage: &mut kernfs::KernFS<'_, D>,
+        _km: &mut T,
+    ) {
+    }
+}
 pub mod melody;
 pub mod power;
 pub mod radio;
-pub mod storage;
 pub mod telemetry;
 #[cfg(feature = "wire")]
 pub mod wire;
@@ -14,12 +39,15 @@ pub use calibration::*;
 pub use melody::*;
 pub use power::*;
 pub use radio::*;
-pub use storage::*;
 pub use telemetry::*;
 #[cfg(feature = "wire")]
 pub use wire::*;
 
 pub use drivers::battery::SystemPower;
+pub use kernfs::{
+    ATTR_COMPRESSED, ATTR_ENCRYPTED, ATTR_HIDDEN, ATTR_READ_ONLY, ATTR_SYSTEM, ATTR_UNENCRYPTED,
+    Fd, FsError, KernFS,
+};
 
 #[inline(always)]
 pub fn config() -> &'static crate::config::MasterConfig {
@@ -32,7 +60,8 @@ pub fn config_mut() -> &'static mut crate::config::MasterConfig {
 }
 
 #[inline(always)]
-pub fn storage_mut() -> &'static mut SystemStorage<'static> {
+pub fn storage_mut()
+-> &'static mut KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>> {
     crate::kern_fs()
 }
 
@@ -181,7 +210,7 @@ pub fn draw_status_bar_right_mode(canvas: &mut gfx::Canvas, inverted: bool, part
     #[cfg(not(test))]
     let (is_usb, is_f, is_locked) = {
         #[cfg(feature = "usb")]
-        let usb_conn = !headless && drivers::usb::is_active_usb_connected();
+        let usb_conn = !headless && crate::hardware::is_active_usb_connected();
         #[cfg(not(feature = "usb"))]
         let usb_conn = false;
         let orch = &crate::kern_hw().orchestrator;

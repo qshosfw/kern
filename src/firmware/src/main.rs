@@ -60,8 +60,7 @@ pub static PVD_TX_QUENCHED: core::sync::atomic::AtomicBool =
 #[unsafe(link_section = ".uninit")]
 pub static mut MASTER_CONFIG: core::mem::MaybeUninit<MasterConfig> =
     core::mem::MaybeUninit::uninit();
-pub static mut CALIBRATION: services::calibration::SystemCalibration =
-    services::calibration::SystemCalibration::empty();
+pub static mut CALIBRATION: calib::ActiveCalib = calib::ActiveCalib::empty();
 pub static mut PASSCODE_STATE: crate::security::PasscodeState =
     crate::security::PasscodeState::empty();
 #[unsafe(link_section = ".uninit")]
@@ -97,7 +96,7 @@ pub fn power_service() -> &'static mut SystemPower {
     unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) }
 }
 
-pub fn calibration_mut() -> &'static mut services::calibration::SystemCalibration {
+pub fn calibration_mut() -> &'static mut calib::ActiveCalib {
     unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) }
 }
 
@@ -109,7 +108,8 @@ pub fn kern_hw() -> &'static mut SystemHardware<'static> {
     unsafe { (*core::ptr::addr_of_mut!(KERN_HW)).assume_init_mut() }
 }
 
-pub fn kern_fs() -> &'static mut crate::services::SystemStorage<'static> {
+pub fn kern_fs()
+-> &'static mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>> {
     unsafe { (*core::ptr::addr_of_mut!(KERN_FS)).assume_init_mut() }
 }
 
@@ -175,7 +175,7 @@ pub unsafe extern "C" fn USART1() {
 #[cfg(all(not(test), target_arch = "arm", feature = "usb"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn USB() {
-    drivers::usb::on_usb_irq();
+    crate::hardware::on_usb_irq();
 }
 
 #[cfg(not(test))]
@@ -207,10 +207,10 @@ unsafe extern "C" fn pre_init() {
     }
 }
 
-/// Bind active factory/user calibration bytes and battery discharge curve to runtime drivers.
+/// Bind active 64-byte calibration cache and battery discharge curve to runtime drivers.
 pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a, bsp::RadioBus>) {
     let calib = calibration_mut();
-    radio.attach_calibration(calib.raw_bytes());
+    radio.attach_calibration(calib);
     power_service()
         .battery_driver
         .load_calibration_curve(calib.battery_curve());
@@ -227,7 +227,7 @@ fn early_init() -> Board {
         MasterConfig::init_in_place(core::ptr::addr_of_mut!(MASTER_CONFIG) as *mut MasterConfig);
         CONFIG_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
         RadioState::init_in_place(core::ptr::addr_of_mut!(RADIO_STATE) as *mut RadioState);
-        calibration_mut().init_defaults();
+        services::calibration::init_active_defaults(calibration_mut());
         pac::SCB_VTOR.write_volatile(hal::flash::FIRMWARE_MIN_ADDR);
         cortex_m::interrupt::enable();
     }
@@ -335,8 +335,9 @@ static mut KERN_FLASH: core::mem::MaybeUninit<drivers::py25q16::Py25q16FlashDriv
     core::mem::MaybeUninit::uninit();
 
 #[unsafe(link_section = ".uninit")]
-static mut KERN_FS: core::mem::MaybeUninit<crate::services::SystemStorage<'static>> =
-    core::mem::MaybeUninit::uninit();
+static mut KERN_FS: core::mem::MaybeUninit<
+    kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+> = core::mem::MaybeUninit::uninit();
 
 #[unsafe(link_section = ".uninit")]
 static mut KERN_HW: core::mem::MaybeUninit<SystemHardware<'static>> =
@@ -352,7 +353,6 @@ fn main() -> ! {
     };
     let boot_start_ms = hal::delay::millis();
 
-    #[cfg(feature = "filesystem")]
     let filesystem = unsafe {
         let flash_p = core::ptr::addr_of_mut!(KERN_FLASH)
             as *mut drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>;
@@ -362,14 +362,9 @@ fn main() -> ! {
         );
         let flash = &mut *flash_p;
         flash.init();
-        let fs_p = core::ptr::addr_of_mut!(KERN_FS) as *mut crate::services::SystemStorage<'static>;
-        drivers::filesystem::FileSystemDriver::init_in_place(fs_p, flash);
-        &mut *fs_p
-    };
-    #[cfg(not(feature = "filesystem"))]
-    let filesystem = unsafe {
-        let fs_p = core::ptr::addr_of_mut!(KERN_FS) as *mut crate::services::SystemStorage<'static>;
-        core::ptr::write(fs_p, crate::services::storage::NoStorage);
+        let fs_p = core::ptr::addr_of_mut!(KERN_FS)
+            as *mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>;
+        kernfs::KernFS::init_in_place(fs_p, flash);
         &mut *fs_p
     };
 
@@ -387,7 +382,7 @@ fn main() -> ! {
         );
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).key_scanner),
-            drivers::keyboard::KeypadScanner::new(),
+            drivers::keyboard::KeypadScanner::new(bsp::BspKeyMatrix),
         );
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).audio),
@@ -409,7 +404,7 @@ fn main() -> ! {
     };
 
     #[cfg(feature = "usb")]
-    drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);
+    crate::hardware::register_active_usb_driver(&mut hw.usb as *mut _);
 
     let adc = boot::run(hw);
     handoff(hw);

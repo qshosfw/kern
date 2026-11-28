@@ -150,7 +150,9 @@ impl AppSwapManager {
     pub fn swap_out_tiered(
         app_id: usize,
         src_state: &[u8],
-        storage: Option<&mut crate::services::SystemStorage>,
+        storage: Option<
+            &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+        >,
         policy: SwapPolicy,
     ) -> Result<u16, ()> {
         if let Some(slot) = find_slot_mut(app_id, true) {
@@ -195,7 +197,9 @@ impl AppSwapManager {
     pub fn swap_in_tiered(
         app_id: usize,
         dst_state: &mut [u8],
-        storage: Option<&mut crate::services::SystemStorage>,
+        storage: Option<
+            &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+        >,
     ) -> Result<usize, ()> {
         if let Some(slot) = find_slot_mut(app_id, false) {
             let n = verify_and_decompress(&slot.header, &slot.payload, dst_state)?;

@@ -10,11 +10,11 @@ pub mod bk4829;
 #[cfg(feature = "fm_radio")]
 pub mod bk1080;
 
-#[cfg(feature = "filesystem")]
-pub mod py25q16;
+#[cfg(feature = "si4732")]
+pub mod si4732;
 
 #[cfg(feature = "filesystem")]
-pub mod filesystem;
+pub mod py25q16;
 
 pub mod keyboard;
 pub mod registry;

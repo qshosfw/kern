@@ -105,7 +105,7 @@ version = "0.1.0"
 name = "drivers"
 version = "0.1.0"
 dependencies = [
- "bsp",
+ "abi",
  "calib",
  "cortex-m",
  "crypto",
@@ -114,8 +114,6 @@ dependencies = [
  "kern-platform-traits",
  "kernel",
  "kernfs",
- "py32-hal",
- "py32f071-pac",
  "utils",
 ]
 
@@ -204,6 +202,7 @@ dependencies = [
  "cortex-m",
  "crypto",
  "heapless",
+ "kernfs",
  "utils",
 ]
 

@@ -3,10 +3,9 @@
 use super::super::constants::*;
 use super::super::keychain::PackedPasscodeKey;
 use super::state::*;
-use crate::services::SystemStorage;
 
 pub fn read_passcode_key(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     key: &mut PackedPasscodeKey,
     min_len: usize,
 ) -> Result<(), PasscodeError> {
@@ -22,7 +21,9 @@ pub fn read_passcode_key(
 }
 
 /// Retrieves full passcode configuration metadata from `/sys/passcode.key`
-pub fn get_passcode_config(filesystem: &mut SystemStorage) -> PasscodeConfigInfo {
+pub fn get_passcode_config(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) -> PasscodeConfigInfo {
     let mut info = PasscodeConfigInfo {
         is_set: false,
         passcode_len: 0,
@@ -58,7 +59,7 @@ pub fn format_wrong_passcode_msg<'a>(
 
 /// Updates passcode security preferences (`opt_flags` holds `PASSCODE_FLAG_{EXPOSE_LEN|STEALTH|DIGITS_ONLY}`).
 pub fn set_passcode_options(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     opt_flags: u8,
     max_tries: u8,
 ) -> Result<(), PasscodeError> {
@@ -77,12 +78,17 @@ pub fn set_passcode_options(
 
 /// Checks if a user passcode is currently active in the keychain.
 #[inline(always)]
-pub fn is_passcode_set(filesystem: &mut SystemStorage) -> bool {
+pub fn is_passcode_set(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) -> bool {
     get_passcode_config(filesystem).is_set
 }
 
 /// Decrements failed attempts to (max_tries - 1) after lockout timeout expires.
-pub fn reset_lockout_penalty(filesystem: &mut SystemStorage, max_tries: u8) {
+pub fn reset_lockout_penalty(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    max_tries: u8,
+) {
     let mut key = PackedPasscodeKey::empty();
     if read_passcode_key(filesystem, &mut key, 8).is_ok() {
         key.failed_attempts = max_tries.saturating_sub(1);

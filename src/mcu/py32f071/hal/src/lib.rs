@@ -18,6 +18,7 @@
 pub use pac;
 
 pub mod adc;
+pub mod audio_dma;
 pub mod comp;
 pub mod crc;
 pub mod delay;

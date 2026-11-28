@@ -85,7 +85,7 @@ pub fn derive_master_key(
 
     let initial_clk = py32_hal::rcc::sysclk_hz();
     #[cfg(feature = "usb")]
-    let usb_pinned = drivers::usb::is_active_usb_connected();
+    let usb_pinned = crate::hardware::is_active_usb_connected();
     #[cfg(not(feature = "usb"))]
     let usb_pinned = false;
     let boosted = !usb_pinned && initial_clk < 72_000_000;

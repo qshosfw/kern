@@ -37,7 +37,8 @@ impl VirtualFat {
     }
 }
 
-use py32_hal::pac::usbd::*;
+use super::regs::*;
+use kern_platform_traits::usb::UsbBus;
 
 pub const CBW_SIGNATURE: u32 = 0x43425355; // "USBC"
 pub const CSW_SIGNATURE: u32 = 0x53425355; // "USBS"

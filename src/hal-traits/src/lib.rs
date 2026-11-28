@@ -22,4 +22,5 @@ pub mod spi;
 pub mod storage;
 pub mod sysinfo;
 pub mod time;
+pub mod usb;
 pub mod wdt;

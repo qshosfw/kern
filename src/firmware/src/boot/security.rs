@@ -2,7 +2,6 @@
 
 use crate::config::MasterConfig;
 use crate::security::PasscodeState;
-use crate::services::SystemStorage;
 use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
 use drivers::st7565::St7565;
@@ -31,7 +30,7 @@ pub fn draw_locked_screen(lcd: &mut St7565<bsp::LcdBus>, sub_msg: &str) {
 pub fn handle_lockout_penalty(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus>,
-    storage: &mut SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
 ) {
     let pcfg = crate::security::passcode::get_passcode_config(storage);
     if pcfg.failed_attempts < pcfg.max_tries {
@@ -105,7 +104,7 @@ pub fn handle_unlock_success(
 pub fn handle_unlock_failure(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus>,
-    storage: &mut SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     stealth: bool,
 ) {
     let pcfg = crate::security::passcode::get_passcode_config(storage);

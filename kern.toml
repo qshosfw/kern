@@ -12,7 +12,7 @@ authors = ["kern-team"]
 edition_string = "Kern OS"
 chip = "PY32F071xB"
 flash_budget = 120832   # 118 KB (safe margin below 128KB)
-flash_ceiling = 120516  # Ratchet: release flash may only go down; lower after each saving
+flash_ceiling = 114108  # Ratchet: release flash may only go down; lower after each saving
 ram_budget = 16384      # 16 KB SRAM
 
 [target]
@@ -56,7 +56,8 @@ boot_jingle = false          # 🎵 Mode B: Polyphonic boot jingles & melody pre
 
 [features.display]
 animations = true       # ✨ Smooth kinetic scrolling, slide transitions & adaptive 60-90 Hz animation refresh
-text_input = true       # ⌨️ Native OS multi-tap T9 TextInput modal shared by firmware & all KRX apps
+text_input = false      # ⌨️ Native OS multi-tap T9 TextInput modal (offloaded by default; enable for passcode/legacy)
+i18n = false            # 🌐 Live external .lng/.fnt localization engine (enable for non-ASCII language packs)
 grayscale = false       # 🌓 True 2-bit 4-level grayscale with 500 Hz temporal FRC (1-bit spatial dither when false)
 
 [features.diagnostics]

@@ -801,6 +801,95 @@ impl kern_platform_traits::input::KeyMatrix for BspKeyMatrix {
     fn reset_pins(&self) {
         Self::reset_gpio_pins();
     }
+
+    #[inline(always)]
+    fn now_ms(&self) -> u32 {
+        py32_hal::delay::millis()
+    }
+}
+
+/// Zero-sized board USB 2.0 Full-Speed Device Controller bus for `PY32F071xB`.
+#[derive(Clone, Copy, Default)]
+pub struct BspUsbBus;
+
+impl kern_platform_traits::usb::UsbBus for BspUsbBus {
+    #[inline(always)]
+    fn reg_read(&self, off: usize) -> u8 {
+        unsafe { ((py32_pac::usbd::USBD_BASE as *const u8).add(off)).read_volatile() }
+    }
+
+    #[inline(always)]
+    fn reg_write(&self, off: usize, val: u8) {
+        unsafe { ((py32_pac::usbd::USBD_BASE as *mut u8).add(off)).write_volatile(val) }
+    }
+
+    #[inline(always)]
+    fn reg_read16(&self, off: usize) -> u16 {
+        unsafe { ((py32_pac::usbd::USBD_BASE as *const u8).add(off) as *const u16).read_volatile() }
+    }
+
+    #[inline(always)]
+    fn fifo_read_byte(&self, ep: u8) -> u8 {
+        unsafe { py32_pac::usbd::fifo_ep_u8(ep).read_volatile() }
+    }
+
+    #[inline(always)]
+    fn fifo_write_byte(&self, ep: u8, b: u8) {
+        unsafe { py32_pac::usbd::fifo_ep_u8(ep).write_volatile(b) }
+    }
+
+    #[inline(always)]
+    fn millis(&self) -> u32 {
+        py32_hal::delay::millis()
+    }
+
+    #[inline(always)]
+    fn enable_usbd(&self) {
+        py32_hal::rcc::enable_usbd();
+    }
+
+    #[inline(always)]
+    fn disable_usbd(&self) {
+        py32_hal::rcc::disable_usbd();
+    }
+
+    #[inline(always)]
+    fn ensure_48mhz(&self) {
+        if py32_hal::rcc::sysclk_hz() != 48_000_000 {
+            py32_hal::rcc::set_sysclk_48mhz();
+        }
+    }
+
+    #[inline(always)]
+    fn set_nvic(&self, enable: bool) {
+        #[cfg(all(not(test), target_arch = "arm"))]
+        unsafe {
+            let irq = py32_pac::Interrupt::USB as u8;
+            py32_pac::nvic_clear_pending(irq);
+            if enable {
+                py32_pac::nvic_enable(irq);
+            } else {
+                py32_pac::nvic_disable(irq);
+            }
+        }
+        #[cfg(not(all(not(test), target_arch = "arm")))]
+        let _ = enable;
+    }
+
+    #[inline(always)]
+    fn mark_serial_activity(&self) {
+        py32_hal::uart::mark_activity();
+    }
+
+    #[inline(always)]
+    fn fill_device_identity(&self, mac: &mut [u8; 6], crock: &mut [u8; 15]) {
+        crate::uid::fill_device_identity(mac, crock);
+    }
+
+    #[inline(always)]
+    fn default_product_name(&self) -> &'static str {
+        crate::pins::BOARD_SPEC.usb_product_default
+    }
 }
 
 // --- On-Chip Voice ADC/DAC Frontend (PA4 / ADC1 CH4 + DAC1 CH1) ---

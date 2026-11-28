@@ -9,6 +9,7 @@ heapless = { workspace = true }
 abi = { path = "../abi" }
 utils = { path = "../util" }
 crypto = { path = "../crypto" }
+kernfs = { path = "../fs" }
 
 [features]
 default = []

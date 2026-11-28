@@ -1,17 +1,11 @@
-//! Keypad Matrix Scanning Delegation (hardware GPIOB scan lives in `bsp::BspKeyMatrix`).
+//! Portable Keypad Matrix Helpers over `kern_platform_traits::input::KeyMatrix`.
 
 use super::keys::ALL_KEYS;
+use kern_platform_traits::input::KeyMatrix;
 use kernel::event::KeyCode;
 
-/// Scans the board keypad matrix and PTT pin into a 19-bit active-key bitmask.
-#[inline(always)]
-pub fn poll_raw_mask() -> u32 {
-    bsp::BspKeyMatrix::scan_raw_mask()
-}
-
-/// Convenience helper returning the first detected active key from the hardware matrix.
-pub fn poll_matrix() -> Option<KeyCode> {
-    let mask = poll_raw_mask();
+/// Decode the first detected active key from a 19-bit raw matrix bitmask.
+pub fn first_key_from_mask(mask: u32) -> Option<KeyCode> {
     if mask == 0 {
         return None;
     }
@@ -23,8 +17,8 @@ pub fn poll_matrix() -> Option<KeyCode> {
     None
 }
 
-/// Bare-metal fail-safe GPIO matrix reset helper for boot and panic recovery.
+/// Convenience helper returning the first detected active key from a `KeyMatrix`.
 #[inline(always)]
-pub fn reset_gpio_pins() {
-    bsp::BspKeyMatrix::reset_gpio_pins();
+pub fn poll_matrix<M: KeyMatrix>(matrix: &M) -> Option<KeyCode> {
+    first_key_from_mask(matrix.poll_raw_mask())
 }

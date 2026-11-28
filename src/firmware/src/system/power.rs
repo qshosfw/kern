@@ -17,11 +17,11 @@ fn is_plugged_in(hw: &SystemHardware) -> bool {
 }
 
 fn drain_keypad_matrix(hw: &mut SystemHardware) {
-    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+    while hw.key_scanner.poll_matrix().is_some() {
         py32_hal::wdt::Watchdog::feed();
         py32_hal::delay::delay_ms(10);
     }
-    drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    hw.key_scanner.reset_gpio_pins();
     hw.orchestrator.reset_hold_tracking();
     hw.key_scanner.clear();
 }
@@ -67,7 +67,7 @@ fn suspend_peripherals(hw: &mut SystemHardware, turn_off_lcd: bool) {
     hw.radio.set_status_led(bsp::StatusLed::Off);
     bsp::pins::FLASHLIGHT.set_low();
     #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.deep_power_down();
+    hw.filesystem.dev.deep_power_down();
     #[cfg(feature = "usb")]
     hw.usb.disconnect_for_sleep();
 }
@@ -75,7 +75,7 @@ fn suspend_peripherals(hw: &mut SystemHardware, turn_off_lcd: bool) {
 fn resume_peripherals(hw: &mut SystemHardware) {
     hw.radio.set_status_led(bsp::StatusLed::Off);
     #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.release_power_down();
+    hw.filesystem.dev.release_power_down();
     crate::master_config().hw_dirty = 0x1F;
     hw.apply_dirty_configs();
     #[cfg(feature = "uart")]

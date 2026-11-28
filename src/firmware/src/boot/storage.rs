@@ -5,9 +5,6 @@
 //! unattended (headless) node never erases flash on its own and boots unmounted so the
 //! fault can be inspected and repaired over RigWire.
 
-use crate::services::SystemStorage;
-#[cfg(feature = "filesystem")]
-use drivers::filesystem::FileSystemDriver;
 use drivers::keyboard::KeypadScanner;
 #[cfg(feature = "filesystem")]
 use drivers::py25q16::Py25q16FlashDriver;
@@ -22,7 +19,7 @@ use super::backup;
 
 /// Append a valid crash `BootSlot` (128 B) into the `/log/crash.bin` 1 KB ring (`8 x 128 B`).
 #[cfg(feature = "filesystem")]
-pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
+pub fn flush_crash_log_if_pending(fs: &mut KernFS<'_, Py25q16FlashDriver<bsp::FlashBus>>) {
     let mut tag = backup::read();
     if (tag.flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) == 0 {
         return;
@@ -108,7 +105,7 @@ fn rescue_raw_calibration(
 }
 
 #[cfg(feature = "filesystem")]
-fn has_valid_calib_file(vfs: &mut SystemStorage) -> bool {
+fn has_valid_calib_file(vfs: &mut KernFS<'_, Py25q16FlashDriver<bsp::FlashBus>>) -> bool {
     let buf = crate::services::staging_buf();
     crate::services::calibration::read_valid_calib(vfs, "/sys/calib.dat", buf)
         || crate::services::calibration::read_valid_calib(vfs, "/sys/calib.bak", buf)
@@ -116,7 +113,7 @@ fn has_valid_calib_file(vfs: &mut SystemStorage) -> bool {
 
 #[cfg(feature = "filesystem")]
 fn finish_calib_or_warn(
-    vfs: &mut SystemStorage,
+    vfs: &mut KernFS<'_, Py25q16FlashDriver<bsp::FlashBus>>,
     raw_calib: &[u8; 512],
     has_hw_calib: bool,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
@@ -133,12 +130,12 @@ fn finish_calib_or_warn(
 }
 
 #[cfg(feature = "filesystem")]
-fn wait_keys_released(key_scanner: &mut KeypadScanner) {
-    while KeypadScanner::poll_matrix().is_some() {
+fn wait_keys_released(key_scanner: &mut KeypadScanner<bsp::BspKeyMatrix>) {
+    while key_scanner.poll_matrix().is_some() {
         bsp::Board::wdt_feed();
         py32_hal::delay::delay_ms(10);
     }
-    KeypadScanner::reset_gpio_pins();
+    key_scanner.reset_gpio_pins();
     key_scanner.clear();
 }
 
@@ -157,7 +154,7 @@ fn prepare_boot_dialog(
 #[cfg(feature = "filesystem")]
 fn confirm_corrupt_format(
     lcd: &mut St7565<bsp::LcdBus>,
-    key_scanner: &mut KeypadScanner,
+    key_scanner: &mut KeypadScanner<bsp::BspKeyMatrix>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
     has_hw_calib: bool,
 ) -> bool {
@@ -215,12 +212,12 @@ fn confirm_corrupt_format(
 fn recover_calibration_to_fs(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
-    vfs: &mut SystemStorage,
+    vfs: &mut KernFS<'_, Py25q16FlashDriver<bsp::FlashBus>>,
 ) {
     let raw_calib = crate::services::staging_buf();
     let from_prov =
         crate::services::calibration::read_valid_calib(vfs, "/prov/calib.dat", raw_calib);
-    let has_hw_calib = from_prov || rescue_raw_calibration(&mut vfs.fs, raw_calib);
+    let has_hw_calib = from_prov || rescue_raw_calibration(vfs, raw_calib);
     if has_hw_calib && crate::system::admits_physical_input() {
         render_boot_screen(lcd, "Restoring", "Calibration...", 80, false);
         prepare_boot_dialog(lcd, radio);
@@ -232,14 +229,14 @@ fn recover_calibration_to_fs(
 #[inline(never)]
 pub fn mount_or_format<'a>(
     lcd: &mut St7565<bsp::LcdBus>,
-    key_scanner: &mut KeypadScanner,
-    filesystem: &mut FileSystemDriver<'a, Py25q16FlashDriver<bsp::FlashBus>>,
+    key_scanner: &mut KeypadScanner<bsp::BspKeyMatrix>,
+    filesystem: &mut KernFS<'a, Py25q16FlashDriver<bsp::FlashBus>>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
 ) {
-    if filesystem.fs.mount().is_err() {
-        let blank = is_superblocks_blank(&mut filesystem.fs);
+    if filesystem.mount().is_err() {
+        let blank = is_superblocks_blank(filesystem);
         let raw_calib = crate::services::staging_buf();
-        let has_hw_calib = rescue_raw_calibration(&mut filesystem.fs, raw_calib);
+        let has_hw_calib = rescue_raw_calibration(filesystem, raw_calib);
         let do_format = if blank {
             true
         } else if crate::system::admits_physical_input() {
@@ -259,7 +256,7 @@ pub fn mount_or_format<'a>(
                 prepare_boot_dialog(lcd, radio);
             }
             bsp::Board::wdt_feed();
-            if filesystem.fs.format(None).is_ok() {
+            if filesystem.format(None).is_ok() {
                 finish_calib_or_warn(filesystem, raw_calib, has_hw_calib, radio);
                 return;
             }
@@ -291,7 +288,7 @@ const INIT_MARK_JINGLES: u8 = if cfg!(feature = "boot_jingle") {
 };
 
 #[cfg(feature = "filesystem")]
-pub fn ensure_default_files(filesystem: &mut SystemStorage) {
+pub fn ensure_default_files(filesystem: &mut KernFS<'_, Py25q16FlashDriver<bsp::FlashBus>>) {
     let desired: u8 = INIT_MARK_BASE | INIT_MARK_SPLASHES | INIT_MARK_JINGLES;
 
     let mut init_buf = [0u8; 8];
@@ -319,16 +316,3 @@ pub fn ensure_default_files(filesystem: &mut SystemStorage) {
         let _ = filesystem.write_file("/sys/init.done", &updated);
     }
 }
-
-#[cfg(not(feature = "filesystem"))]
-pub fn mount_or_format(
-    _lcd: &mut St7565<bsp::LcdBus>,
-    _key_scanner: &mut KeypadScanner,
-    _radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
-) -> crate::services::storage::NoStorage {
-    crate::services::storage::NoStorage
-}
-
-#[cfg(not(feature = "filesystem"))]
-#[allow(dead_code)]
-pub fn ensure_default_files(_filesystem: &mut SystemStorage) {}

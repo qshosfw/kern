@@ -8,6 +8,7 @@ pub enum FsError {
     CorruptedData = 2,
     CapacityFull = 4,
     AccessDenied = 5,
+    EncryptedNoKey = 6,
     InvalidPath = 7,
     LowPower = 8,
 }

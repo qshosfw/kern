@@ -57,10 +57,24 @@ pub const fn check_guest_range_bounds(
     !writable && addr >= flash_start && end <= flash_end
 }
 
-pub fn guest_range_valid(addr: usize, len: usize, writable: bool) -> bool {
-    if addr == 0 || len == 0 || addr.checked_add(len).is_none() {
-        return false;
-    }
+/// Cached per-syscall guest memory sandbox bounds, computed once at `kern_call` entry.
+#[derive(Clone, Copy)]
+struct GuestBounds {
+    actor_start: usize,
+    actor_end: usize,
+    stack_floor: usize,
+    active: bool,
+}
+
+static mut ACTIVE_GUEST_BOUNDS: GuestBounds = GuestBounds {
+    actor_start: 0,
+    actor_end: 0,
+    stack_floor: 0,
+    active: false,
+};
+
+#[inline(always)]
+fn capture_guest_bounds() -> GuestBounds {
     #[cfg(all(target_arch = "arm", not(test)))]
     {
         let arena_base = crate::data::arena::arena_base_ptr() as usize;
@@ -79,30 +93,48 @@ pub fn guest_range_valid(addr: usize, len: usize, writable: bool) -> bool {
                     slot.is_loaded,
                 )
             };
-        if !active {
-            return true;
-        }
         let msp: usize;
         unsafe {
             core::arch::asm!("mrs {}, MSP", out(reg) msp);
         }
-        check_guest_range_bounds(
-            addr,
-            len,
-            writable,
+        GuestBounds {
             actor_start,
             actor_end,
-            msp.saturating_sub(64),
-            0x2000_4000,
-            0x0800_0000,
-            0x0802_0000,
-        )
+            stack_floor: msp.saturating_sub(64),
+            active,
+        }
     }
     #[cfg(not(all(target_arch = "arm", not(test))))]
     {
-        let _ = writable;
-        true
+        GuestBounds {
+            actor_start: 0,
+            actor_end: 0,
+            stack_floor: 0,
+            active: false,
+        }
     }
+}
+
+#[inline(never)]
+pub fn guest_range_valid(addr: usize, len: usize, writable: bool) -> bool {
+    if addr == 0 || len == 0 || addr.checked_add(len).is_none() {
+        return false;
+    }
+    let b = unsafe { ACTIVE_GUEST_BOUNDS };
+    if !b.active {
+        return true;
+    }
+    check_guest_range_bounds(
+        addr,
+        len,
+        writable,
+        b.actor_start,
+        b.actor_end,
+        b.stack_floor,
+        0x2000_4000,
+        0x0800_0000,
+        0x0802_0000,
+    )
 }
 
 fn guest_sig_ptrs_valid(sig: ::abi::Sig, a0: usize, a1: usize, a2: usize) -> bool {
@@ -269,11 +301,22 @@ pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> 
     if req_mask != 0 && !super::native_runner::active_native_caps().contains_mask(req_mask) {
         return ::abi::Status::PermissionDenied.to_raw();
     }
+    let prev_bounds = unsafe { ACTIVE_GUEST_BOUNDS };
+    unsafe {
+        ACTIVE_GUEST_BOUNDS = capture_guest_bounds();
+    }
     if !guest_sig_ptrs_valid(desc.sig, a0, a1, a2) {
+        unsafe {
+            ACTIVE_GUEST_BOUNDS = prev_bounds;
+        }
         return ::abi::Status::InvalidArg.to_raw();
     }
 
-    unsafe { (*OP_HANDLERS.get_unchecked(op_idx))(a0, a1, a2) }
+    let ret = unsafe { (*OP_HANDLERS.get_unchecked(op_idx))(a0, a1, a2) };
+    unsafe {
+        ACTIVE_GUEST_BOUNDS = prev_bounds;
+    }
+    ret
 }
 
 pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {

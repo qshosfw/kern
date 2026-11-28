@@ -33,13 +33,15 @@ pub enum StorageSecurityStatus {
 
 /// Counts files marked `ATTR_ENCRYPTED` across mounted storage metadata in a single pass.
 #[inline(always)]
-pub fn count_encrypted_files(filesystem: &mut crate::services::SystemStorage) -> usize {
+pub fn count_encrypted_files<D: kernfs::BlockDevice>(
+    filesystem: &mut kernfs::KernFS<'_, D>,
+) -> usize {
     filesystem.count_encrypted_files()
 }
 
-/// Synchronizes `FileSystemDriver` session key/lock state with the active security tier.
-pub fn sync_filesystem_security(
-    filesystem: &mut crate::services::SystemStorage,
+/// Synchronizes `KernFS` session key/lock state with the active security tier.
+pub fn sync_filesystem_security<D: kernfs::BlockDevice>(
+    filesystem: &mut kernfs::KernFS<'_, D>,
     state: &PasscodeState,
 ) -> StorageSecurityStatus {
     #[cfg(not(feature = "filesystem"))]
@@ -101,23 +103,20 @@ pub fn sync_filesystem_security(
 
 /// Applies `ATTR_ENCRYPTED` to small confidential files (`FileSecurityLevel::classify_path`)
 /// when `secure_fs` is compiled and unlocked.
-pub fn write_classified_file(
-    filesystem: &mut crate::services::SystemStorage,
+pub fn write_classified_file<D: kernfs::BlockDevice>(
+    filesystem: &mut kernfs::KernFS<'_, D>,
     path: &str,
     data: &[u8],
-) -> Result<(), crate::services::storage::StorageError> {
+) -> Result<(), kernfs::FsError> {
     filesystem.write_file(path, data)?;
     #[cfg(feature = "secure_fs")]
     if FileSecurityLevel::classify_path(path).encrypts_at_rest()
         && data.len() <= 512
         && filesystem.is_session_unlocked()
     {
-        let mut attrs = filesystem
-            .get_attributes(path)
-            .unwrap_or(crate::services::storage::FileAttributes { permission: 0 });
-        if (attrs.permission & crate::services::storage::ATTR_ENCRYPTED) == 0 {
-            attrs.permission |= crate::services::storage::ATTR_ENCRYPTED;
-            let _ = filesystem.set_attributes(path, attrs);
+        let perm = filesystem.get_permission(path).unwrap_or(0);
+        if (perm & kernfs::ATTR_ENCRYPTED) == 0 {
+            let _ = filesystem.set_permission(path, perm | kernfs::ATTR_ENCRYPTED);
             filesystem.write_file(path, data)?;
         }
     }
@@ -203,7 +202,7 @@ pub mod passcode {
     }
 
     #[inline(always)]
-    pub fn is_passcode_set(filesystem: &mut crate::services::SystemStorage) -> bool {
+    pub fn is_passcode_set<D: kernfs::BlockDevice>(filesystem: &mut kernfs::KernFS<'_, D>) -> bool {
         let mut hdr = [0u8; 6];
         if let Ok(n) = filesystem.read_file("/sys/passcode.key", &mut hdr) {
             return n >= 6 && &hdr[..4] == b"PIN1" && (hdr[4] & 1) != 0;
@@ -212,8 +211,8 @@ pub mod passcode {
     }
 
     #[inline(always)]
-    pub fn init_passcode_state(
-        filesystem: &mut crate::services::SystemStorage,
+    pub fn init_passcode_state<D: kernfs::BlockDevice>(
+        filesystem: &mut kernfs::KernFS<'_, D>,
         state: &mut PasscodeState,
     ) {
         state.unlock();
@@ -226,7 +225,7 @@ pub use passcode::PasscodeState;
 
 #[cfg(not(feature = "secure_fs"))]
 #[inline(always)]
-pub fn ensure_keychain(_filesystem: &mut crate::services::SystemStorage) {}
+pub fn ensure_keychain<D: kernfs::BlockDevice>(_filesystem: &mut kernfs::KernFS<'_, D>) {}
 
 #[cfg(test)]
 mod tests {

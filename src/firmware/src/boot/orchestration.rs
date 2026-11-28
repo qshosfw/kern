@@ -25,7 +25,7 @@ fn init_system_services(
     let _ = passcode_state;
     let mcu_uid = bsp::uid::read_mcu_uid();
     let calibration = unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) };
-    calibration.load_into(hw.filesystem, &mcu_uid);
+    crate::services::calibration::load_active_calib(calibration, hw.filesystem, &mcu_uid);
     let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
     power_service.load_battery_config(&master_cfg.battery);
     power_service

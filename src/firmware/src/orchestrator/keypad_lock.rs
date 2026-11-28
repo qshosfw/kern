@@ -11,18 +11,7 @@ use kernel::event::{Event, KeyCode, KeyState};
 const TOAST_DURATION_MS: u16 = 1800;
 const SHEET_H: u8 = 36;
 
-/// Lock notification modal state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum LockToast {
-    None = 0,
-    /// Just unlocked: displays open padlock symbol & confirmation
-    Unlocked = 1,
-    /// Just locked: displays closed padlock symbol & confirmation
-    Locked = 2,
-    /// Intercepted key while locked: prompts user to hold # or F to unlock
-    PromptUnlock = 3,
-}
+pub use kernel::shell::LockToast;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

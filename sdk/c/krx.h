@@ -23,6 +23,12 @@ typedef unsigned long long u64;
 #define COLOR_DARK_GRAY  3u
 #define COLOR_LIGHT_GRAY 4u
 
+#define KRX_FONT_MUMATRIX 0u
+#define KRX_FONT_TOMTHUMB 1u
+#define KRX_ALIGN_LEFT    0u
+#define KRX_ALIGN_CENTER  1u
+#define KRX_ALIGN_RIGHT   2u
+
 #include "krx_ops.h"
 
 // ── Single-Entry System Call Table (16 B on ARM32) ───────────────────────────
@@ -509,8 +515,24 @@ static inline u8 krx_sys_flush_config(const KrxApiTable* api) {
     return (u8)krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_FLUSH, 0u, 0u);
 }
 
-static inline u32 krx_leaf_call(const KrxApiTable* api, u8 leaf_id, u32 arg) {
-    return krx_call(api, OP_PROC_EXEC, SUB_PROC_EXEC_LEAF, (u32)leaf_id, arg);
+typedef struct {
+    u8  block_id;
+    u8  flags;
+    u16 reserved;
+    u32 arg;
+    u8  cont_kind;
+    u8  cont_target;
+    u16 cont_reserved;
+    u32 cont_payload;
+} KrxBlockContext;
+
+typedef u32 (*KrxBlockEntryFn)(u32 op, const KrxApiTable* api, const void* param);
+
+static __attribute__((noinline, unused)) u32 krx_leaf_call(const KrxApiTable* api, u8 block_id, u32 arg) {
+    u32 addr = krx_call(api, OP_PROC_EXEC, SUB_PROC_EXEC_PAGED_FAULT, (u32)block_id, 0u);
+    if (!addr) return 0xFFFFFFFFu;
+    u32 ctx[4] = { (u32)block_id, arg, 0u, 0u };
+    return ((KrxBlockEntryFn)addr)(KRX_OP_START, api, (const void*)ctx);
 }
 
 static inline u8 krx_ipc_send(
@@ -971,10 +993,10 @@ static inline void krx_ui_draw_tag_badge(
     if (tw < 6) tw = 6;
     if (style == 1u) {
         krx_fill_rect(api, x, y, (u8)tw, 7u, COLOR_FILL);
-        krx_draw_str(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
+        krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
     } else {
         krx_draw_rect(api, x, y, (u8)tw, 7u, COLOR_FILL);
-        krx_draw_str(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_FILL);
+        krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_FILL);
     }
 }
 
@@ -986,9 +1008,9 @@ static inline void krx_ui_draw_key_badge(
     if (kw < 5) kw = 5;
     krx_fill_rect(api, x, y, (u8)kw, 7u, COLOR_FILL);
     krx_clear_corners(api, x, y, (u8)kw, 7u);
-    krx_draw_str(api, (i16)(x + 2), (i16)(y + 6), key_s, k_len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
+    krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 6), key_s, k_len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
     if (lbl && l_len) {
-        krx_draw_str(api, (i16)(x + kw + 2), (i16)(y + 6), lbl, l_len, KRX_FONT_TOMTHUMB, COLOR_FILL);
+        krx_draw_str_ex(api, (i16)(x + kw + 2), (i16)(y + 6), lbl, l_len, KRX_FONT_TOMTHUMB, COLOR_FILL);
     }
 }
 
@@ -1050,12 +1072,12 @@ static inline void krx_ui_draw_menu_item(
 
 static inline void krx_ui_draw_big_digit(const KrxApiTable* api, i16 x, i16 y, u8 dig, u8 col) {
     u8 ch = (u8)('0' + (dig % 10u));
-    krx_draw_str(api, x, (i16)(y + 8), &ch, 1u, KRX_FONT_MUMATRIX, col);
+    krx_draw_str_ex(api, x, (i16)(y + 8), &ch, 1u, KRX_FONT_MUMATRIX, col);
 }
 
 static inline void krx_ui_draw_small_digit(const KrxApiTable* api, i16 x, i16 y, u8 dig, u8 col) {
     u8 ch = (u8)('0' + (dig % 10u));
-    krx_draw_str(api, x, (i16)(y + 5), &ch, 1u, KRX_FONT_TOMTHUMB, col);
+    krx_draw_str_ex(api, x, (i16)(y + 5), &ch, 1u, KRX_FONT_TOMTHUMB, col);
 }
 
 static inline void krx_ui_draw_battery(const KrxApiTable* api, i16 x, i16 y, u8 pct, u8 chg) {

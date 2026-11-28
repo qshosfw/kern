@@ -103,7 +103,7 @@ fn chord_held() -> bool {
     {
         const CHORD: u32 = (1 << 18) | (1 << 1);
         crate::system::admits_physical_input()
-            && (drivers::keyboard::KeypadScanner::poll_raw_mask() & CHORD) == CHORD
+            && (bsp::BspKeyMatrix::scan_raw_mask() & CHORD) == CHORD
     }
     #[cfg(not(all(not(test), target_arch = "arm")))]
     false
@@ -120,7 +120,7 @@ pub fn run(hw: &mut SystemHardware, warm_tools: bool) {
     }
 
     #[cfg(feature = "krx_native")]
-    if hw.filesystem.fs.mount().is_ok() {
+    if hw.filesystem.mount().is_ok() {
         hw.lcd.turn_on();
         drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
         bsp::pins::BACKLIGHT.set_high();

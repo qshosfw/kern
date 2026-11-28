@@ -12,7 +12,6 @@ use kernel::app::{EventResult, ModalResult, StatusBarConfig};
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
-use kernel::runtime::paged::StreamingLeafState;
 #[cfg(feature = "krx_paged")]
 use kernel::runtime::paged::{
     BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_LZSS, PageReturnFrame, ShadowReturnStack, StreamedPageDesc,
@@ -22,35 +21,15 @@ use kernel::runtime::reloc::apply_relocs;
 use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
-pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
+pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 8 x 512B or 4 x 1024B streamed cache slots
 pub const MICRO_DAEMON_ARENA_BYTES: usize = crate::data::arena::ZONE_A_MAX_BYTES;
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
-
-/// Resolve per-package P0 overlay window size from `SectionExecution::page_size` (defaults to 1024 B).
-#[inline(always)]
-pub(crate) fn p0_overlay_size(exec: &SectionExecution) -> usize {
-    let req = exec.page_size as usize;
-    if (1024..=4096).contains(&req) && (req & 3) == 0 {
-        req
-    } else {
-        1024
-    }
-}
 
 #[cfg(feature = "krx_paged")]
 #[repr(C)]
 pub(crate) struct PagedWindowState {
     pub(crate) cache: StreamedWindowCache<8>,
     pub(crate) shadow_stack: ShadowReturnStack<16, PageReturnFrame>,
-}
-
-/// Mutually exclusive overlay state: P1 v2 uses `window` (unlimited-size streamed cache + 16-deep shadow stack),
-/// P0 uses `leaf` (24 B streaming flash-backed leaf state, supporting up to 255 leaves).
-#[repr(C)]
-pub(crate) union PagedOverlay {
-    #[cfg(feature = "krx_paged")]
-    pub(crate) window: core::mem::ManuallyDrop<PagedWindowState>,
-    pub(crate) leaf: core::mem::ManuallyDrop<StreamingLeafState>,
 }
 
 #[repr(C, align(4))]
@@ -64,12 +43,16 @@ pub(crate) struct NativeExecSlot {
     pub(crate) status_bar_has_custom: bool,
     pub(crate) code_size: u16,
     pub(crate) pkg_ino: u16,
+    pub(crate) l1_depth: u8,
+    pub(crate) l1_pages: [u16; kernfs::format::MAX_L1_ROOTS],
+    pub(crate) file_size: u32,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) pending_start_arg: u32,
     pub(crate) caps: CapabilitySet,
     pub(crate) pkg_path: utils::format::InlineStr<31>,
-    pub(crate) overlay: PagedOverlay,
+    #[cfg(feature = "krx_paged")]
+    pub(crate) window: PagedWindowState,
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
 }
 
@@ -93,13 +76,6 @@ impl NativeExecSlot {
         let zone_a_off = crate::data::arena::zone_a_used_bytes();
         let load_base = crate::data::arena::zone_b_base_ptr() as u32;
         let max_arena = crate::data::arena::TRANSIENT_ARENA_BYTES.saturating_sub(zone_a_off) as u32;
-        let is_p0 = self.profile.is_structured_paged();
-        let overlay_size = if is_p0 {
-            let ws = unsafe { (*self.overlay.leaf).window_size } as u32;
-            if ws >= 1024 { ws } else { 1024 }
-        } else {
-            1024u32
-        };
         let code_size = self.code_size as u32;
         match rk {
             RegionKind::ImmutableCode => Some(MemoryRegionDescriptor::new(
@@ -108,19 +84,8 @@ impl NativeExecSlot {
                 load_base,
                 code_size,
             )),
-            RegionKind::OverlayWindow if is_p0 => Some(MemoryRegionDescriptor::new(
-                RegionKind::OverlayWindow,
-                region_flags::READ | region_flags::EXEC,
-                load_base + (max_arena - overlay_size),
-                overlay_size,
-            )),
             RegionKind::VirtualRam => {
-                let code_limit = if is_p0 {
-                    max_arena - overlay_size
-                } else {
-                    max_arena
-                };
-                let limit_vma = load_base + code_limit;
+                let limit_vma = load_base + max_arena;
                 let ram_vma = if !self.is_paged && self.got_base > load_base {
                     self.got_base
                 } else {
@@ -139,17 +104,8 @@ impl NativeExecSlot {
 
     #[cfg(feature = "krx_paged")]
     pub(crate) fn window_mut(&mut self) -> Option<&mut PagedWindowState> {
-        if self.is_loaded && self.is_paged && !self.profile.is_structured_paged() {
-            Some(unsafe { &mut *self.overlay.window })
-        } else {
-            None
-        }
-    }
-
-    #[inline(always)]
-    fn leaf_mut(&mut self) -> Option<&mut StreamingLeafState> {
-        if self.is_loaded && self.profile.is_structured_paged() {
-            Some(unsafe { &mut *self.overlay.leaf })
+        if self.is_loaded && self.is_paged {
+            Some(&mut self.window)
         } else {
             None
         }
@@ -163,22 +119,6 @@ pub fn init_native_slot() {
             0,
             core::mem::size_of::<NativeExecSlot>(),
         );
-    }
-}
-
-#[inline(always)]
-pub fn is_leaf_dispatching() -> bool {
-    let slot = slot_ref();
-    slot.is_loaded
-        && slot.profile.is_structured_paged()
-        && unsafe { (*slot.overlay.leaf).is_dispatching }
-}
-
-pub fn invalidate_leaf_cache() {
-    if let Some(leaf) = slot_mut().leaf_mut() {
-        if !leaf.is_dispatching {
-            leaf.active_leaf = None;
-        }
     }
 }
 
@@ -234,12 +174,102 @@ pub(crate) fn flush_instruction_pipeline() {
     }
 }
 
+/// 0-wait-state SRAM fast-path way tags (`WAY_TAGS[way] == page_id`) for `P1 v2` hit veneer.
+#[cfg(feature = "krx_paged")]
+static mut WAY_TAGS: [u16; 8] = [0xFFFF; 8];
+#[cfg(feature = "krx_paged")]
+static mut WAY_BASE_VMA: usize = 0;
+#[cfg(feature = "krx_paged")]
+static mut WAY_PAGE_SHIFT: u8 = 9;
+
+#[cfg(feature = "krx_paged")]
+pub(crate) fn reset_way_tags(base_vma: usize, page_size: u16) {
+    unsafe {
+        WAY_TAGS = [0xFFFF; 8];
+        WAY_BASE_VMA = base_vma;
+        WAY_PAGE_SHIFT = if page_size >= 2048 {
+            11
+        } else if page_size >= 1024 {
+            10
+        } else {
+            9
+        };
+    }
+}
+
+/// 12-cycle `.data.ramfunc` hit-path resolver: returns Thumb target address on way hit or `0` on miss.
+#[cfg(feature = "krx_paged")]
+#[cfg_attr(
+    all(target_arch = "arm", not(test)),
+    unsafe(link_section = ".data.ramfunc")
+)]
+pub fn krx_paged_hit_fast(page_id: u16, func_offset: u16) -> usize {
+    let tags = unsafe { &*core::ptr::addr_of!(WAY_TAGS) };
+    let mut w = 0usize;
+    while w < 8 {
+        if tags[w] == page_id {
+            let base = unsafe { WAY_BASE_VMA };
+            let shift = unsafe { WAY_PAGE_SHIFT } as usize;
+            return (base + (w << shift) + (func_offset as usize)) | 1;
+        }
+        w += 1;
+    }
+    0
+}
+
 fn read_slot_pkg_bytes(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     offset: usize,
     dst: &mut [u8],
 ) -> bool {
     let slot = slot_ref();
+    // Fast-path ExtentStreamer: bypass KernFS path/inode walks using cached 12x u16 L1 roots
+    // and direct SPI2 DMA1_Ch3 flash bursts (< 180 us per 512 B page fault).
+    if slot.l1_depth != 0 && offset.saturating_add(dst.len()) <= slot.file_size as usize {
+        let mut copied = 0usize;
+        while copied < dst.len() {
+            let pos = offset + copied;
+            let lpage = pos >> 8;
+            let in_page = pos & 0xFF;
+            let take = (dst.len() - copied).min(256 - in_page);
+            let phys = if slot.l1_depth == kernfs::format::DEPTH_DIRECT {
+                if lpage < kernfs::format::MAX_L1_ROOTS {
+                    slot.l1_pages[lpage]
+                } else {
+                    0
+                }
+            } else if slot.l1_depth == kernfs::format::DEPTH_SINGLE_INDIRECT {
+                let s = lpage >> 7;
+                if s < kernfs::format::MAX_L1_ROOTS && slot.l1_pages[s] != 0 {
+                    let idx_addr =
+                        ((slot.l1_pages[s] as u32) << 8) + (((lpage & 0x7F) as u32) << 1);
+                    let mut raw = [0u8; 2];
+                    if storage.dev.read_data(idx_addr, &mut raw).is_err() {
+                        return false;
+                    }
+                    u16::from_le_bytes(raw)
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            if phys == 0 {
+                dst[copied..copied + take].fill(0);
+            } else {
+                let addr = ((phys as u32) << 8) + (in_page as u32);
+                if storage
+                    .dev
+                    .read_data(addr, &mut dst[copied..copied + take])
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            copied += take;
+        }
+        return true;
+    }
     if slot.pkg_ino >= 2 {
         storage.read_ino_at(slot.pkg_ino, offset, dst) == Ok(dst.len())
     } else {
@@ -307,7 +337,13 @@ fn fault_in_way(page_id: u16, is_demand: bool) -> Option<(usize, StreamedPageDes
         if let Some(w) = slot_mut().window_mut() {
             w.cache.invalidate_way(s);
         }
+        if s < 8 {
+            unsafe { WAY_TAGS[s] = 0xFFFF };
+        }
         return None;
+    }
+    if s < 8 {
+        unsafe { WAY_TAGS[s] = page_id };
     }
     if is_demand && let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot_pid) {
         pcb.health.record_page_fault();
@@ -317,12 +353,17 @@ fn fault_in_way(page_id: u16, is_demand: bool) -> Option<(usize, StreamedPageDes
 
 /// Unlimited-Size `P1 v2` Demand-Paged Fault & Cache Hit Handler (supports up to `768` pages = `384 KiB`).
 ///
-/// Cache hits (`>97%` of cross-page calls) resolve in zero Flash reads via `probe_hit`.
+/// Cache hits (`>97%` of cross-page calls) resolve in zero Flash reads via `.data.ramfunc` `krx_paged_hit_fast`.
 /// Cache misses stream directly from `PY25Q16` via `ExtentStreamer` + `DMA1_Ch3` (`SPI2` @ 24 MHz),
 /// optionally expanding `BLOCK_FLAG_LZSS` pages in-place in zero extra RAM.
 #[cfg(feature = "krx_paged")]
 #[inline(never)]
 pub fn krx_page_fault(page_id: u16, func_offset: u16) -> usize {
+    let fast_addr = krx_paged_hit_fast(page_id, func_offset);
+    if fast_addr != 0 {
+        slot_mut().current_page = page_id;
+        return fast_addr;
+    }
     let slot = slot_mut();
     let entry_fallback = slot.entry_point;
     let Some(win) = slot.window_mut() else {
@@ -348,7 +389,7 @@ pub fn krx_page_fault(page_id: u16, func_offset: u16) -> usize {
     }
 
     let slot = slot_mut();
-    let slot_byte_off = unsafe { (*slot.overlay.window).cache.slot_byte_offset(slot_idx) };
+    let slot_byte_off = slot.window.cache.slot_byte_offset(slot_idx);
     slot.current_page = page_id;
     slot.current_slot = slot_idx as u8;
     let slot_vma = crate::data::arena::zone_b_base_ptr() as usize + slot_byte_off;
@@ -410,88 +451,9 @@ pub fn krx_return_thunk() -> usize {
     krx_page_fault(frame.caller_page_id, frame.return_offset)
 }
 
-/// Loads and validates a P0 leaf into `overlay_vma` in its own stack frame so `LeafEntry`,
-/// `raw` buffer, and `KernFS` I/O frames are completely popped before the leaf executes.
-#[inline(never)]
-fn prepare_p0_leaf(cur_id: u8) -> Option<usize> {
-    let leaf_mgr = slot_mut().leaf_mut()?;
-    let overlay_vma = leaf_mgr.overlay_vma;
-    let window_size = leaf_mgr.window_size as usize;
-    let Ok((leaf_entry, is_hit)) = leaf_mgr.begin_leaf_call(cur_id, |entry_off| {
-        let mut raw = [0u8; kernel::runtime::LeafEntry::SIZE];
-        if read_active_pkg_region(entry_off as usize, raw.as_mut_ptr() as usize, raw.len()) {
-            kernel::runtime::LeafEntry::parse(&raw)
-        } else {
-            None
-        }
-    }) else {
-        return None;
-    };
-    if !is_hit
-        && !read_active_pkg_region(
-            leaf_entry.flash_offset as usize,
-            overlay_vma as usize,
-            (leaf_entry.size as usize).min(window_size),
-        )
-    {
-        leaf_mgr.active_leaf = None;
-        leaf_mgr.is_dispatching = false;
-        return None;
-    }
-    if leaf_entry.entry_offset >= leaf_entry.size {
-        leaf_mgr.active_leaf = None;
-        leaf_mgr.is_dispatching = false;
-        return None;
-    }
-    Some(((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize)
-}
-
-/// Invokes a P0 Structured Leaf Overlay from the resident root actor (§5.1 / KRX 3.2).
-/// Direct non-closure hop loop keeps the M0+ stack frame minimal across leaf -> syscall -> KernFS chains.
-#[inline(never)]
-pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
-    let got_base = slot_ref().got_base;
-    let mut cur_id = leaf_id;
-    let mut cur_arg = arg;
-
-    for _ in 0..8u8 {
-        let Some(entry_addr) = prepare_p0_leaf(cur_id) else {
-            return 0xFFFF_FFFF;
-        };
-
-        let mut ctx = kernel::runtime::LeafContext::new(cur_id, cur_arg);
-        let raw_res = unsafe {
-            invoke_krx_native(
-                entry_addr,
-                got_base,
-                KRX_OP_START,
-                &raw const NATIVE_API_TABLE,
-                &raw mut ctx as *const (),
-            )
-        };
-        if let Some(leaf_mgr) = slot_mut().leaf_mut() {
-            leaf_mgr.is_dispatching = false;
-        }
-
-        let cont = ctx.continuation;
-        if cont.is_call_leaf() {
-            cur_id = cont.target_or_code;
-            cur_arg = cont.payload;
-        } else if cont.is_error() {
-            return 0xFFFF_FFFF;
-        } else if cont.payload != 0 {
-            return cont.payload;
-        } else {
-            return raw_res;
-        }
-    }
-
-    0xFFFF_FFFF
-}
-
 /// Read an asset slice from the currently loaded KRX package on KernFS via `ExtentStreamer`.
 pub fn read_active_pkg_asset(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     offset: u32,
     dst: &mut [u8],
 ) -> Result<usize, ()> {
@@ -999,7 +961,6 @@ mod tests {
         for (profile, is_paged, code_size, got_off) in [
             (KrxProfile::N1NativePic, false, 1200u16, 1200u32),
             (KrxProfile::N1NativePic, false, 900u16, 0u32),
-            (KrxProfile::P0StructuredPaged, true, 2048u16, 2048u32),
             (KrxProfile::P1TransparentPaged, true, 4096u16, 0u32),
         ] {
             super::super::background::BgManager::reset();
@@ -1015,8 +976,7 @@ mod tests {
             slot.code_size = code_size;
             slot.got_base = load_base.wrapping_add(got_off);
 
-            let is_p0 = profile.is_structured_paged();
-            let code_limit = if is_p0 {
+            let code_limit = if false {
                 max_arena - overlay_size
             } else {
                 max_arena
@@ -1032,7 +992,7 @@ mod tests {
                 load_base,
                 code_size as u32,
                 overlay_vma,
-                if is_p0 { overlay_size } else { 0 },
+                if false { overlay_size } else { 0 },
                 ram_vma,
                 ram_size,
             );

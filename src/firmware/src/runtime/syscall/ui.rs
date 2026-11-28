@@ -33,20 +33,9 @@ pub fn set_tray_icon(icon_id: u8) -> u8 {
     }
 }
 
-fn is_persistent_guest_ptr(ptr: *const u8, len: usize) -> bool {
-    if ptr.is_null() {
-        return true;
-    }
-    let slot = crate::runtime::native_runner::slot_ref();
-    if !slot.is_loaded || !slot.profile.is_structured_paged() {
-        return true;
-    }
-    let base = crate::runtime::native_runner::arena_base_ptr() as usize;
-    let overlay_end = base + crate::data::arena::TRANSIENT_ARENA_BYTES;
-    let overlay_start = overlay_end - 1024;
-    let addr = ptr as usize;
-    let end = addr.saturating_add(len);
-    !(addr < overlay_end && end > overlay_start)
+#[inline(always)]
+fn is_persistent_guest_ptr(_ptr: *const u8, _len: usize) -> bool {
+    true
 }
 
 unsafe fn show_modal_req(req: *const KrxModalReq) {

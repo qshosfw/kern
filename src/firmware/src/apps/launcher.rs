@@ -104,8 +104,8 @@ static BUILTIN_TAIL: [LauncherEntry; 2] = [
     LauncherEntry::builtin(LauncherTarget::About),
 ];
 
-pub fn load_entries(
-    mut _storage: Option<&mut crate::services::SystemStorage>,
+pub fn load_entries<D: kernfs::BlockDevice>(
+    mut _storage: Option<&mut kernfs::KernFS<'_, D>>,
 ) -> &'static [LauncherEntry] {
     #[cfg(feature = "filesystem")]
     if let Some(s) = &mut _storage {
@@ -164,7 +164,7 @@ pub fn load_entries(
 }
 
 /// Mark package catalog dirty and reload in-memory Launcher entries.
-pub fn reload_launcher(storage: &mut crate::services::SystemStorage) {
+pub fn reload_launcher<D: kernfs::BlockDevice>(storage: &mut kernfs::KernFS<'_, D>) {
     catalog::get_catalog().mark_dirty();
     let entries = load_entries(Some(storage));
     crate::apps::AppRegistry::launcher_mut().set_entries(entries);
@@ -174,14 +174,7 @@ static PAGE_BADGES: [&str; 2] = ["1/2", "2/2"];
 
 #[inline(always)]
 fn is_torch_on() -> bool {
-    #[cfg(target_arch = "arm")]
-    {
-        bsp::pins::FLASHLIGHT.is_high()
-    }
-    #[cfg(not(target_arch = "arm"))]
-    {
-        false
-    }
+    crate::hardware::is_torch_on()
 }
 
 /// Unified dual-mode (`3x2` `16x16` `Grid` + kinetic `List`) resident Home Launcher (`APP_ID_LAUNCHER`).
@@ -209,7 +202,7 @@ pub struct LauncherApp {
 impl LauncherApp {
     pub unsafe fn init_at(ptr: *mut Self) {
         unsafe {
-            (*ptr).items = load_entries(None);
+            (*ptr).items = &BUILTIN_HEAD;
             (*ptr).show_numbers = true;
             (*ptr).show_labels = true;
             (*ptr).scroller = gfx::views::KineticScroller::new(2);
@@ -711,12 +704,25 @@ impl LauncherApp {
 mod tests {
     use super::*;
 
+    struct NoDev;
+    impl kernfs::BlockDevice for NoDev {
+        fn read(&mut self, _: usize, _: &mut [u8]) -> Result<(), kernfs::FsError> {
+            Err(kernfs::FsError::NotFound)
+        }
+        fn program(&mut self, _: usize, _: &[u8]) -> Result<(), kernfs::FsError> {
+            Err(kernfs::FsError::NotFound)
+        }
+        fn erase_sector(&mut self, _: usize) -> Result<(), kernfs::FsError> {
+            Err(kernfs::FsError::NotFound)
+        }
+    }
+
     #[test]
     fn launcher_entries_and_targets_are_compact() {
         assert!(core::mem::size_of::<LauncherTarget>() <= 4);
         assert!(core::mem::size_of::<LauncherEntry>() <= 4);
         catalog::get_catalog().entries.clear();
-        let entries = load_entries(None);
+        let entries = load_entries::<NoDev>(None);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].title(), "Radio");
         assert_eq!(entries[1].title(), "Settings");
@@ -747,7 +753,7 @@ mod tests {
             path: utils::format::InlineStr::from_str("/apps/settings.krx"),
         });
 
-        let entries = load_entries(None);
+        let entries = load_entries::<NoDev>(None);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[1].title(), "Settings");
         assert_eq!(entries[1].target, LauncherTarget::Package(0));
@@ -764,7 +770,7 @@ mod tests {
             path: utils::format::InlineStr::from_str("/apps/vfo.krx"),
         });
 
-        let entries = load_entries(None);
+        let entries = load_entries::<NoDev>(None);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].title(), "Radio");
         assert_eq!(entries[0].target, LauncherTarget::Package(1));
@@ -797,7 +803,7 @@ mod tests {
         canvas.clear();
         app.render(&mut canvas);
 
-        let entries = load_entries(None);
+        let entries = load_entries::<NoDev>(None);
         app.set_entries(entries);
         app.adjust_scroll(false);
         assert_eq!(app.selected_idx, 3);

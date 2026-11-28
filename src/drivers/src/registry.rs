@@ -6,7 +6,9 @@
 use kernel::caps::{Cap, CapabilitySet};
 use kernel::dev::{BusType, DeviceDescriptor, DeviceType, Driver};
 
-impl Driver for crate::keyboard::KeypadScanner {
+impl<M: kern_platform_traits::input::KeyMatrix + 'static> Driver
+    for crate::keyboard::KeypadScanner<M>
+{
     fn descriptor(&self) -> DeviceDescriptor {
         DeviceDescriptor::new(
             DeviceType::SystemInfo,
@@ -136,7 +138,7 @@ impl<I2C: 'static, D: 'static> Driver for crate::bk1080::Bk1080<I2C, D> {
 }
 
 #[cfg(feature = "usb")]
-impl Driver for crate::usb::UsbDriver {
+impl<B: kern_platform_traits::usb::UsbBus + 'static> Driver for crate::usb::UsbDriver<B> {
     fn descriptor(&self) -> DeviceDescriptor {
         DeviceDescriptor::new(
             DeviceType::Usb,
@@ -160,7 +162,17 @@ mod tests {
 
     #[test]
     fn core_drivers_expose_descriptors_and_capabilities() {
-        let kp = crate::keyboard::KeypadScanner::new();
+        struct MockMatrix;
+        impl kern_platform_traits::input::KeyMatrix for MockMatrix {
+            fn poll_raw_mask(&self) -> u32 {
+                0
+            }
+            fn reset_pins(&self) {}
+            fn now_ms(&self) -> u32 {
+                0
+            }
+        }
+        let kp = crate::keyboard::KeypadScanner::new(MockMatrix);
         assert_eq!(kp.descriptor().name, "Keypad");
         assert!(kp.descriptor().caps.contains(Cap::Keypad));
         assert_eq!(kp.bus(), BusType::Internal);

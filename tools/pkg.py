@@ -192,19 +192,21 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     if m.get("sign", False) or rel_name.startswith("sys/"):
         builder.sign = True
 
-    leaf_max = m.get("leaf_max", LEAF_MAX)
-    if profile == pack_krx.PROFILE_P0_PAGED:
-        builder.page_size = leaf_max
+    page_size = m.get("page_size", m.get("leaf_max", LEAF_MAX))
+    if profile == pack_krx.PROFILE_P1_PAGED:
+        builder.page_size = page_size
     if "root" in m:
-        root_limit = m.get("root_max", 6144 - leaf_max if profile == pack_krx.PROFILE_P0_PAGED else None)
+        root_limit = m.get("root_max", None)
         with open(build_unit(src_dir, out_dir, m["root"], root_limit), "rb") as f:
             builder.set_payload(f.read())
     else:
         builder.set_payload(b"\x70\x47")  # Thumb `bx lr`: paged images enter through block 0
-    for leaf_id, source in enumerate(m.get("leaves", []), start=1):
-        builder.add_leaf_file(leaf_id, build_unit(src_dir, out_dir, source, leaf_max))
-    for block_id, source in enumerate(m.get("blocks", [])):
-        builder.add_block_file(block_id, build_unit(src_dir, out_dir, source, builder.page_size))
+    blocks = m.get("blocks", [])
+    if blocks:
+        for block_id, source in enumerate(blocks, start=1 if "root" in m else 0):
+            builder.add_block_file(block_id, build_unit(src_dir, out_dir, source, builder.page_size))
+    elif profile == pack_krx.PROFILE_P1_PAGED:
+        builder.auto_page = True
     for action in m.get("action", []):
         scope = pack_krx.resolve_mask("KRX_SCOPE", action["scope"])
         builder.add_action(action.get("id", 0), scope, action["label"], action.get("flags", 0))

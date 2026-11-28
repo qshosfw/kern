@@ -290,6 +290,7 @@ impl ModalCompositor {
         self.modal = ActiveModal::None;
     }
 
+    #[inline(never)]
     pub fn render_overlay(&self, canvas: &mut Canvas) {
         match &self.modal {
             ActiveModal::None => {}

@@ -4,7 +4,6 @@
 //! extracts identity metadata, flags invalid/corrupted files at the top,
 //! and caches entries for the OS launcher and Settings manager.
 
-use crate::services::SystemStorage;
 use kernel::runtime::KrxExecType;
 #[cfg(feature = "filesystem")]
 use kernel::runtime::KrxPreamble;
@@ -136,7 +135,7 @@ impl PackageCatalog {
     /// Perform a zero-allocation discovery pass across `/apps/` in storage.
     #[inline(always)]
     #[cfg(feature = "filesystem")]
-    pub fn scan(&mut self, filesystem: &mut SystemStorage) {
+    pub fn scan<D: kernfs::BlockDevice>(&mut self, filesystem: &mut kernfs::KernFS<'_, D>) {
         if self.scanned {
             return;
         }
@@ -144,11 +143,11 @@ impl PackageCatalog {
     }
 
     #[cfg(feature = "filesystem")]
-    fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
+    fn scan_internal<D: kernfs::BlockDevice>(&mut self, filesystem: &mut kernfs::KernFS<'_, D>) {
         self.entries.clear();
         self.actions.clear();
 
-        let _ = filesystem.for_each_entry("/apps", |name, size, _perm, is_dir| {
+        let _ = filesystem.list_dir("/apps", |name, size, _perm, is_dir| {
             let base_name = extract_filename(name);
             let bytes = base_name.as_bytes();
             let len = self.entries.len();
@@ -192,9 +191,9 @@ impl PackageCatalog {
     }
 
     #[cfg(feature = "filesystem")]
-    fn inspect_entry_at(
+    fn inspect_entry_at<D: kernfs::BlockDevice>(
         &mut self,
-        filesystem: &mut SystemStorage,
+        filesystem: &mut kernfs::KernFS<'_, D>,
         idx: usize,
         dst_idx: usize,
     ) -> bool {
@@ -266,7 +265,7 @@ impl PackageCatalog {
     }
 
     #[cfg(not(feature = "filesystem"))]
-    pub fn scan(&mut self, _filesystem: &mut SystemStorage) {}
+    pub fn scan<D: kernfs::BlockDevice>(&mut self, _filesystem: &mut kernfs::KernFS<'_, D>) {}
 }
 
 pub static mut PACKAGE_CATALOG: PackageCatalog = PackageCatalog::new();
@@ -304,19 +303,10 @@ mod tests {
         assert!(summary.exec().is_some());
         #[cfg(feature = "krx_native")]
         {
-            let map = summary.aux.leaf_map.expect("panic.mod must carry leaf_map");
-            let mut leaves = kernel::runtime::paged::StreamingLeafState::new(0, 1024);
-            let tbl_off = (map.as_ptr() as usize - PANIC_MOD.as_ptr() as usize) as u32;
-            let count = (map.len() / kernel::runtime::LeafEntry::SIZE) as u8;
-            leaves.configure(0, 1024, tbl_off, count);
-            assert_eq!(leaves.leaf_count, 10);
-            let (entry, hit) = leaves
-                .begin_leaf_call(10, |off| {
-                    kernel::runtime::LeafEntry::parse(&PANIC_MOD[off as usize..])
-                })
-                .expect("leaf 10 must resolve via O(1) flash table seek");
-            assert!(!hit);
-            assert_eq!(entry.leaf_id, 10);
+            assert!(
+                summary.aux.block_map.is_some(),
+                "panic.mod must carry P1 block_map"
+            );
         }
     }
 
@@ -384,25 +374,10 @@ mod tests {
         assert_eq!(bits16, gfx::icons::ICON_16_SETTINGS);
         #[cfg(feature = "krx_native")]
         {
-            let map = summary
-                .aux
-                .leaf_map
-                .expect("settings.krx must carry SECTION_LEAF_MAP");
-            let count = map.len() / kernel::runtime::LeafEntry::SIZE;
             assert!(
-                count >= 20,
-                "settings.krx should carry its modular leaf set"
+                summary.aux.block_map.is_some(),
+                "settings.krx must carry P1 block_map"
             );
-            let tbl_off = (map.as_ptr() as usize - SETTINGS_KRX.as_ptr() as usize) as u32;
-            let mut leaves = kernel::runtime::paged::StreamingLeafState::new(0, 1024);
-            leaves.configure(0, 1024, tbl_off, count as u8);
-            let (last, hit) = leaves
-                .begin_leaf_call(count as u8, |off| {
-                    kernel::runtime::LeafEntry::parse(&SETTINGS_KRX[off as usize..])
-                })
-                .expect("last leaf must resolve via O(1) flash table seek");
-            assert!(!hit);
-            assert_eq!(last.leaf_id, count as u8);
         }
     }
 

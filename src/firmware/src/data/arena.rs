@@ -58,19 +58,6 @@ pub fn zone_b_cache_bytes() -> usize {
         .min(4096)
 }
 
-/// Returns `true` while a P0 structured leaf overlay is actively executing.
-#[inline(always)]
-pub fn is_p0_leaf_dispatching() -> bool {
-    #[cfg(feature = "krx_native")]
-    {
-        crate::runtime::native_runner::is_leaf_dispatching()
-    }
-    #[cfg(not(feature = "krx_native"))]
-    {
-        false
-    }
-}
-
 #[inline(always)]
 pub fn transient_arena_bytes_mut() -> &'static mut [u8; TRANSIENT_ARENA_BYTES] {
     unsafe { &mut *(arena_base_ptr() as *mut [u8; TRANSIENT_ARENA_BYTES]) }
@@ -79,8 +66,6 @@ pub fn transient_arena_bytes_mut() -> &'static mut [u8; TRANSIENT_ARENA_BYTES] {
 #[inline(always)]
 pub fn scratch_tail_bytes_mut()
 -> &'static mut [u8; TRANSIENT_ARENA_BYTES - TRANSIENT_SCRATCH_OFFSET] {
-    #[cfg(feature = "krx_native")]
-    crate::runtime::native_runner::invalidate_leaf_cache();
     unsafe {
         &mut *(arena_base_ptr().add(TRANSIENT_SCRATCH_OFFSET)
             as *mut [u8; TRANSIENT_ARENA_BYTES - TRANSIENT_SCRATCH_OFFSET])

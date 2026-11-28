@@ -6,6 +6,7 @@
 pub mod af;
 pub mod agc;
 pub mod fsk;
+pub mod ops;
 pub mod registers;
 pub mod squelch;
 pub mod subaudible;
@@ -121,7 +122,7 @@ pub struct Bk4829<'a, B> {
     pub(crate) shadow_valid: [u32; 4],
     pub(crate) shadow: [u16; 128],
     pub(crate) bus: B,
-    pub(crate) calib: Option<&'a [u8; 512]>,
+    pub(crate) calib: Option<&'a calib::ActiveCalib>,
     pub(crate) rx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) tx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) am_tracker: kernel::service::radio::AmLinearityTracker,
@@ -285,9 +286,8 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         let vol_idx = (level as usize).min(crate::audio::VOLUME_TABLE.len() - 1);
         let (mut rx_gain2, mut dac_gain) = crate::audio::VOLUME_TABLE[vol_idx];
         if let Some(calib) = self.calib {
-            let block = calib::CalibrationBlock::from_bytes(calib);
-            let max_vol = block.volume_gain();
-            let max_dac = block.dac_gain();
+            let max_vol = calib.volume_gain();
+            let max_dac = calib.dac_gain();
             let prod = rx_gain2 as u32 * max_vol as u32;
             rx_gain2 = (((prod * 0x046A) >> 16) as u8).min(63);
             dac_gain = dac_gain.min(max_dac);
@@ -299,8 +299,7 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     pub fn set_mic_gain(&mut self, gain_db: u8) {
         let val = if gain_db < 5 {
             if let Some(calib) = self.calib {
-                let block = calib::CalibrationBlock::from_bytes(calib);
-                block.get_mic_gain_db(gain_db)
+                calib.mic_gain_db(gain_db)
             } else {
                 match gain_db {
                     0 => 8,
@@ -694,8 +693,7 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     pub fn get_rssi_dbm(&mut self) -> i16 {
         let raw = self.get_rssi();
         if let Some(calib) = self.calib {
-            let block = calib::CalibrationBlock::from_bytes(calib);
-            block.raw_rssi_to_dbm(self.current_freq_hz, raw)
+            calib.raw_rssi_to_dbm(raw)
         } else {
             squelch::raw_rssi_to_dbm(raw)
         }
@@ -726,11 +724,10 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         self.rmw_reg_bit(REG_AGC_CONFIG, 1 << 15, !enable);
     }
 
-    /// Bind calibration memory reference and apply crystal trim to REG_3B.
-    pub fn attach_calibration(&mut self, calib_bytes: &'a [u8; 512]) {
-        self.calib = Some(calib_bytes);
-        let block = calib::CalibrationBlock::from_bytes(calib_bytes);
-        self.set_crystal_trim(block.xtal_freq_low());
+    /// Bind 64-byte active calibration reference and apply crystal trim to REG_3B.
+    pub fn attach_calibration(&mut self, active_calib: &'a calib::ActiveCalib) {
+        self.calib = Some(active_calib);
+        self.set_crystal_trim(active_calib.xtal_freq_low());
     }
 
     pub fn new(bus: B) -> Self {
@@ -1017,8 +1014,7 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfSquelch for Bk4829<'a, B> {
     fn set_squelch_level(&mut self, level: u8) {
         self.squelch_level = level;
         let th = if let Some(calib) = self.calib {
-            let block = calib::CalibrationBlock::from_bytes(calib);
-            let t = block.get_squelch_thresholds(self.current_freq_hz, level);
+            let t = calib.squelch_thresholds(level);
             kernel::service::radio::squelch::SquelchThresholds {
                 open_rssi: t.open_rssi,
                 close_rssi: t.close_rssi,
@@ -1524,8 +1520,7 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfPowerSequencer for Bk4829<'a, B
 
     fn tx_ramp_up(&mut self, target_power_level: u8) {
         let bias = if let Some(calib) = self.calib {
-            let block = calib::CalibrationBlock::from_bytes(calib);
-            block.get_tx_power_bias(self.current_freq_hz, target_power_level)
+            calib.tx_power_bias(self.current_freq_hz, target_power_level)
         } else {
             (target_power_level.min(2) << 6) | 0x20
         };

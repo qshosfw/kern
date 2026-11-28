@@ -4,8 +4,68 @@ use super::{parse_str, parse_user_path, ptr_ref, ptr_slice, ptr_slice_mut, str_o
 use kernel::proc::abi::{KrxDirEntry, KrxFsReq};
 
 #[inline(always)]
-fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'static>> {
+fn active_storage_mut()
+-> Option<&'static mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>>
+{
     Some(crate::services::storage_mut())
+}
+
+fn app_config_path_into<'a>(app_name: &str, buf: &'a mut [u8; 32]) -> &'a str {
+    const PFX: &[u8] = b"/pref/app/";
+    const SFX: &[u8] = b".cfg";
+    let n = app_name.len().min(buf.len() - PFX.len() - SFX.len());
+    buf[..PFX.len()].copy_from_slice(PFX);
+    buf[PFX.len()..PFX.len() + n].copy_from_slice(&app_name.as_bytes()[..n]);
+    buf[PFX.len() + n..PFX.len() + n + SFX.len()].copy_from_slice(SFX);
+    unsafe { core::str::from_utf8_unchecked(&buf[..PFX.len() + n + SFX.len()]) }
+}
+
+pub fn load_app_config<D: kernfs::BlockDevice>(
+    storage: &mut kernfs::KernFS<'_, D>,
+    app_name: &str,
+    buf: &mut [u8],
+) -> Result<usize, ()> {
+    let mut pbuf = [0u8; 32];
+    storage
+        .read_file(app_config_path_into(app_name, &mut pbuf), buf)
+        .map_err(|_| ())
+}
+
+pub fn save_app_config(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    app_name: &str,
+    data: &[u8],
+) -> Result<(), ()> {
+    let mut pbuf = [0u8; 32];
+    crate::security::write_classified_file(storage, app_config_path_into(app_name, &mut pbuf), data)
+        .map_err(|_| ())
+}
+
+pub fn list_krx_dir_at<D: kernfs::BlockDevice>(
+    storage: &mut kernfs::KernFS<'_, D>,
+    dir_path: &str,
+    skip: usize,
+    out_entries: &mut [KrxDirEntry],
+) -> Result<(usize, usize), ()> {
+    let mut total = 0usize;
+    let mut written = 0usize;
+    storage
+        .list_dir(dir_path, |path, size, _perm, is_dir| {
+            if total >= skip {
+                if let Some(dst) = out_entries.get_mut(written) {
+                    unsafe { core::ptr::write_bytes(dst, 0, 1) };
+                    let b = path.as_bytes();
+                    let n = b.len().min(24);
+                    dst.name[..n].copy_from_slice(&b[..n]);
+                    dst.size = size as u32;
+                    dst.is_dir = u8::from(is_dir);
+                    written += 1;
+                }
+            }
+            total += 1;
+        })
+        .map_err(|_| ())?;
+    Ok((total, written))
 }
 
 #[inline(always)]
@@ -69,7 +129,7 @@ fn parse_non_sys_user_path<'a>(path: *const u8, path_len: u8) -> Option<&'a str>
 }
 
 fn file_stat_size(
-    st: &mut crate::services::SystemStorage<'static>,
+    st: &mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: *const u8,
     path_len: u8,
 ) -> Option<u32> {
@@ -82,7 +142,7 @@ fn file_stat_size(
 
 #[cfg(feature = "filesystem")]
 unsafe fn fs_read_extents(
-    st: &mut crate::services::SystemStorage<'static>,
+    st: &mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: *const u8,
     path_len: u8,
     dst: &mut [u8],
@@ -90,7 +150,7 @@ unsafe fn fs_read_extents(
     if dst.len() >= 24 && super::has_cap(::abi::Cap::StorageAdmin) {
         if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
             let mut l1 = [0u16; 12];
-            if let Ok((depth, sz)) = st.fs.file_extents(path_str, &mut l1) {
+            if let Ok((depth, sz)) = st.file_extents(path_str, &mut l1) {
                 let roots_bytes = if dst.len() >= 32 { 24 } else { 16 };
                 let p = dst.as_mut_ptr();
                 unsafe {
@@ -107,9 +167,12 @@ unsafe fn fs_read_extents(
 }
 
 #[cfg(feature = "filesystem")]
-fn fs_read_stats(st: &crate::services::SystemStorage<'static>, dst: &mut [u8]) -> usize {
+fn fs_read_stats(
+    st: &kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    dst: &mut [u8],
+) -> usize {
     if dst.len() >= 16 {
-        let s = st.fs.stats();
+        let s = st.stats();
         #[repr(C)]
         struct WireStats(u16, u16, u16, u16, u16, u16, u32);
         let w = WireStats(
@@ -130,7 +193,7 @@ fn fs_read_stats(st: &crate::services::SystemStorage<'static>, dst: &mut [u8]) -
 }
 
 unsafe fn dispatch_fs_read(
-    st: &mut crate::services::SystemStorage<'static>,
+    st: &mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     sub: u8,
     r: &KrxFsReq,
 ) -> usize {
@@ -150,9 +213,7 @@ unsafe fn dispatch_fs_read(
         } else {
             &mut empty[..]
         };
-        if let Ok((total, written)) =
-            crate::services::storage::list_krx_dir_at(st, dir_str, r.offset as usize, dst)
-        {
+        if let Ok((total, written)) = list_krx_dir_at(st, dir_str, r.offset as usize, dst) {
             return if r.extra != 0 { total } else { written };
         }
         return 0;
@@ -173,7 +234,7 @@ unsafe fn dispatch_fs_read(
         }
         fs_read::LOAD_CFG => {
             let name = super::super::native_runner::active_native_app_name();
-            crate::services::storage::load_app_config(st, name, dst).unwrap_or(0)
+            load_app_config(st, name, dst).unwrap_or(0)
         }
         fs_read::ASSET => {
             #[cfg(feature = "krx_native")]
@@ -213,7 +274,7 @@ unsafe fn dispatch_fs_read(
 }
 
 unsafe fn dispatch_fs_write(
-    st: &mut crate::services::SystemStorage<'static>,
+    st: &mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     sub: u8,
     r: &KrxFsReq,
 ) -> usize {
@@ -229,14 +290,19 @@ unsafe fn dispatch_fs_write(
                         && super::has_cap(::abi::Cap::FactoryCalib)
                     {
                         return usize::from(
-                            crate::calibration_mut().commit_slice(st, src).is_err(),
+                            crate::services::calibration::commit_calib_slice(
+                                crate::calibration_mut(),
+                                st,
+                                src,
+                            )
+                            .is_err(),
                         );
                     }
                 }
             }
             if let Some(path_str) = parse_non_sys_user_path(r.path, r.path_len) {
                 let ok = if sub == fs_write::APPEND {
-                    st.fs.append_file(path_str, src).is_ok()
+                    st.append_file(path_str, src).is_ok()
                 } else {
                     crate::security::write_classified_file(st, path_str, src).is_ok()
                 };
@@ -246,7 +312,7 @@ unsafe fn dispatch_fs_write(
         }
         fs_write::SAVE_CFG => {
             let name = super::super::native_runner::active_native_app_name();
-            usize::from(crate::services::storage::save_app_config(st, name, src).is_err())
+            usize::from(save_app_config(st, name, src).is_err())
         }
         _ => 1,
     }
@@ -317,14 +383,9 @@ pub unsafe fn op_fs_meta(a0: usize, a1: usize, a2: usize) -> usize {
             }
             #[cfg(feature = "filesystem")]
             {
-                let calib = crate::calibration_mut();
                 let res = match mode {
-                    0 | 1 => crate::services::calibration::reformat_storage(
-                        st,
-                        calib.raw_bytes(),
-                        mode == 0,
-                    ),
-                    2 => st.fs.wipe_raw().map_err(|_| ()),
+                    0 | 1 => crate::services::calibration::reformat_storage(st, mode == 0),
+                    2 => st.wipe_raw().map_err(|_| ()),
                     _ => Err(()),
                 };
                 usize::from(res.is_err())

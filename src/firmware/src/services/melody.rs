@@ -12,7 +12,6 @@ pub use types::*;
 #[cfg(all(feature = "filesystem", feature = "boot_jingle"))]
 const TAG_NAME: u8 = 0x01;
 
-use crate::services::SystemStorage;
 use kernel::service::AudioPriority;
 
 /// Maximum notes buffered in the non-blocking `ToneSequencer`.
@@ -176,7 +175,7 @@ impl ToneSequencer {
     pub fn enqueue_roger_file<H: ToneHardware>(
         &mut self,
         hw: &mut H,
-        storage: &mut SystemStorage,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
         path: &str,
     ) {
         let prio = AudioPriority::TxRoger as u8;
@@ -190,7 +189,7 @@ impl ToneSequencer {
     pub fn enqueue_jingle<H: ToneHardware>(
         &mut self,
         hw: &mut H,
-        storage: &mut SystemStorage,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
         boot_jingle_mode: u8,
         path: &str,
     ) {
@@ -255,7 +254,7 @@ impl ToneSequencer {
 }
 
 fn read_kt_file(
-    storage: &mut SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     allow_krgr: bool,
     out: &mut [ToneNote],
@@ -321,7 +320,7 @@ fn fill_notes(slice: &[ToneNote], out: &mut [ToneNote]) -> usize {
 }
 
 pub fn load_roger_notes_slice(
-    storage: &mut SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     out: &mut [ToneNote],
 ) -> usize {
@@ -334,7 +333,7 @@ pub fn load_roger_notes_slice(
 
 /// Load jingle melody notes into `out` from storage path, or fallback to selected preset.
 pub fn load_jingle_notes(
-    storage: &mut SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     boot_jingle_mode: u8,
     path: &str,
     out: &mut [ToneNote],
@@ -353,7 +352,12 @@ pub fn load_jingle_notes(
 }
 
 #[cfg(all(feature = "filesystem", feature = "boot_jingle"))]
-fn write_provision_ton(storage: &mut SystemStorage, path: &str, name: &str, notes: &[ToneNote]) {
+fn write_provision_ton(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    path: &str,
+    name: &str,
+    notes: &[ToneNote],
+) {
     if !storage.exists(path) {
         let mut buf = [0u8; 160];
         let max_notes = ((buf.len() - 4) / 4).min(MAX_MELODY_NOTES);
@@ -398,11 +402,16 @@ fn build_tone_path<'a>(
 }
 
 #[cfg(not(all(feature = "filesystem", feature = "boot_jingle")))]
-pub fn provision_jingles(_storage: &mut SystemStorage) {}
+pub fn provision_jingles(
+    _storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
+}
 
 /// Provision default boot jingle tone files into LittleFS (/user/jingles)
 #[cfg(all(feature = "filesystem", feature = "boot_jingle"))]
-pub fn provision_jingles(storage: &mut SystemStorage) {
+pub fn provision_jingles(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
     let _ = storage.create_dir("/user/jingles");
     let mut path_buf = [0u8; 32];
 

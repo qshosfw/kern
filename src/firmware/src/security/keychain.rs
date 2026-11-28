@@ -1,4 +1,3 @@
-use crate::services::SystemStorage;
 // Dynamic Hardware Silicon Key Pipeline & Security Keychain Containers
 
 use crypto::ascon::Ascon128;
@@ -88,7 +87,7 @@ pub(crate) fn compute_hw_mac(
 }
 
 fn key_valid(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     ident: &[u8; 4],
     expected_len: usize,
@@ -103,7 +102,11 @@ fn fill_rand(trng: &mut HardwareTrng, buf: &mut [u8]) {
     trng.fill_bytes(buf, bsp::entropy::sample_hardware_noise());
 }
 
-fn init_device_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
+fn init_device_key(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    trng: &mut HardwareTrng,
+    uid: &[u8; 12],
+) {
     let mut dev_key = PackedDeviceKey::empty();
     dev_key.ident = *FILE_ID_DEVICE_KEY;
     fill_rand(trng, &mut dev_key.hardware_nonce);
@@ -113,7 +116,7 @@ fn init_device_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid:
 }
 
 pub fn write_passcode_key(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     trng: &mut HardwareTrng,
     uid: &[u8; 12],
     new_passcode: &[u8],
@@ -167,7 +170,7 @@ pub fn write_passcode_key(
 }
 
 pub fn write_storage_key(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     trng: &mut HardwareTrng,
     uid: &[u8; 12],
     seed: &[u8],
@@ -201,7 +204,9 @@ pub fn write_storage_key(
         .map_err(|_| ())
 }
 
-pub fn ensure_keychain(filesystem: &mut SystemStorage) {
+pub fn ensure_keychain(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
     let uid = bsp::uid::read_mcu_uid();
     let mut trng = HardwareTrng::new();
     trng.init_with_uid(&uid, bsp::entropy::sample_hardware_noise());
@@ -230,12 +235,9 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     }
 
     if created {
-        let sys_attr = crate::services::storage::FileAttributes {
-            permission: crate::services::storage::ATTR_SYSTEM
-                | crate::services::storage::ATTR_HIDDEN,
-        };
+        let perm = kernfs::ATTR_SYSTEM | kernfs::ATTR_HIDDEN;
         for &k in &KEY_PATHS {
-            let _ = filesystem.set_attributes(k, sys_attr);
+            let _ = filesystem.set_permission(k, perm);
         }
     }
 }
@@ -310,7 +312,7 @@ pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
 /// Used when `secure_fs` is active without a user passcode.
 #[cfg(not(feature = "passcode"))]
 pub fn unwrap_device_master_key(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     uid: &[u8; 12],
 ) -> Option<SecretBuf<32>> {
     let mut sto_key = PackedStorageKey::empty();
@@ -349,7 +351,9 @@ pub fn unwrap_device_master_key(
 
 /// Ensures keychain exists and installs the UID-bound device FS key into `FileSystemDriver`.
 #[cfg(not(feature = "passcode"))]
-pub fn unlock_device_storage(filesystem: &mut SystemStorage) -> bool {
+pub fn unlock_device_storage(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) -> bool {
     ensure_keychain(filesystem);
     let uid = bsp::uid::read_mcu_uid();
     if let Some(mk) = unwrap_device_master_key(filesystem, &uid) {

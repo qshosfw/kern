@@ -43,8 +43,6 @@ impl KrxClass {
 pub enum KrxProfile {
     /// N0: Native-Fixed (trusted native, fixed execution VMA, zero relocation overhead, hot DSP)
     N0NativeFixed = 0,
-    /// P0: Structured Paged (trusted native, resident root + leaf overlays with continuation dispatch)
-    P0StructuredPaged = 1,
     /// N1: Native-PIC (trusted native, dynamic PIC with GOT base r9)
     N1NativePic = 2,
     /// P1: Transparent Paged (trusted native, demand-paged fixed window with LR-thunking shadow return stack)
@@ -55,7 +53,6 @@ impl KrxProfile {
     pub const fn from_u8(val: u8) -> Option<Self> {
         match val {
             0 => Some(Self::N0NativeFixed),
-            1 => Some(Self::P0StructuredPaged),
             2 => Some(Self::N1NativePic),
             3 => Some(Self::P1TransparentPaged),
             _ => None,
@@ -63,8 +60,7 @@ impl KrxProfile {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        const NAMES: &[u8] =
-            b"N0 (Native-Fixed)\0P0 (Structured-Paged)\0N1 (Native-PIC)\0P1 (Transparent-Paged)\0";
+        const NAMES: &[u8] = b"N0 (Native-Fixed)\0\0N1 (Native-PIC)\0P1 (Transparent-Paged)\0";
         utils::format::nth_cstr(NAMES, *self as u8)
     }
 
@@ -74,13 +70,8 @@ impl KrxProfile {
     }
 
     #[inline(always)]
-    pub const fn is_structured_paged(&self) -> bool {
-        matches!(self, Self::P0StructuredPaged)
-    }
-
-    #[inline(always)]
     pub const fn uses_fixed_vma(&self) -> bool {
-        matches!(self, Self::N0NativeFixed | Self::P0StructuredPaged)
+        matches!(self, Self::N0NativeFixed)
     }
 
     #[inline(always)]
@@ -98,19 +89,12 @@ impl KrxProfile {
         preamble: &KrxPreamble,
         exec: &SectionExecution,
         _has_block_map: bool,
-        has_leaf_map: bool,
     ) -> Self {
         if let Some(p) = exec.profile() {
             return p;
         }
         match preamble.execution_class() {
-            Some(KrxClass::Paged) => {
-                if has_leaf_map {
-                    Self::P0StructuredPaged
-                } else {
-                    Self::P1TransparentPaged
-                }
-            }
+            Some(KrxClass::Paged) => Self::P1TransparentPaged,
             Some(KrxClass::Native) | None => {
                 if exec.reloc_count == 0 && preamble.link_base != 0 {
                     Self::N0NativeFixed
@@ -326,7 +310,6 @@ pub const SECTION_SERVICE_EXPORTS: u16 = 0x0006;
 pub const SECTION_CONFIG: u16 = 0x0007;
 pub const SECTION_SEAL: u16 = 0x0008;
 pub const SECTION_TYPE_LIFECYCLE: u16 = 0x0009;
-pub const SECTION_LEAF_MAP: u16 = 0x000A;
 pub const SECTION_ACTIONS: u16 = 0x000B;
 
 /// Standard 4-byte Section Header prefix
@@ -645,7 +628,6 @@ impl SectionType {
 pub struct KrxAuxSections<'a> {
     pub assets: Option<&'a [u8]>,
     pub block_map: Option<&'a [u8]>,
-    pub leaf_map: Option<&'a [u8]>,
     pub service_exports: Option<&'a [u8]>,
     pub config: Option<&'a [u8]>,
     pub seal: Option<&'a [u8]>,
@@ -892,12 +874,7 @@ impl<'a> KrxSummary<'a> {
 
     #[inline(always)]
     pub fn profile(&self, exec: &SectionExecution) -> KrxProfile {
-        KrxProfile::detect(
-            &self.preamble,
-            exec,
-            self.aux.block_map.is_some(),
-            self.aux.leaf_map.is_some(),
-        )
+        KrxProfile::detect(&self.preamble, exec, self.aux.block_map.is_some())
     }
 }
 
@@ -941,7 +918,6 @@ impl<'a> Default for KrxSummary<'a> {
             aux: KrxAuxSections {
                 assets: None,
                 block_map: None,
-                leaf_map: None,
                 service_exports: None,
                 config: None,
                 seal: None,
@@ -1064,7 +1040,6 @@ impl KrxPreamble {
                 }
                 SECTION_ASSETS => out.aux.assets = Some(body),
                 SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
-                SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
                 SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),
                 SECTION_CONFIG => out.aux.config = Some(body),
                 SECTION_SEAL => out.aux.seal = Some(body),
@@ -1204,195 +1179,6 @@ impl ServiceExport {
 }
 
 // ── P0 Structured Paged Leaf Overlays & Continuations (§5.1 / KRX 3.2) ──────
-
-pub const FLAG_LEAF_PINNED: u8 = 1 << 0;
-pub const FLAG_LEAF_RT: u8 = 1 << 1;
-pub const FLAG_LEAF_PREFETCH: u8 = 1 << 2;
-
-/// Paged Leaf Overlay Descriptor (0x000A, 16-byte power-of-two layout).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct LeafEntry {
-    pub leaf_id: u8,
-    pub flags: u8,
-    pub size: u16,
-    pub flash_offset: u32,
-    pub entry_offset: u16,
-    pub ram_scratch_bytes: u16,
-    pub reserved: [u8; 4],
-}
-
-const _: () = assert!(core::mem::size_of::<LeafEntry>() == 16);
-
-impl LeafEntry {
-    pub const SIZE: usize = 16;
-
-    pub const fn empty() -> Self {
-        Self {
-            leaf_id: 0,
-            flags: 0,
-            size: 0,
-            flash_offset: 0,
-            entry_offset: 0,
-            ram_scratch_bytes: 0,
-            reserved: [0u8; 4],
-        }
-    }
-
-    pub fn parse(buf: &[u8]) -> Option<Self> {
-        if buf.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            leaf_id: buf[0],
-            flags: buf[1],
-            size: u16::from_le_bytes([buf[2], buf[3]]),
-            flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
-            entry_offset: u16::from_le_bytes([buf[8], buf[9]]),
-            ram_scratch_bytes: u16::from_le_bytes([buf[10], buf[11]]),
-            reserved: [buf[12], buf[13], buf[14], buf[15]],
-        })
-    }
-
-    #[inline(always)]
-    pub const fn is_pinned(&self) -> bool {
-        (self.flags & FLAG_LEAF_PINNED) != 0
-    }
-
-    #[inline(always)]
-    pub const fn is_realtime(&self) -> bool {
-        (self.flags & FLAG_LEAF_RT) != 0
-    }
-
-    #[inline(always)]
-    pub const fn is_prefetch_hint(&self) -> bool {
-        (self.flags & FLAG_LEAF_PREFETCH) != 0
-    }
-}
-
-/// Typed continuation returned by a P0 leaf overlay to the resident root upon completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct LeafContinuation {
-    pub kind: u8,
-    pub target_or_code: u8,
-    pub reserved: u16,
-    pub payload: u32,
-}
-
-impl LeafContinuation {
-    pub const KIND_DONE: u8 = 0;
-    pub const KIND_CALL_LEAF: u8 = 1;
-    pub const KIND_YIELD: u8 = 2;
-    pub const KIND_ERROR: u8 = 3;
-
-    #[inline(always)]
-    pub const fn done(result: u32) -> Self {
-        Self {
-            kind: Self::KIND_DONE,
-            target_or_code: 0,
-            reserved: 0,
-            payload: result,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn call_leaf(target_leaf_id: u8, arg: u32) -> Self {
-        Self {
-            kind: Self::KIND_CALL_LEAF,
-            target_or_code: target_leaf_id,
-            reserved: 0,
-            payload: arg,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn yield_token(token: u32) -> Self {
-        Self {
-            kind: Self::KIND_YIELD,
-            target_or_code: 0,
-            reserved: 0,
-            payload: token,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn error(err_code: u8) -> Self {
-        Self {
-            kind: Self::KIND_ERROR,
-            target_or_code: err_code,
-            reserved: 0,
-            payload: 0,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn is_done(&self) -> bool {
-        self.kind == Self::KIND_DONE
-    }
-
-    #[inline(always)]
-    pub const fn is_call_leaf(&self) -> bool {
-        self.kind == Self::KIND_CALL_LEAF
-    }
-
-    #[inline(always)]
-    pub const fn is_yield(&self) -> bool {
-        self.kind == Self::KIND_YIELD
-    }
-
-    #[inline(always)]
-    pub const fn is_error(&self) -> bool {
-        self.kind == Self::KIND_ERROR
-    }
-
-    #[inline(always)]
-    pub const fn as_u64(&self) -> u64 {
-        let low = (self.kind as u32)
-            | ((self.target_or_code as u32) << 8)
-            | ((self.reserved as u32) << 16);
-        (low as u64) | ((self.payload as u64) << 32)
-    }
-
-    #[inline(always)]
-    pub const fn from_u64(val: u64) -> Self {
-        let low = (val & 0xFFFF_FFFF) as u32;
-        let high = (val >> 32) as u32;
-        Self {
-            kind: (low & 0xFF) as u8,
-            target_or_code: ((low >> 8) & 0xFF) as u8,
-            reserved: ((low >> 16) & 0xFFFF) as u16,
-            payload: high,
-        }
-    }
-}
-
-/// Invocation context passed into a P0 Structured Leaf Overlay (16 bytes, power-of-two geometry).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct LeafContext {
-    pub leaf_id: u8,
-    pub flags: u8,
-    pub reserved: u16,
-    pub arg: u32,
-    pub continuation: LeafContinuation,
-}
-
-const _: () = assert!(core::mem::size_of::<LeafContext>() == 16);
-
-impl LeafContext {
-    pub const SIZE: usize = 16;
-
-    pub const fn new(leaf_id: u8, arg: u32) -> Self {
-        Self {
-            leaf_id,
-            flags: 0,
-            reserved: 0,
-            arg,
-            continuation: LeafContinuation::done(0),
-        }
-    }
-}
 
 /// Asset Descriptor (0x0004, 20 bytes)
 #[derive(Debug, Clone, Copy)]

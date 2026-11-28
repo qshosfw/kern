@@ -1,0 +1,10 @@
+[package]
+name = "bsp-uv-k10pro"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+py32-pac = { path = "../../mcu/py32f071/pac", package = "py32f071-pac" }
+py32-hal = { path = "../../mcu/py32f071/hal" }
+kern-platform-traits = { path = "../../hal-traits" }
+kernel = { path = "../../kernel" }

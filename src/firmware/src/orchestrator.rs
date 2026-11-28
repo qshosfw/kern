@@ -783,7 +783,9 @@ impl Orchestrator {
     #[cfg(feature = "app_hibernation")]
     fn swap_app_state(
         app_id: usize,
-        storage: Option<&mut crate::services::SystemStorage>,
+        storage: Option<
+            &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+        >,
         is_out: bool,
     ) -> bool {
         if app_id != APP_ID_LAUNCHER {
@@ -820,7 +822,9 @@ impl Orchestrator {
     #[inline(always)]
     pub fn hibernate_app_state(
         app_id: usize,
-        storage: Option<&mut crate::services::SystemStorage>,
+        storage: Option<
+            &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+        >,
     ) -> bool {
         Self::swap_app_state(app_id, storage, true)
     }
@@ -829,7 +833,9 @@ impl Orchestrator {
     #[inline(always)]
     pub fn resume_app_state(
         app_id: usize,
-        storage: Option<&mut crate::services::SystemStorage>,
+        storage: Option<
+            &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+        >,
     ) -> bool {
         Self::swap_app_state(app_id, storage, false)
     }

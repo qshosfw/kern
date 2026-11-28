@@ -82,7 +82,6 @@ fn validate_krx_layout<'a>(
     }
     let profile = summary.profile(exec);
     let is_paged = matches!(exec_class, KrxClass::Paged);
-    let is_p0 = profile.is_structured_paged();
     let is_p1 = profile == kernel::runtime::KrxProfile::P1TransparentPaged;
     #[cfg(not(feature = "krx_paged"))]
     if is_p1 {
@@ -106,21 +105,16 @@ fn validate_krx_layout<'a>(
     if !is_bg && !exec.can_execute(avail, 64) {
         return Err(KrxLaunchError::InsufficientRam);
     }
-    let code_limit = if is_p0 {
-        avail.saturating_sub(super::native_runner::p0_overlay_size(exec))
-    } else {
-        avail
-    };
     let pay_sz = exec.payload_size as usize;
     if is_p1 {
         if exec.payload_size > kernel::runtime::MAX_STREAMED_IMAGE_BYTES {
             return Err(KrxLaunchError::PayloadTooLarge);
         }
-    } else if (is_p0 && pay_sz > code_limit) || (!is_paged && pay_sz > avail) {
+    } else if pay_sz > avail {
         return Err(KrxLaunchError::PayloadTooLarge);
     }
     let resident_prefix = if is_p1 {
-        (exec.got_offset as usize).min(code_limit)
+        (exec.got_offset as usize).min(avail)
     } else {
         exec.got_offset as usize
     };
@@ -129,9 +123,9 @@ fn validate_krx_layout<'a>(
     }
     if exec.payload_size > 0 && !is_p1 {
         let code_size = if exec.got_offset > 0 {
-            (exec.got_offset as u32).min(code_limit as u32)
+            (exec.got_offset as u32).min(avail as u32)
         } else {
-            exec.payload_size.min(code_limit as u32)
+            exec.payload_size.min(avail as u32)
         };
         if (exec.entry_point & !1) >= code_size {
             return Err(KrxLaunchError::InvalidEntryPoint);
@@ -181,7 +175,7 @@ fn activate_bg_slot(
 /// Shared header validation, capability/RAM check, and 3-Zone package loader.
 #[inline(never)]
 fn load_krx_into_slot(
-    storage: &mut crate::services::SystemStorage<'_>,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     enforce_caps: bool,
     spawn: bool,
@@ -285,9 +279,7 @@ fn load_krx_into_slot(
 
     let hdr_base = hdr_buf.as_ptr() as usize;
     let max_arena = crate::data::arena::TRANSIENT_ARENA_BYTES.saturating_sub(zone_a_off);
-    let load_base = (unsafe { super::native_runner::arena_base_ptr().add(zone_a_off) }) as u32;
-    let is_p0 = profile.is_structured_paged();
-    let is_paged = is_p0 || profile == kernel::runtime::KrxProfile::P1TransparentPaged;
+    let is_paged = profile == kernel::runtime::KrxProfile::P1TransparentPaged;
 
     super::native_runner::init_native_slot();
     let (mut entry_thumb, got_base) = match super::native_runner::bind_krx_payload_at(
@@ -311,35 +303,31 @@ fn load_krx_into_slot(
     slot.caps = required_caps;
     slot.set_pkg_path(path);
     slot.pkg_ino = storage.lookup_ino(path).unwrap_or(0);
+    if let Ok((depth, fsz)) = storage.file_extents(path, &mut slot.l1_pages) {
+        slot.l1_depth = depth;
+        slot.file_size = fsz;
+    } else {
+        slot.l1_depth = 0;
+        slot.file_size = 0;
+    }
 
-    let overlay_size = super::native_runner::p0_overlay_size(exec) as u32;
-    let code_limit = max_arena as u32 - if is_p0 { overlay_size } else { 0 };
-
-    if is_p0 {
-        let leaf_mgr = unsafe { &mut *slot.overlay.leaf };
-        let (tbl_off, cnt) = summary.aux.leaf_map.map_or((0, 0), |map| {
-            (
-                (map.as_ptr() as usize).saturating_sub(hdr_base) as u32,
-                (map.len() / kernel::runtime::LeafEntry::SIZE).min(255) as u8,
-            )
-        });
-        leaf_mgr.configure(load_base + code_limit, overlay_size as u16, tbl_off, cnt);
-    } else if is_paged {
+    if is_paged {
         #[cfg(feature = "krx_paged")]
         {
-            let win = unsafe { &mut *slot.overlay.window };
+            let win = &mut slot.window;
             win.shadow_stack.clear();
             let pay_size = if exec.payload_size > 0 {
                 exec.payload_size
             } else {
                 payload_read as u32
             };
-            let cache_base_off =
-                if exec.got_offset > 0 && (exec.got_offset as usize) < max_arena / 2 {
-                    (exec.got_offset + 7) & !7
-                } else {
-                    0
-                };
+            let cache_base_off = if exec.got_offset > 0
+                && (exec.got_offset as usize) <= max_arena.saturating_sub(1024)
+            {
+                (exec.got_offset + 7) & !7
+            } else {
+                0
+            };
             let avail_cache =
                 crate::data::arena::zone_b_cache_bytes().saturating_sub(cache_base_off as usize);
             let (bmap_off, bmap_cnt) = summary.aux.block_map.map_or((0, 0), |map| {
@@ -358,6 +346,10 @@ fn load_krx_into_slot(
                 pay_size.saturating_sub(cache_base_off as u32),
                 bmap_off,
                 bmap_cnt,
+            );
+            super::native_runner::reset_way_tags(
+                crate::data::arena::zone_b_base_ptr() as usize + cache_base_off as usize,
+                win.cache.page_size(),
             );
             if win.cache.page_count > 0 && (exec.entry_point & !1) >= cache_base_off as u32 {
                 let rel_ep = (exec.entry_point & !1) - cache_base_off as u32;
@@ -394,21 +386,21 @@ fn load_krx_into_slot(
 
     let slot = super::native_runner::slot_mut();
     #[cfg(feature = "krx_paged")]
-    let code_size = if is_paged && !is_p0 {
-        let win = unsafe { &*slot.overlay.window };
+    let code_size = if is_paged {
+        let win = &slot.window;
         ((win.cache.cache_base_off as u32)
             + (win.cache.active_slots as u32 * win.cache.page_size() as u32))
             .min(max_arena as u32)
     } else if exec.got_offset > 0 {
-        (exec.got_offset as u32).min(code_limit)
+        (exec.got_offset as u32).min(max_arena as u32)
     } else {
-        (payload_read as u32).min(code_limit)
+        (payload_read as u32).min(max_arena as u32)
     };
     #[cfg(not(feature = "krx_paged"))]
     let code_size = if exec.got_offset > 0 {
-        (exec.got_offset as u32).min(code_limit)
+        (exec.got_offset as u32).min(max_arena as u32)
     } else {
-        (payload_read as u32).min(code_limit)
+        (payload_read as u32).min(max_arena as u32)
     };
     slot.code_size = code_size as u16;
     slot.entry_point = entry_thumb;
@@ -443,7 +435,7 @@ pub fn launch_krx_package(path: &str, start_arg: u32) -> Result<usize, KrxLaunch
 /// Load and execute a standalone KRX module directly during early boot.
 pub fn try_launch_boot_module(
     _lcd: &mut drivers::st7565::St7565<bsp::LcdBus>,
-    storage: &mut crate::services::SystemStorage<'_>,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     param: usize,
 ) -> Result<u32, KrxLaunchError> {

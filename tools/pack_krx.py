@@ -432,11 +432,15 @@ class KrxPackageBuilder:
                 self.payload.extend(ldata)
                 cur_flash_off += len(ldata)
 
-        # Resolve block files into payload with exact flash offsets
+        # Resolve block files into payload with exact flash offsets (preserving any resident root)
         if self.block_files:
-            self.payload = bytearray()
+            root_data = bytes(self.payload) if len(self.payload) > 2 else b""
+            self.resident_payload_size = len(root_data)
+            self.payload = bytearray(root_data)
+            if root_data and self.got_offset == 0:
+                self.got_offset = (len(root_data) + 7) & ~7
             self.block_map = []
-            cur_flash_off = tot_hdr
+            cur_flash_off = tot_hdr + len(root_data)
             for block_id, flags, bdata in self.block_files:
                 pad = (4 - (len(self.payload) % 4)) % 4
                 self.payload.extend(b"\x00" * pad)

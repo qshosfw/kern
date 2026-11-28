@@ -74,13 +74,13 @@ pub unsafe fn op_io_key(a0: usize, a1: usize, _a2: usize) -> usize {
     match a0 as u8 {
         io_key::POLL => {
             bsp::Board::wdt_feed();
-            drivers::keyboard::KeypadScanner::poll_matrix()
+            drivers::keyboard::matrix::poll_matrix(&bsp::BspKeyMatrix)
                 .map(|k| k as usize)
                 .unwrap_or(0)
         }
-        io_key::MATRIX => drivers::keyboard::KeypadScanner::poll_raw_mask() as usize,
+        io_key::MATRIX => bsp::BspKeyMatrix::scan_raw_mask() as usize,
         io_key::IS_PRESSED => {
-            let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
+            let mask = bsp::BspKeyMatrix::scan_raw_mask();
             kernel::event::KeyCode::from_u8(a1 as u8)
                 .is_some_and(|kc| (mask & drivers::keyboard::key_to_bit(kc)) != 0)
                 as usize
@@ -205,7 +205,6 @@ pub unsafe fn op_io_bus(a0: usize, a1: usize, a2: usize) -> usize {
             if let Some(dst) = unsafe { ptr_slice_mut(r.rx, r.rx_len as usize) } {
                 return usize::from(
                     crate::services::storage_mut()
-                        .fs
                         .dev
                         .read_data(r.addr, dst)
                         .is_err(),

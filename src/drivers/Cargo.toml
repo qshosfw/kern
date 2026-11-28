@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bsp = { path = "../board/uv-k1" }
-py32-pac = { path = "../mcu/py32f071/pac", package = "py32f071-pac" }
+abi = { path = "../abi" }
 kern-platform-traits = { path = "../hal-traits" }
 kernel = { path = "../kernel" }
 utils = { path = "../util" }
@@ -15,19 +14,18 @@ heapless = { workspace = true }
 kernfs = { path = "../fs" }
 calib = { path = "../calib" }
 embedded-hal = { workspace = true }
-py32-hal = { path = "../mcu/py32f071/hal" }
 
 [features]
 default = ["radio", "filesystem", "uart", "display", "usb", "usb_cdc"]
-target_k10pro = ["bsp/target_k10pro", "gnss", "rgb_backlight"]
-swd_debug = ["bsp/swd_debug"]
+target_k10pro = ["gnss", "rgb_backlight", "si4732", "fm_radio"]
+si4732 = []
+swd_debug = []
 gnss = []
 rgb_backlight = []
 radio = ["kernel/radio"]
 filesystem = []
 uart = []
 display = []
-secure_fs = ["kernel/secure_fs"]
 fm_radio = []
 usb = []
 usb_cdc = ["usb"]

@@ -8,6 +8,15 @@ pub use coordinator::*;
 pub use dwell::DwellController;
 pub use fsk_stream::*;
 
+/// Lock-free 32-byte live RF telemetry snapshot published every 10 ms tick.
+pub static RADIO_VIEW: kernel::service::radio::SeqLock<kernel::service::radio::RadioView> =
+    kernel::service::radio::SeqLock::new(kernel::service::radio::RadioView::empty());
+
+#[inline(always)]
+pub fn radio_view() -> kernel::service::radio::RadioView {
+    RADIO_VIEW.read()
+}
+
 /// System RF state holding live RSSI telemetry, the Multi-VFO `RadioCoordinator`,
 /// and the non-blocking `ToneSequencer`.
 #[derive(Debug, Clone)]

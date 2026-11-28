@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 crypto = { path = "../crypto" }
+
+[features]
+secure_fs = []

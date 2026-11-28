@@ -49,6 +49,13 @@ pub const INODE_FLAG_DIR: u8 = 1 << 0;
 pub const INODE_FLAG_INLINE: u8 = 1 << 1;
 pub const INODE_FLAG_RING: u8 = 1 << 2;
 
+pub const ATTR_UNENCRYPTED: u8 = 0x00;
+pub const ATTR_READ_ONLY: u8 = 0x01;
+pub const ATTR_SYSTEM: u8 = 0x02;
+pub const ATTR_HIDDEN: u8 = 0x04;
+pub const ATTR_ENCRYPTED: u8 = 0x08;
+pub const ATTR_COMPRESSED: u8 = 0x10;
+
 pub const DEPTH_NONE_OR_INLINE: u8 = 0;
 pub const DEPTH_DIRECT: u8 = 1;
 pub const DEPTH_SINGLE_INDIRECT: u8 = 2;

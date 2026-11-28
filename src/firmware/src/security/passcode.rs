@@ -11,13 +11,12 @@ pub use state::*;
 use super::constants::*;
 pub use super::kdf::ProgressHook;
 use super::keychain::{PackedPasscodeKey, PackedStorageKey};
-use crate::services::SystemStorage;
 use crypto::buffer::SecretBuf;
 use crypto::trng::HardwareTrng;
 
 /// Initializes Passcode state on boot:
 pub fn unwrap_master_key(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     uid: &[u8; 12],
     passcode: &[u8],
     iterations: u32,
@@ -45,7 +44,10 @@ pub fn unwrap_master_key(
 
 /// - If passcode is active: locks session and zeroizes master key.
 /// - If passcode is inactive: derives default storage key and unlocks session.
-pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeState) {
+pub fn init_passcode_state(
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    state: &mut PasscodeState,
+) {
     if is_passcode_set(filesystem) {
         state.lock();
     } else {
@@ -66,7 +68,7 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
 
 /// Verifies user passcode against `/sys/passcode.key` with optional progress reporting.
 pub fn verify_passcode(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     passcode: &[u8],
     state: &mut PasscodeState,
     progress: Option<ProgressHook>,
@@ -130,7 +132,7 @@ pub fn verify_passcode(
 /// Sets or updates passcode preferences and re-wraps storage master key with optional progress reporting.
 /// `opt_flags` holds `PASSCODE_FLAG_{EXPOSE_LEN|STEALTH|DIGITS_ONLY}` bits.
 pub fn set_passcode(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     state: &mut PasscodeState,
     new_passcode: &[u8],
     opt_flags: u8,
@@ -185,7 +187,7 @@ pub fn set_passcode(
 /// Disables passcode protection and reverts master key wrapping to default seed.
 #[inline(always)]
 pub fn disable_passcode(
-    filesystem: &mut SystemStorage,
+    filesystem: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     state: &mut PasscodeState,
 ) -> Result<(), PasscodeError> {
     set_passcode(

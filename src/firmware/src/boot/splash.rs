@@ -84,11 +84,16 @@ pub fn render_rle(canvas: &mut Canvas, rle: &[u8]) -> bool {
 }
 
 #[cfg(not(feature = "filesystem"))]
-pub fn provision_splashes(_storage: &mut crate::services::SystemStorage) {}
+pub fn provision_splashes(
+    _storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
+}
 
 /// Provision built-in splash assets directly to destination.
 #[cfg(feature = "filesystem")]
-pub fn provision_splashes(_storage: &mut crate::services::SystemStorage) {
+pub fn provision_splashes(
+    _storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
     #[cfg(feature = "boot_assets")]
     {
         let _ = _storage.create_dir("/user");
@@ -108,7 +113,7 @@ pub fn provision_splashes(_storage: &mut crate::services::SystemStorage) {
 #[cfg(feature = "filesystem")]
 pub fn load_and_render_splash(
     canvas: &mut Canvas,
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
 ) -> bool {
     if path.is_empty() || !storage.exists(path) {
@@ -145,7 +150,10 @@ pub fn render_default_banner(canvas: &mut Canvas) {
 /// Render static base splash logo
 pub fn render_base_logo(
     canvas: &mut Canvas,
-    #[allow(unused_variables)] storage: &mut crate::services::SystemStorage,
+    #[allow(unused_variables)] storage: &mut kernfs::KernFS<
+        '_,
+        drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>,
+    >,
     disp_cfg: &crate::config::DisplayConfig,
 ) {
     canvas.clear();

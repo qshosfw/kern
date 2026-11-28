@@ -3,7 +3,8 @@
 //! Provides hardware-accelerated Virtual COM Port (VCP) serial streaming,
 //! DTR/RTS line state management, line coding, and ring buffer I/O.
 
-use py32_hal::pac::usbd::*;
+use super::regs::*;
+use kern_platform_traits::usb::UsbBus;
 
 pub const CDC_REQ_SET_LINE_CODING: u8 = 0x20;
 pub const CDC_REQ_GET_LINE_CODING: u8 = 0x21;
@@ -78,12 +79,11 @@ impl CdcEngine {
     }
 
     /// Zero-copy drain directly from hardware USBD endpoint FIFO into the RX ring buffer.
-    pub fn push_rx_from_fifo(&mut self, ep: u8, count: usize) {
-        let fifo = fifo_ep_u8(ep);
+    pub fn push_rx_from_fifo<B: UsbBus>(&mut self, bus: &B, ep: u8, count: usize) {
         let mut head = self.rx_head;
         let mut len = self.rx_count;
         for _ in 0..count {
-            let b = unsafe { fifo.read_volatile() };
+            let b = bus.fifo_read_byte(ep);
             if (len as usize) < CDC_RX_BUF_SIZE {
                 self.rx_buf[head as usize] = b;
                 head = head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
@@ -130,18 +130,18 @@ impl CdcEngine {
     }
 
     /// Send SERIAL_STATE notification (PSTN 1.20 Section 6.5.4) over interrupt endpoint
-    pub fn send_serial_state(&mut self, ep: u8, dcd: bool, dsr: bool) {
-        set_active_ep(ep);
-        let csr = unsafe { USBD_IN_CSR1_U8.read_volatile() };
+    pub fn send_serial_state<B: UsbBus>(&mut self, bus: &B, ep: u8, dcd: bool, dsr: bool) {
+        bus.reg_write(0x0E, ep);
+        let csr = bus.reg_read(0x15);
         if (csr & INCSR1_INPKTRDY) != 0 {
             return;
         }
         let state = (if dcd { 0x01 } else { 0x00 }) | (if dsr { 0x02 } else { 0x00 });
         let notif: [u8; 10] = [0xA1, 0x20, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, state, 0x00];
-        write_fifo(ep, &notif);
-        unsafe {
-            USBD_IN_CSR1_U8.write_volatile(csr | INCSR1_INPKTRDY);
+        for &b in &notif {
+            bus.fifo_write_byte(ep, b);
         }
+        bus.reg_write(0x15, csr | INCSR1_INPKTRDY);
     }
 
     pub fn set_line_coding(&mut self, bytes: &[u8; 7]) {
@@ -159,25 +159,25 @@ impl CdcEngine {
     }
 
     /// Transmit serial data chunk via EP4 IN
-    pub fn write(&mut self, ep: u8, data: &[u8]) -> usize {
+    pub fn write<B: UsbBus>(&mut self, bus: &B, ep: u8, data: &[u8]) -> usize {
         let chunk = data.len().min(64);
         if chunk > 0 {
-            write_fifo(ep, &data[..chunk]);
-            set_active_ep(ep);
-            unsafe {
-                let csr = USBD_IN_CSR1_U8.read_volatile();
-                USBD_IN_CSR1_U8.write_volatile(csr | INCSR1_INPKTRDY);
+            for &b in &data[..chunk] {
+                bus.fifo_write_byte(ep, b);
             }
+            bus.reg_write(0x0E, ep);
+            let csr = bus.reg_read(0x15);
+            bus.reg_write(0x15, csr | INCSR1_INPKTRDY);
             self.tx_ready = false;
         }
         chunk
     }
 
     /// Read incoming serial data chunk from EP4 OUT
-    pub fn read(&mut self, ep: u8, buf: &mut [u8], count: usize) -> usize {
+    pub fn read<B: UsbBus>(&mut self, bus: &B, ep: u8, buf: &mut [u8], count: usize) -> usize {
         let to_read = buf.len().min(count);
-        if to_read > 0 {
-            read_fifo(ep, &mut buf[..to_read]);
+        for b in &mut buf[..to_read] {
+            *b = bus.fifo_read_byte(ep);
         }
         to_read
     }

@@ -5,6 +5,7 @@
 //! feature-gated CDC ACM Virtual COM Port and Mass Storage Class (MSC) support.
 
 pub mod descriptors;
+pub mod regs;
 
 #[cfg(feature = "usb_msc_fat")]
 pub mod fat;
@@ -16,8 +17,9 @@ pub mod msc;
 pub mod cdc;
 
 use self::descriptors::*;
+use self::regs::*;
+use kern_platform_traits::usb::UsbBus;
 pub use kernel::event::UsbEvent;
-use py32_hal::pac::usbd::*;
 
 #[cfg(feature = "usb_msc")]
 use self::msc::MscEngine;
@@ -98,7 +100,8 @@ pub(crate) const fn needs_ep0_zlp(total_len: usize, host_max_len: u16) -> bool {
 
 /// Hardware USB Device Controller driver for PY32F071
 #[repr(C)]
-pub struct UsbDriver {
+pub struct UsbDriver<B: UsbBus> {
+    bus: B,
     // Pack ALL 1-byte state flags at offset 0..16 so every Thumb-1 ldrb/strb uses 2-byte imm5.
     is_connected: bool,
     was_connected: bool,
@@ -139,30 +142,40 @@ pub struct UsbDriver {
     msc: MscEngine,
 }
 
-#[inline(always)]
-fn usb_reg(off: usize) -> *mut u8 {
-    unsafe { (USBD_BASE as *mut u8).add(off) }
-}
+impl<B: UsbBus> UsbDriver<B> {
+    #[inline(always)]
+    fn rd(&self, off: usize) -> u8 {
+        self.bus.reg_read(off)
+    }
 
-#[inline(always)]
-fn usb_rd(off: usize) -> u8 {
-    unsafe { usb_reg(off).read_volatile() }
-}
+    #[inline(always)]
+    fn wr(&self, off: usize, val: u8) {
+        self.bus.reg_write(off, val)
+    }
 
-#[inline(always)]
-fn usb_wr(off: usize, val: u8) {
-    unsafe { usb_reg(off).write_volatile(val) }
-}
+    #[inline(always)]
+    fn rd16(&self, off: usize) -> u16 {
+        self.bus.reg_read16(off)
+    }
 
-#[inline(always)]
-fn usb_rd16(off: usize) -> u16 {
-    unsafe { (usb_reg(off) as *const u16).read_volatile() }
-}
+    #[inline(always)]
+    fn write_fifo(&self, ep: u8, data: &[u8]) {
+        for &b in data {
+            self.bus.fifo_write_byte(ep, b);
+        }
+    }
 
-impl UsbDriver {
+    #[inline(always)]
+    fn read_fifo(&self, ep: u8, dst: &mut [u8]) {
+        for b in dst.iter_mut() {
+            *b = self.bus.fifo_read_byte(ep);
+        }
+    }
+
     /// Create a new, uninitialized USB driver instance (const constructible).
-    pub const fn new() -> Self {
+    pub const fn new(bus: B) -> Self {
         Self {
+            bus,
             last_sof_ms: 0,
             last_transition_ms: 0,
             reset_window_start_ms: 0,
@@ -171,7 +184,7 @@ impl UsbDriver {
             ep0_rem: 0,
             battery_voltage_mv: 0,
             last_frame: 0,
-            product_len: bsp::pins::BOARD_SPEC.usb_product_default.len() as u8,
+            product_len: 15,
             battery_pct: 0,
             product_name: if cfg!(feature = "target_k10pro") {
                 *b"Quansheng UV-K10 Pro            "
@@ -204,7 +217,7 @@ impl UsbDriver {
 
     /// Initialize non-zero fields on an already-zeroed `UsbDriver` instance (avoids stack temporary).
     pub fn init_zeroed(&mut self) {
-        let def = bsp::pins::BOARD_SPEC.usb_product_default.as_bytes();
+        let def = self.bus.default_product_name().as_bytes();
         self.product_len = def.len() as u8;
         self.product_name.fill(b' ');
         self.product_name[..def.len()].copy_from_slice(def);
@@ -241,25 +254,15 @@ impl UsbDriver {
         self.rf_tx_active = active;
     }
 
-    fn set_usb_nvic(enable: bool) {
-        #[cfg(all(not(test), target_arch = "arm"))]
-        unsafe {
-            let irq = py32_pac::Interrupt::USB as u8;
-            py32_pac::nvic_clear_pending(irq);
-            if enable {
-                py32_pac::nvic_enable(irq);
-            } else {
-                py32_pac::nvic_disable(irq);
-            }
-        }
-        #[cfg(not(all(not(test), target_arch = "arm")))]
-        let _ = enable;
+    #[inline(always)]
+    fn set_usb_nvic(&self, enable: bool) {
+        self.bus.set_nvic(enable);
     }
 
     /// Truly detach the PY32F071 USB PHY and reset link state before deep STOP sleep.
     pub fn disconnect_for_sleep(&mut self) {
-        Self::set_usb_nvic(false);
-        py32_hal::rcc::disable_usbd();
+        self.set_usb_nvic(false);
+        self.bus.disable_usbd();
         self.is_connected = false;
         self.configured = false;
         self.consecutive_sof = 0;
@@ -280,25 +283,23 @@ impl UsbDriver {
 
     /// Initialize the USBD peripheral clock, CTC SOF auto-trim, and arm interrupt-driven USB.
     pub fn init(&mut self) {
-        Self::set_usb_nvic(false);
+        self.set_usb_nvic(false);
 
-        if py32_hal::rcc::sysclk_hz() != 48_000_000 {
-            py32_hal::rcc::set_sysclk_48mhz();
-        }
-        py32_hal::rcc::enable_usbd();
+        self.bus.ensure_48mhz();
+        self.bus.enable_usbd();
 
-        usb_wr(0x0E, 0);
+        self.wr(0x0E, 0);
         self.reset_bus_state();
-        usb_wr(0x08, USB_INTR_RESET | USB_INTR_RESUME | USB_INTR_SUSPEND);
-        let _ = (usb_rd(0x04), usb_rd(0x05), usb_rd(0x06));
+        self.wr(0x08, USB_INTR_RESET | USB_INTR_RESUME | USB_INTR_SUSPEND);
+        let _ = (self.rd(0x04), self.rd(0x05), self.rd(0x06));
 
         self.last_sof_ms = 0;
-        self.last_frame = usb_rd16(0x0C) & 0x07FF;
+        self.last_frame = self.rd16(0x0C) & 0x07FF;
         self.irq_flags = 0;
         self.backoff_until_ms = 0;
         self.reset_burst_count = 0;
         self.is_initialized = true;
-        Self::set_usb_nvic(true);
+        self.set_usb_nvic(true);
     }
 
     fn reset_bus_state(&mut self) {
@@ -307,29 +308,30 @@ impl UsbDriver {
         self.ep0_rem = 0;
         self.ep0_need_zlp = false;
         self.configured = false;
-        usb_wr(0x00, 0);
-        usb_wr(0x01, USB_POWER_SUSPENDENB);
-        usb_wr(0x0A, 1); // INT_IN1E: EP0 only
-        usb_wr(0x09, 0); // INT_OUT1E: none
+        self.wr(0x00, 0);
+        self.wr(0x01, USB_POWER_SUSPENDENB);
+        self.wr(0x0A, 1); // INT_IN1E: EP0 only
+        self.wr(0x09, 0); // INT_OUT1E: none
     }
 
     /// Interrupt handler (`IRQ 31`): services USB bus resets, EP0 control stages (meeting the
     /// 2 ms `SET_ADDRESS` window even during LCD blits or PA ramps), and CDC Bulk endpoints
     /// with RF packet-error flushing and hardware NAK flow control.
+    #[inline(never)]
     pub fn handle_irq(&mut self) {
         if !self.is_initialized {
             return;
         }
 
-        let int_usb = usb_rd(0x04);
-        let int_out = usb_rd(0x05);
-        let int_in = usb_rd(0x06);
-        let saved_ep = usb_rd(0x0E) & 0x07;
+        let int_usb = self.rd(0x04);
+        let int_out = self.rd(0x05);
+        let int_in = self.rd(0x06);
+        let saved_ep = self.rd(0x0E) & 0x07;
 
         if (int_usb & USB_INTR_RESET) != 0 {
             self.consecutive_sof = 0;
             self.reset_bus_state();
-            let now = py32_hal::delay::millis();
+            let now = self.bus.millis();
             let _ = record_bus_reset(
                 &mut self.reset_window_start_ms,
                 &mut self.reset_burst_count,
@@ -341,15 +343,15 @@ impl UsbDriver {
             {
                 self.pending_set_line_coding = false;
                 self.cdc.reset();
-                usb_wr(0x0E, descriptors::CDC_EP_IN & 0x07);
-                usb_wr(0x15, INCSR1_FLUSHFIFO | INCSR1_CLRDT);
-                usb_wr(0x0E, descriptors::CDC_EP_OUT & 0x07);
-                usb_wr(0x19, OUTCSR1_FLUSHFIFO | OUTCSR1_CLRDT);
+                self.wr(0x0E, descriptors::CDC_EP_IN & 0x07);
+                self.wr(0x15, INCSR1_FLUSHFIFO | INCSR1_CLRDT);
+                self.wr(0x0E, descriptors::CDC_EP_OUT & 0x07);
+                self.wr(0x19, OUTCSR1_FLUSHFIFO | OUTCSR1_CLRDT);
             }
         }
 
         if (int_usb & USB_INTR_RESUME) != 0 {
-            self.last_sof_ms = py32_hal::delay::millis();
+            self.last_sof_ms = self.bus.millis();
             self.irq_flags |= IRQ_FLAG_ACTIVITY;
         }
         if (int_usb & USB_INTR_SUSPEND) != 0 {
@@ -364,12 +366,12 @@ impl UsbDriver {
         if self.configured {
             let in_ep = descriptors::CDC_EP_IN & 0x07;
             if (int_in & (1 << in_ep)) != 0 {
-                self.last_sof_ms = py32_hal::delay::millis();
+                self.last_sof_ms = self.bus.millis();
                 self.irq_flags |= IRQ_FLAG_ACTIVITY;
-                usb_wr(0x0E, in_ep);
-                let csr = usb_rd(0x15);
+                self.wr(0x0E, in_ep);
+                let csr = self.rd(0x15);
                 if (csr & (INCSR1_UNDERRUN | INCSR1_SENTSTALL)) != 0 {
-                    usb_wr(0x15, csr & !(INCSR1_UNDERRUN | INCSR1_SENTSTALL));
+                    self.wr(0x15, csr & !(INCSR1_UNDERRUN | INCSR1_SENTSTALL));
                 }
                 if (csr & INCSR1_INPKTRDY) == 0 {
                     self.cdc.handle_in_complete();
@@ -378,7 +380,7 @@ impl UsbDriver {
 
             let out_ep = descriptors::CDC_EP_OUT & 0x07;
             if (int_out & (1 << out_ep)) != 0 {
-                self.last_sof_ms = py32_hal::delay::millis();
+                self.last_sof_ms = self.bus.millis();
                 self.irq_flags |= IRQ_FLAG_ACTIVITY;
                 self.drain_cdc_out_ep(out_ep);
             }
@@ -387,28 +389,28 @@ impl UsbDriver {
         #[cfg(not(feature = "usb_cdc"))]
         let _ = int_out;
 
-        usb_wr(0x0E, saved_ep);
+        self.wr(0x0E, saved_ep);
     }
 
     #[cfg(feature = "usb_cdc")]
     fn drain_cdc_out_ep(&mut self, out_ep: u8) {
-        usb_wr(0x0E, out_ep);
-        let out_csr = usb_rd(0x19);
+        self.wr(0x0E, out_ep);
+        let out_csr = self.rd(0x19);
         if (out_csr & (OUTCSR1_DATAPACKETERROR | OUTCSR1_OVERRUN)) != 0 {
-            usb_wr(0x19, OUTCSR1_FLUSHFIFO);
+            self.wr(0x19, OUTCSR1_FLUSHFIFO);
             return;
         }
         if (out_csr & OUTCSR1_OUTPKTRDY) != 0 {
-            let count = (usb_rd16(0x1C) as usize).min(64);
+            let count = (self.rd16(0x1C) as usize).min(64);
             if count > self.cdc.rx_free() {
-                usb_wr(0x09, usb_rd(0x09) & !(1 << out_ep));
+                self.wr(0x09, self.rd(0x09) & !(1 << out_ep));
                 return;
             }
             if count > 0 {
-                self.cdc.push_rx_from_fifo(out_ep, count);
-                py32_hal::uart::mark_activity();
+                self.cdc.push_rx_from_fifo(&self.bus, out_ep, count);
+                self.bus.mark_serial_activity();
             }
-            usb_wr(0x19, 0);
+            self.wr(0x19, 0);
         }
     }
 
@@ -419,7 +421,7 @@ impl UsbDriver {
             return None;
         }
 
-        let now = py32_hal::delay::millis();
+        let now = self.bus.millis();
 
         if self.backoff_until_ms != 0 {
             if now.wrapping_sub(self.backoff_until_ms) < 0x8000_0000 {
@@ -431,7 +433,7 @@ impl UsbDriver {
         let (flags, burst, frame) = usb_critical(|| {
             let f = self.irq_flags;
             self.irq_flags = 0;
-            (f, self.reset_burst_count, usb_rd16(0x0C) & 0x07FF)
+            (f, self.reset_burst_count, self.rd16(0x0C) & 0x07FF)
         });
 
         if burst >= RESET_STORM_THRESHOLD {
@@ -444,10 +446,8 @@ impl UsbDriver {
         }
 
         let sof_advanced = frame != self.last_frame;
-        if ((flags & IRQ_FLAG_ACTIVITY) != 0 || sof_advanced)
-            && py32_hal::rcc::sysclk_hz() != 48_000_000
-        {
-            py32_hal::rcc::set_sysclk_48mhz();
+        if (flags & IRQ_FLAG_ACTIVITY) != 0 || sof_advanced {
+            self.bus.ensure_48mhz();
         }
 
         let mut event = None;
@@ -499,10 +499,10 @@ impl UsbDriver {
         if self.ep0_rem > 0 {
             let chunk = (self.ep0_rem as usize).min(USB_EP0_MAX_PACKET_SIZE);
             let slice = unsafe { core::slice::from_raw_parts(self.ep0_ptr, chunk) };
-            write_fifo(0, slice);
+            self.write_fifo(0, slice);
             self.ep0_ptr = unsafe { self.ep0_ptr.add(chunk) };
             self.ep0_rem -= chunk as u16;
-            usb_wr(
+            self.wr(
                 0x10,
                 if self.ep0_rem == 0 && !self.ep0_need_zlp {
                     EP0_TXPKTRDY | EP0_DATAEND
@@ -513,26 +513,27 @@ impl UsbDriver {
             true
         } else if self.ep0_need_zlp {
             self.ep0_need_zlp = false;
-            usb_wr(0x10, EP0_TXPKTRDY | EP0_DATAEND);
+            self.wr(0x10, EP0_TXPKTRDY | EP0_DATAEND);
             true
         } else {
             false
         }
     }
 
+    #[inline(never)]
     fn poll_ep0(&mut self) {
-        usb_wr(0x0E, 0);
-        let csr = usb_rd(0x10);
+        self.wr(0x0E, 0);
+        let csr = self.rd(0x10);
 
         if (csr & EP0_SENTSTALL) != 0 {
-            usb_wr(0x10, 0);
+            self.wr(0x10, 0);
             self.ep0_rem = 0;
             self.ep0_need_zlp = false;
             return;
         }
 
         if (csr & EP0_SETUPEND) != 0 {
-            usb_wr(0x10, EP0_SVSETUPEND);
+            self.wr(0x10, EP0_SVSETUPEND);
             self.ep0_rem = 0;
             self.ep0_need_zlp = false;
             #[cfg(feature = "usb_cdc")]
@@ -543,7 +544,7 @@ impl UsbDriver {
 
         // Apply pending device address immediately on Status Stage completion (< 2 ms USB spec)
         if self.pending_addr > 0 && (csr & (EP0_TXPKTRDY | EP0_RXPKTRDY)) == 0 {
-            usb_wr(0x00, self.pending_addr);
+            self.wr(0x00, self.pending_addr);
             self.dev_addr = self.pending_addr;
             self.pending_addr = 0;
         }
@@ -555,34 +556,33 @@ impl UsbDriver {
         #[cfg(feature = "usb_cdc")]
         if self.pending_set_line_coding {
             if (csr & EP0_RXPKTRDY) != 0 {
-                let count = (usb_rd(0x11) as usize).min(7);
+                let count = (self.rd(0x11) as usize).min(7);
                 let mut coding = [0u8; 7];
                 if count > 0 {
-                    read_fifo(0, &mut coding[..count]);
+                    self.read_fifo(0, &mut coding[..count]);
                 }
                 if count == 7 {
                     self.cdc.set_line_coding(&coding);
                 }
-                usb_wr(0x10, EP0_SVRXPKTRDY | EP0_DATAEND);
+                self.wr(0x10, EP0_SVRXPKTRDY | EP0_DATAEND);
                 self.pending_set_line_coding = false;
             }
             return;
         }
 
         if (csr & EP0_RXPKTRDY) != 0 {
-            self.last_sof_ms = py32_hal::delay::millis();
+            self.last_sof_ms = self.bus.millis();
             self.irq_flags |= IRQ_FLAG_ACTIVITY;
-            let count = usb_rd(0x11) as usize;
+            let count = self.rd(0x11) as usize;
             if count == 8 {
                 let mut setup = [0u8; 8];
-                read_fifo(0, &mut setup);
+                self.read_fifo(0, &mut setup);
                 self.handle_setup_packet(&setup);
             } else {
-                let fifo = fifo_ep_u8(0);
                 for _ in 0..count.min(64) {
-                    let _ = unsafe { fifo.read_volatile() };
+                    let _ = self.bus.fifo_read_byte(0);
                 }
-                usb_wr(0x10, EP0_SVRXPKTRDY);
+                self.wr(0x10, EP0_SVRXPKTRDY);
             }
         }
     }
@@ -674,7 +674,7 @@ impl UsbDriver {
     fn ep0_start_identity_transfer(&mut self, is_mac: bool, max_len: u16) {
         let mut mac = [0u8; 6];
         let mut crock = [0u8; 15];
-        bsp::uid::fill_device_identity(&mut mac, &mut crock);
+        self.bus.fill_device_identity(&mut mac, &mut crock);
         if !is_mac {
             self.ep0_start_string_transfer(&crock[..14], max_len);
             return;
@@ -764,7 +764,7 @@ impl UsbDriver {
         } else if request == cdc::CDC_REQ_SET_LINE_CODING {
             // Acknowledge SETUP packet reception only (do NOT assert DATAEND yet);
             // wait for the 7-byte line coding data packet in the OUT data stage.
-            Self::ep0_write_csr(EP0_SVRXPKTRDY);
+            self.ep0_write_csr(EP0_SVRXPKTRDY);
             self.pending_set_line_coding = true;
             return;
         }
@@ -777,13 +777,13 @@ impl UsbDriver {
         {
             let in_ep = descriptors::MSC_EP_IN & 0x07;
             let out_ep = descriptors::MSC_EP_OUT & 0x07;
-            usb_wr(0x0E, in_ep);
-            usb_wr(0x14, INCSR2_MODE);
-            usb_wr(0x16, 8);
-            usb_wr(0x0A, usb_rd(0x0A) | (1 << in_ep));
-            usb_wr(0x0E, out_ep);
-            usb_wr(0x1A, 8);
-            usb_wr(0x09, usb_rd(0x09) | (1 << out_ep));
+            self.wr(0x0E, in_ep);
+            self.wr(0x14, INCSR2_MODE);
+            self.wr(0x16, 8);
+            self.wr(0x0A, self.rd(0x0A) | (1 << in_ep));
+            self.wr(0x0E, out_ep);
+            self.wr(0x1A, 8);
+            self.wr(0x09, self.rd(0x09) | (1 << out_ep));
         }
 
         #[cfg(feature = "usb_cdc")]
@@ -793,25 +793,25 @@ impl UsbDriver {
             let out_ep = descriptors::CDC_EP_OUT & 0x07;
 
             // CDC Notification Interrupt EP
-            usb_wr(0x0E, notif_ep);
-            usb_wr(0x14, INCSR2_MODE);
-            usb_wr(0x16, 2); // 16 bytes
+            self.wr(0x0E, notif_ep);
+            self.wr(0x14, INCSR2_MODE);
+            self.wr(0x16, 2); // 16 bytes
 
             // CDC Data IN Bulk
-            usb_wr(0x0E, in_ep);
-            usb_wr(0x15, INCSR1_CLRDT | INCSR1_FLUSHFIFO);
-            usb_wr(0x14, INCSR2_MODE);
-            usb_wr(0x16, 8); // 64 bytes
-            usb_wr(0x0A, usb_rd(0x0A) | (1 << in_ep));
+            self.wr(0x0E, in_ep);
+            self.wr(0x15, INCSR1_CLRDT | INCSR1_FLUSHFIFO);
+            self.wr(0x14, INCSR2_MODE);
+            self.wr(0x16, 8); // 64 bytes
+            self.wr(0x0A, self.rd(0x0A) | (1 << in_ep));
 
             // CDC Data OUT Bulk
-            usb_wr(0x0E, out_ep);
+            self.wr(0x0E, out_ep);
             if in_ep != out_ep {
-                usb_wr(0x14, 0);
+                self.wr(0x14, 0);
             }
-            usb_wr(0x19, OUTCSR1_CLRDT | OUTCSR1_FLUSHFIFO);
-            usb_wr(0x1A, 8); // 64 bytes
-            usb_wr(0x09, usb_rd(0x09) | (1 << out_ep));
+            self.wr(0x19, OUTCSR1_CLRDT | OUTCSR1_FLUSHFIFO);
+            self.wr(0x1A, 8); // 64 bytes
+            self.wr(0x09, self.rd(0x09) | (1 << out_ep));
         }
     }
 
@@ -852,33 +852,38 @@ impl UsbDriver {
             self.ep0_send_zlp();
             return;
         }
-        Self::ep0_write_csr(EP0_SVRXPKTRDY);
+        self.ep0_write_csr(EP0_SVRXPKTRDY);
         self.ep0_ptr = data.as_ptr();
         self.ep0_rem = total as u16;
         self.ep0_need_zlp = needs_ep0_zlp(total, max_len);
         self.ep0_tx_next();
     }
 
-    fn ep0_write_csr(csr: u8) {
-        usb_wr(0x0E, 0);
-        usb_wr(0x10, csr);
+    fn ep0_write_csr(&self, csr: u8) {
+        self.wr(0x0E, 0);
+        self.wr(0x10, csr);
     }
 
     #[inline(always)]
     fn ep0_send_zlp(&mut self) {
-        Self::ep0_write_csr(EP0_SVRXPKTRDY | EP0_DATAEND);
+        self.ep0_write_csr(EP0_SVRXPKTRDY | EP0_DATAEND);
     }
 
     #[inline(always)]
     fn ep0_stall(&mut self) {
         self.ep0_rem = 0;
         self.ep0_need_zlp = false;
-        Self::ep0_write_csr(EP0_SENDSTALL | EP0_SVRXPKTRDY);
+        self.ep0_write_csr(EP0_SENDSTALL | EP0_SVRXPKTRDY);
     }
 
     #[inline(always)]
     pub fn is_connected(&self) -> bool {
         self.is_connected
+    }
+
+    #[inline(always)]
+    pub fn is_configured(&self) -> bool {
+        self.configured
     }
 
     #[inline(always)]
@@ -923,7 +928,7 @@ impl UsbDriver {
 
     #[inline(always)]
     pub fn frame_number(&self) -> u16 {
-        unsafe { USBD_FRAME_U16.read_volatile() }
+        self.rd16(0x0C)
     }
 
     /// Whether the device is configured and active in USB Mass Storage Class mode.
@@ -941,34 +946,34 @@ impl UsbDriver {
 
     #[cfg(feature = "usb_cdc")]
     fn cdc_write_packet(&mut self, in_ep: u8, chunk: &[u8]) -> bool {
-        let start = py32_hal::delay::millis();
+        let start = self.bus.millis();
         loop {
             let ready = usb_critical(|| {
                 if !self.configured {
                     return 2u8;
                 }
-                let saved = usb_rd(0x0E) & 0x07;
-                usb_wr(0x0E, in_ep);
-                let csr = usb_rd(0x15);
+                let saved = self.rd(0x0E) & 0x07;
+                self.wr(0x0E, in_ep);
+                let csr = self.rd(0x15);
                 if (csr & (INCSR1_UNDERRUN | INCSR1_SENTSTALL)) != 0 {
-                    usb_wr(0x15, csr & !(INCSR1_UNDERRUN | INCSR1_SENTSTALL));
+                    self.wr(0x15, csr & !(INCSR1_UNDERRUN | INCSR1_SENTSTALL));
                 }
                 let res = if (csr & INCSR1_INPKTRDY) == 0 {
                     if !chunk.is_empty() {
-                        write_fifo(in_ep, chunk);
+                        self.write_fifo(in_ep, chunk);
                     }
-                    usb_wr(0x15, INCSR1_INPKTRDY);
+                    self.wr(0x15, INCSR1_INPKTRDY);
                     1u8
                 } else {
                     0u8
                 };
-                usb_wr(0x0E, saved);
+                self.wr(0x0E, saved);
                 res
             });
             if ready == 1 {
                 return true;
             }
-            if ready == 2 || py32_hal::delay::millis().wrapping_sub(start) >= CDC_WRITE_TIMEOUT_MS {
+            if ready == 2 || self.bus.millis().wrapping_sub(start) >= CDC_WRITE_TIMEOUT_MS {
                 return false;
             }
             core::hint::spin_loop();
@@ -982,7 +987,7 @@ impl UsbDriver {
             if !self.configured || _data.is_empty() {
                 return 0;
             }
-            py32_hal::uart::mark_activity();
+            self.bus.mark_serial_activity();
             let in_ep = descriptors::CDC_EP_IN & 0x7F;
             let mut sent = 0;
             for chunk in _data.chunks(64) {
@@ -1015,17 +1020,17 @@ impl UsbDriver {
             let read = usb_critical(|| {
                 let n = self.cdc.pop_rx(_buf);
                 let out_ep = descriptors::CDC_EP_OUT & 0x07;
-                let mask = usb_rd(0x09);
+                let mask = self.rd(0x09);
                 if (mask & (1 << out_ep)) == 0 && self.cdc.rx_free() >= 64 {
-                    let saved = usb_rd(0x0E) & 0x07;
+                    let saved = self.rd(0x0E) & 0x07;
                     self.drain_cdc_out_ep(out_ep);
-                    usb_wr(0x09, mask | (1 << out_ep));
-                    usb_wr(0x0E, saved);
+                    self.wr(0x09, mask | (1 << out_ep));
+                    self.wr(0x0E, saved);
                 }
                 n
             });
             if read > 0 {
-                py32_hal::uart::mark_activity();
+                self.bus.mark_serial_activity();
             }
             read
         }
@@ -1037,7 +1042,7 @@ impl UsbDriver {
     }
 }
 
-impl kernel::service::UsbService for UsbDriver {
+impl<B: UsbBus> kernel::service::UsbService for UsbDriver<B> {
     #[inline(always)]
     fn is_connected(&self) -> bool {
         self.is_connected()
@@ -1055,9 +1060,9 @@ impl kernel::service::UsbService for UsbDriver {
 }
 
 /// Lightweight adapter wrapping `UsbDriver` to expose the `SerialPort` interface.
-pub struct UsbCdcSerial<'a>(pub &'a mut UsbDriver);
+pub struct UsbCdcSerial<'a, B: UsbBus>(pub &'a mut UsbDriver<B>);
 
-impl<'a> kernel::service::SerialPort for UsbCdcSerial<'a> {
+impl<'a, B: UsbBus> kernel::service::SerialPort for UsbCdcSerial<'a, B> {
     fn write(&mut self, data: &[u8]) {
         let _ = self.0.cdc_write(data);
     }
@@ -1065,66 +1070,6 @@ impl<'a> kernel::service::SerialPort for UsbCdcSerial<'a> {
     fn read(&mut self, buf: &mut [u8]) -> usize {
         self.0.cdc_read(buf)
     }
-}
-
-static mut ACTIVE_USB_DRIVER: *mut UsbDriver = core::ptr::null_mut();
-
-pub fn register_active_usb_driver(driver: *mut UsbDriver) {
-    unsafe {
-        ACTIVE_USB_DRIVER = driver;
-    }
-}
-
-/// Dispatch hardware `IRQ 31` (`Interrupt::USB`) into the registered `UsbDriver`.
-#[inline(always)]
-pub fn on_usb_irq() {
-    let ptr = unsafe { ACTIVE_USB_DRIVER };
-    if !ptr.is_null() {
-        unsafe {
-            (*ptr).handle_irq();
-        }
-    }
-}
-
-pub fn active_usb_read(buf: &mut [u8]) -> usize {
-    unsafe {
-        if !ACTIVE_USB_DRIVER.is_null() {
-            (*ACTIVE_USB_DRIVER).cdc_read(buf)
-        } else {
-            0
-        }
-    }
-}
-
-pub fn active_usb_write(data: &[u8]) -> usize {
-    unsafe {
-        if !ACTIVE_USB_DRIVER.is_null() {
-            (*ACTIVE_USB_DRIVER).cdc_write(data)
-        } else {
-            0
-        }
-    }
-}
-
-fn active_usb_driver() -> Option<&'static UsbDriver> {
-    let ptr = unsafe { ACTIVE_USB_DRIVER };
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { &*ptr })
-    }
-}
-
-pub fn is_active_usb_connected() -> bool {
-    active_usb_driver().is_some_and(|d| d.is_connected())
-}
-
-pub fn is_active_usb_configured() -> bool {
-    active_usb_driver().is_some_and(|d| d.configured)
-}
-
-pub fn is_active_usb_dtr() -> bool {
-    active_usb_driver().is_some_and(|d| d.is_dtr())
 }
 
 #[cfg(test)]

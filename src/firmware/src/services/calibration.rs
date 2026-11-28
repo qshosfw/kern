@@ -1,40 +1,88 @@
-use crate::services::SystemStorage;
-// Calibration Subsystem & Silicon Hardware Binding
-//
-// Provides structured access to factory radio calibration parameters,
-// compile-time fallback for the target dev device, semantic validation,
-// and hardware binding signatures against the 96-bit MCU UID.
+//! Calibration Subsystem & Silicon Hardware Binding
+//!
+//! Uses a 64-byte (`ActiveCalib`) resident cache in SRAM (`-448 B` vs full 512 B block).
+//! The full 512-byte `/sys/calib.dat` is read into `KERNEL_IO_SCRATCH` (`staging_buf()`)
+//! only on boot, band-boundary crossing, or calibration commit/reformat.
 
-use crate::services::storage::{ATTR_READ_ONLY, ATTR_SYSTEM, FileAttributes};
+use calib::{ActiveCalib, CalibrationBlock};
+use kernfs::{ATTR_READ_ONLY, ATTR_SYSTEM, BlockDevice, FsError, KernFS};
 
-/// RLE-compressed factory radio calibration fallback (expands to 512 B; `0xFF <n>` skips `n` `0xFF` bytes).
-const DEFAULT_CALIB_RLE: [u8; 310] = [
-    0x0A, 0x53, 0x55, 0x57, 0x59, 0x5B, 0x5D, 0x5F, 0x62, 0x65, 0xFF, 0x06, 0x05, 0x50, 0x52, 0x54,
-    0x56, 0x58, 0x5A, 0x5C, 0x5F, 0x62, 0xFF, 0x06, 0x5A, 0x2D, 0x29, 0x26, 0x23, 0x20, 0x1D, 0x1A,
-    0x17, 0x14, 0xFF, 0x06, 0x64, 0x30, 0x2D, 0x29, 0x26, 0x23, 0x20, 0x1D, 0x1A, 0x17, 0xFF, 0x06,
-    0x5A, 0x14, 0x11, 0x0E, 0x0B, 0x08, 0x03, 0x02, 0x02, 0x02, 0xFF, 0x06, 0x64, 0x11, 0x0E, 0x0B,
-    0x08, 0x05, 0x05, 0x04, 0x04, 0x04, 0xFF, 0x06, 0x32, 0x58, 0x5B, 0x5E, 0x60, 0x63, 0x65, 0x67,
-    0x69, 0x6B, 0xFF, 0x06, 0x28, 0x55, 0x58, 0x5B, 0x5D, 0x60, 0x62, 0x64, 0x66, 0x68, 0xFF, 0x06,
-    0x41, 0x32, 0x2D, 0x28, 0x24, 0x21, 0x1E, 0x1A, 0x17, 0x16, 0xFF, 0x06, 0x46, 0x37, 0x32, 0x2D,
-    0x28, 0x25, 0x22, 0x1E, 0x1B, 0x19, 0xFF, 0x06, 0x5A, 0x19, 0x0F, 0x0A, 0x09, 0x08, 0x07, 0x06,
-    0x05, 0x04, 0xFF, 0x06, 0x64, 0x1E, 0x14, 0x0F, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0xFF, 0x06,
-    0x6E, 0x00, 0x78, 0x00, 0x82, 0x00, 0x8C, 0x00, 0xB4, 0x00, 0xBE, 0x00, 0xC8, 0x00, 0xD2, 0x00,
-    0x32, 0x32, 0x32, 0x64, 0x64, 0x64, 0x8C, 0x8C, 0x8C, 0xFF, 0x07, 0x32, 0x32, 0x32, 0x64, 0x64,
-    0x64, 0x8C, 0x8C, 0x8C, 0xFF, 0x07, 0x4B, 0x4B, 0x4B, 0x78, 0x78, 0x78, 0xA0, 0xA0, 0xA0, 0xFF,
-    0x07, 0x32, 0x32, 0x32, 0x64, 0x64, 0x64, 0x8C, 0x8C, 0x8C, 0xFF, 0x07, 0x5A, 0x5A, 0x5A, 0x64,
-    0x64, 0x64, 0xA0, 0xA0, 0xA0, 0xFF, 0x07, 0x4B, 0x4B, 0x4B, 0x78, 0x78, 0x78, 0xA0, 0xA0, 0xA0,
-    0xFF, 0x07, 0x32, 0x32, 0x32, 0x64, 0x64, 0x64, 0x94, 0x8C, 0x8C, 0xFF, 0x07, 0x9E, 0x05, 0x02,
-    0x08, 0x5A, 0x08, 0xB3, 0x08, 0x0A, 0x09, 0x28, 0x0A, 0xFF, 0x04, 0x1E, 0x00, 0x32, 0x00, 0x46,
-    0x00, 0x5A, 0x00, 0x6E, 0x00, 0x82, 0x00, 0x96, 0x00, 0xAA, 0x00, 0xC8, 0x00, 0xE6, 0x00, 0xFF,
-    0x04, 0x14, 0x00, 0x28, 0x00, 0x3C, 0x00, 0x50, 0x00, 0x64, 0x00, 0x78, 0x00, 0x8C, 0x00, 0xA0,
-    0x00, 0xBE, 0x00, 0xDC, 0x00, 0xFF, 0x04, 0x08, 0x0E, 0x13, 0x18, 0x1E, 0xFF, 0x03, 0x04, 0x00,
-    0x46, 0x00, 0x50, 0x00, 0x37, 0x0E,
-];
+const DEFAULT_CALIB_RAW: &[u8; 512] = include_bytes!("calib_default.dat");
 
-/// Expand the RLE-compressed default calibration image into a 512-byte buffer.
+const fn packbits_len_calib() -> usize {
+    let bytes = DEFAULT_CALIB_RAW;
+    let mut r = 0usize;
+    let mut w = 0usize;
+    while r < bytes.len() {
+        let b = bytes[r];
+        let mut run = 1usize;
+        while r + run < bytes.len() && run < 128 && bytes[r + run] == b {
+            run += 1;
+        }
+        if run >= 2 {
+            w += 2;
+            r += run;
+        } else {
+            let start = r;
+            while r < bytes.len()
+                && r - start < 128
+                && !(r + 2 < bytes.len() && bytes[r] == bytes[r + 1] && bytes[r] == bytes[r + 2])
+            {
+                r += 1;
+            }
+            w += 1 + (r - start);
+        }
+    }
+    w
+}
+
+const DEFAULT_CALIB_PB_LEN: usize = packbits_len_calib();
+
+const fn encode_default_calib_packbits() -> [u8; DEFAULT_CALIB_PB_LEN] {
+    let bytes = DEFAULT_CALIB_RAW;
+    let mut out = [0u8; DEFAULT_CALIB_PB_LEN];
+    let mut r = 0usize;
+    let mut w = 0usize;
+    while r < bytes.len() {
+        let b = bytes[r];
+        let mut run = 1usize;
+        while r + run < bytes.len() && run < 128 && bytes[r + run] == b {
+            run += 1;
+        }
+        if run >= 2 {
+            out[w] = (257 - run) as u8;
+            out[w + 1] = b;
+            w += 2;
+            r += run;
+        } else {
+            let start = r;
+            while r < bytes.len()
+                && r - start < 128
+                && !(r + 2 < bytes.len() && bytes[r] == bytes[r + 1] && bytes[r] == bytes[r + 2])
+            {
+                r += 1;
+            }
+            let len = r - start;
+            out[w] = (len - 1) as u8;
+            w += 1;
+            let mut k = 0;
+            while k < len {
+                out[w + k] = bytes[start + k];
+                k += 1;
+            }
+            w += len;
+        }
+    }
+    out
+}
+
+/// PackBits-compressed factory calibration fallback (expands to 512 B).
+static DEFAULT_CALIB_PB: [u8; DEFAULT_CALIB_PB_LEN] = encode_default_calib_packbits();
+
+/// Expand the PackBits-compressed default calibration image into a 512-byte buffer.
 #[inline(always)]
 pub fn fill_default_calibration(dst: &mut [u8; 512]) {
-    utils::codec::decode_rle_escape(&DEFAULT_CALIB_RLE, 0xFF, 0, dst);
+    utils::codec::packbits_decompress_clamped(&DEFAULT_CALIB_PB, dst);
 }
 
 pub const CALIB_FILE_PATH: &str = "/sys/calib.dat";
@@ -69,11 +117,6 @@ impl CalibSignature {
     pub fn as_bytes(&self) -> &[u8; 32] {
         const _: () = assert!(core::mem::size_of::<CalibSignature>() == 32);
         unsafe { &*(self as *const Self as *const [u8; 32]) }
-    }
-
-    #[inline(always)]
-    pub fn as_bytes_mut(&mut self) -> &mut [u8; 32] {
-        unsafe { &mut *(self as *mut Self as *mut [u8; 32]) }
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -128,28 +171,12 @@ fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Verify whether a signature matches both the MCU UID and the calibration contents.
-pub fn verify_device_signature(
-    calib: &[u8; 512],
-    sig: &CalibSignature,
-    mcu_uid: &[u8; 12],
-) -> bool {
-    if &sig.ident != CALIB_SIG_IDENT {
-        return false;
-    }
-    let computed = compute_device_signature(calib, mcu_uid);
-    sig.hardware_serial == computed.hardware_serial
-        && ct_eq_bytes(&sig.auth_tag, &computed.auth_tag)
-}
-
 /// Strict semantic validation of calibration memory block.
-/// Rejects erased flash (all 0xFF), zeroed memory (all 0x00), or physically invalid values.
 pub fn is_valid_calibration(calib: &[u8]) -> bool {
     if calib.len() < 512 {
         return false;
     }
 
-    // 1. Check for blank / erased flash
     let first = calib[0];
     if first == 0x00 || first == 0xFF {
         let mut same = true;
@@ -170,65 +197,52 @@ pub fn is_valid_calibration(calib: &[u8]) -> bool {
         u16::from_le_bytes([*calib.get_unchecked(off), *calib.get_unchecked(off + 1)])
     };
 
-    // 2. Word 3 (7.60V calibration baseline) in valid ADC range (1800..=2600, authentic = 2227)
     if read_u16(0x146).wrapping_sub(1800) > 800 {
         return false;
     }
 
-    // Monotonic sanity check: W0 < W1 < W2 < W3 < W4 < W5
     for i in 0..5 {
         if read_u16(0x142 + i * 2) <= read_u16(0x140 + i * 2) {
             return false;
         }
     }
 
-    // 3..6. Crystal trim (-1000..=1000), volume gain (<=63), DAC gain (<=15), LNA/Mix masks (<=0x01FF)
     (read_u16(0x188) as i16).unsigned_abs() <= 1000
         && calib[0x18E] <= 63
         && calib[0x18F] <= 15
         && ((read_u16(0x18A) | read_u16(0x18C)) & !0x01FF) == 0
 }
 
-/// Concrete in-memory system calibration holder (zero-copy 512-byte CalibrationBlock view).
-#[repr(C, align(4))]
-pub struct SystemCalibration {
-    raw: [u8; 512],
-    valid: bool,
-    bound: bool,
-}
-
-const _: () = {
-    assert!(core::mem::offset_of!(SystemCalibration, raw) == 0);
-    assert!(core::mem::align_of::<SystemCalibration>() >= 4);
-};
-
-pub(crate) fn read_valid_calib(vfs: &mut SystemStorage, path: &str, buf: &mut [u8; 512]) -> bool {
+pub(crate) fn read_valid_calib<D: BlockDevice>(
+    vfs: &mut KernFS<'_, D>,
+    path: &str,
+    buf: &mut [u8; 512],
+) -> bool {
     matches!(vfs.read_file(path, buf), Ok(512) if is_valid_calibration(buf))
 }
 
-fn write_protected_sys_file(
-    vfs: &mut SystemStorage,
+fn write_protected_sys_file<D: BlockDevice>(
+    vfs: &mut KernFS<'_, D>,
     path: &str,
     data: &[u8],
-) -> Result<(), crate::services::storage::StorageError> {
-    let _ = vfs.set_attributes(path, FileAttributes { permission: 0 });
+) -> Result<(), FsError> {
+    let _ = vfs.set_permission(path, 0);
     let res = vfs.write_file(path, data);
-    let _ = vfs.set_attributes(
-        path,
-        FileAttributes {
-            permission: ATTR_SYSTEM | ATTR_READ_ONLY,
-        },
-    );
+    let _ = vfs.set_permission(path, ATTR_SYSTEM | ATTR_READ_ONLY);
     res
 }
 
-fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 12]) {
+fn sign_and_save_sig<D: BlockDevice>(
+    vfs: &mut KernFS<'_, D>,
+    data: &[u8; 512],
+    mcu_uid: &[u8; 12],
+) {
     let sig = compute_device_signature(data, mcu_uid);
     let _ = write_protected_sys_file(vfs, CALIB_SIG_PATH, sig.as_bytes());
 }
 
 #[inline(never)]
-pub(crate) fn persist_calib_bundle(vfs: &mut SystemStorage, raw_calib: &[u8; 512]) {
+pub(crate) fn persist_calib_bundle<D: BlockDevice>(vfs: &mut KernFS<'_, D>, raw_calib: &[u8; 512]) {
     let _ = vfs.create_dir("/sys");
     let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, raw_calib);
     let _ = write_protected_sys_file(vfs, CALIB_BAK_PATH, raw_calib);
@@ -237,9 +251,8 @@ pub(crate) fn persist_calib_bundle(vfs: &mut SystemStorage, raw_calib: &[u8; 512
 }
 
 #[cfg(feature = "filesystem")]
-pub fn reformat_storage(
-    vfs: &mut SystemStorage,
-    fallback_calib: &[u8; 512],
+pub fn reformat_storage<D: BlockDevice>(
+    vfs: &mut KernFS<'_, D>,
     keep_calib: bool,
 ) -> Result<(), ()> {
     let staging = crate::services::staging_buf();
@@ -247,10 +260,10 @@ pub fn reformat_storage(
         let loaded = read_valid_calib(vfs, CALIB_FILE_PATH, staging)
             || read_valid_calib(vfs, CALIB_BAK_PATH, staging);
         if !loaded {
-            staging.copy_from_slice(fallback_calib);
+            fill_default_calibration(staging);
         }
     }
-    if vfs.fs.format(None).is_err() {
+    if vfs.format(None).is_err() {
         return Err(());
     }
     if keep_calib {
@@ -259,210 +272,148 @@ pub fn reformat_storage(
     Ok(())
 }
 
-impl SystemCalibration {
-    pub const fn empty() -> Self {
-        Self {
-            raw: [0u8; 512],
-            valid: false,
-            bound: false,
+/// Populate `ActiveCalib` with compiled factory defaults using `staging_buf()`.
+pub fn init_active_defaults(active: &mut ActiveCalib) {
+    let staging = crate::services::staging_buf();
+    fill_default_calibration(staging);
+    active.load_from_block(
+        CalibrationBlock::from_bytes(staging),
+        145_500_000,
+        3,
+        0,
+        false,
+    );
+}
+
+/// Load `/sys/calib.dat` via `KERNEL_IO_SCRATCH`, verify silicon binding, and populate `ActiveCalib`.
+pub fn load_active_calib<D: BlockDevice>(
+    active: &mut ActiveCalib,
+    vfs: &mut KernFS<'_, D>,
+    mcu_uid: &[u8; 12],
+) {
+    let staging = crate::services::staging_buf();
+    let mut loaded = read_valid_calib(vfs, CALIB_FILE_PATH, staging);
+    if !loaded {
+        if read_valid_calib(vfs, CALIB_BAK_PATH, staging) {
+            loaded = true;
+        } else {
+            fill_default_calibration(staging);
+        }
+        let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, staging);
+        sign_and_save_sig(vfs, staging, mcu_uid);
+    }
+
+    const _: () = {
+        assert!(core::mem::offset_of!(CalibSignature, hardware_serial) == 8);
+        assert!(core::mem::offset_of!(CalibSignature, auth_tag) == 16);
+    };
+    let mut sig_buf = [0u8; 32];
+    let mut sig_present = false;
+    let mut bound = !loaded;
+    if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, &mut sig_buf) {
+        sig_present = true;
+        if n >= 32 && &sig_buf[..4] == CALIB_SIG_IDENT {
+            let computed = compute_device_signature(staging, mcu_uid);
+            bound = ct_eq_bytes(&sig_buf[8..32], &computed.as_bytes()[8..32]);
         }
     }
-
-    #[inline(always)]
-    pub fn init_defaults(&mut self) {
-        fill_default_calibration(&mut self.raw);
-        self.valid = true;
-        self.bound = false;
+    if !sig_present && loaded {
+        sign_and_save_sig(vfs, staging, mcu_uid);
+        bound = true;
     }
 
-    #[inline(always)]
-    pub fn as_block(&self) -> &calib::CalibrationBlock {
-        calib::CalibrationBlock::from_bytes(&self.raw)
+    active.load_from_block(
+        CalibrationBlock::from_bytes(staging),
+        145_500_000,
+        3,
+        0,
+        bound,
+    );
+}
+
+/// Reload `ActiveCalib` when crossing into a new calibration frequency band or squelch level.
+pub fn refresh_active_band<D: BlockDevice>(
+    active: &mut ActiveCalib,
+    vfs: &mut KernFS<'_, D>,
+    freq_hz: u32,
+    squelch_lvl: u8,
+) {
+    let band = calib::get_band_index(freq_hz) as u8;
+    if active.is_valid() && active.band_idx == band && active.squelch_lvl == squelch_lvl.min(9) {
+        return;
     }
-
-    #[inline(always)]
-    pub const fn is_valid(&self) -> bool {
-        self.valid
+    let staging = crate::services::staging_buf();
+    if !read_valid_calib(vfs, CALIB_FILE_PATH, staging) {
+        fill_default_calibration(staging);
     }
+    let bound = active.is_device_bound();
+    let vox_lvl = active.vox_lvl;
+    active.load_from_block(
+        CalibrationBlock::from_bytes(staging),
+        freq_hz,
+        squelch_lvl,
+        vox_lvl,
+        bound,
+    );
+}
 
-    #[inline(always)]
-    pub const fn is_device_bound(&self) -> bool {
-        self.bound
+/// Atomically commit a validated 512-byte calibration slice, update backup & signature, and refresh `ActiveCalib`.
+pub fn commit_calib_slice<D: BlockDevice>(
+    active: &mut ActiveCalib,
+    vfs: &mut KernFS<'_, D>,
+    data: &[u8],
+) -> Result<(), ()> {
+    if data.len() != 512 || !is_valid_calibration(data) {
+        return Err(());
     }
+    let new_calib: &[u8; 512] = unsafe { &*(data.as_ptr() as *const [u8; 512]) };
+    let mcu_uid = bsp::uid::read_mcu_uid();
+    let mut verify = [0u8; 64];
 
-    #[inline(always)]
-    pub fn lna_calib(&self) -> u16 {
-        self.as_block().lna_calib
-    }
+    // Backup existing valid calib if present.
+    let mut prev = [0u8; 512];
+    let backed_up = read_valid_calib(vfs, CALIB_FILE_PATH, &mut prev)
+        && write_protected_sys_file(vfs, CALIB_BAK_PATH, &prev).is_ok();
 
-    #[inline(always)]
-    pub fn mix_calib(&self) -> u16 {
-        self.as_block().mix_calib
-    }
-
-    #[inline(always)]
-    pub fn volume_gain(&self) -> u8 {
-        self.as_block().volume_gain
-    }
-
-    pub fn squelch_thresholds(
-        &self,
-        freq_hz: u32,
-        level: u8,
-    ) -> kernel::service::radio::squelch::SquelchThresholds {
-        let th = self.as_block().get_squelch_thresholds(freq_hz, level);
-        kernel::service::radio::squelch::SquelchThresholds {
-            open_rssi: th.open_rssi,
-            close_rssi: th.close_rssi,
-            open_noise: th.open_noise,
-            close_noise: th.close_noise,
-            open_glitch: th.open_glitch,
-            close_glitch: th.close_glitch,
-        }
-    }
-
-    #[inline(always)]
-    pub fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8 {
-        self.as_block().get_tx_power_bias(freq_hz, power_level)
-    }
-
-    #[inline(always)]
-    pub fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4] {
-        self.as_block().get_rssi_thresholds(freq_hz)
-    }
-
-    #[inline(always)]
-    pub fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8 {
-        self.as_block().get_s_meter_level(freq_hz, raw_rssi)
-    }
-
-    #[inline(always)]
-    pub fn battery_mv_from_adc(&self, raw_adc: u16) -> u16 {
-        self.as_block().battery_mv(raw_adc)
-    }
-
-    #[inline(always)]
-    pub fn battery_percent_from_adc(&self, raw_adc: u16) -> u8 {
-        self.as_block().battery_percentage(raw_adc)
-    }
-
-    #[inline(always)]
-    pub fn vox_thresholds(&self, level: u8) -> (u16, u16) {
-        self.as_block().get_vox_thresholds(level)
-    }
-
-    #[inline(always)]
-    pub fn mic_gain_db(&self, level: u8) -> u8 {
-        self.as_block().get_mic_gain_db(level)
-    }
-
-    /// Load calibration into self from VFS with fallback to backup, factory default, and signature verification.
-    pub fn load_into(&mut self, vfs: &mut SystemStorage, mcu_uid: &[u8; 12]) {
-        let mut loaded = read_valid_calib(vfs, CALIB_FILE_PATH, &mut self.raw);
-
-        if !loaded {
-            if read_valid_calib(vfs, CALIB_BAK_PATH, &mut self.raw) {
-                loaded = true;
-            } else {
-                fill_default_calibration(&mut self.raw);
+    let write_ok = write_protected_sys_file(vfs, CALIB_FILE_PATH, new_calib).is_ok();
+    let mut read_ok = write_ok;
+    if read_ok {
+        let mut off = 0usize;
+        while off < 512 {
+            if vfs.read_file_at(CALIB_FILE_PATH, off, &mut verify) != Ok(64)
+                || verify != new_calib[off..off + 64]
+            {
+                read_ok = false;
+                break;
             }
-            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, &self.raw);
-            sign_and_save_sig(vfs, &self.raw, mcu_uid);
+            off += 64;
         }
+    }
 
-        // Verify device binding signature (re-sign only if signature file is absent)
-        const _: () = {
-            assert!(core::mem::offset_of!(CalibSignature, hardware_serial) == 8);
-            assert!(core::mem::offset_of!(CalibSignature, auth_tag) == 16);
-        };
-        let sig_buf = &mut crate::services::staging_buf()[..32];
-        let mut sig_present = false;
-        let mut bound = !loaded;
-        if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, sig_buf) {
-            sig_present = true;
-            if n >= 32 && &sig_buf[..4] == CALIB_SIG_IDENT {
-                let computed = compute_device_signature(&self.raw, mcu_uid);
-                bound = ct_eq_bytes(&sig_buf[8..32], &computed.as_bytes()[8..32]);
-            }
+    if !read_ok {
+        if backed_up {
+            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, &prev);
         }
-
-        if !sig_present && loaded {
-            sign_and_save_sig(vfs, &self.raw, mcu_uid);
-            bound = true;
-        }
-
-        self.valid = true;
-        self.bound = bound;
+        return Err(());
     }
 
-    /// Atomically commit validated calibration with automatic backup, readback verification, and rollback.
-    pub fn commit_with_backup(
-        &mut self,
-        vfs: &mut SystemStorage,
-        new_calib: &[u8; 512],
-        mcu_uid: &[u8; 12],
-    ) -> Result<(), ()> {
-        // Use TRANSIENT_ARENA tail staging_buf() ([4096..4608)) so RigWire payloads in [0..4096) never alias.
-        let staging = crate::services::staging_buf();
-        let backed_up = read_valid_calib(vfs, CALIB_FILE_PATH, staging)
-            && write_protected_sys_file(vfs, CALIB_BAK_PATH, staging).is_ok();
-
-        let write_ok = write_protected_sys_file(vfs, CALIB_FILE_PATH, new_calib).is_ok();
-        let read_ok = write_ok
-            && match vfs.read_file(CALIB_FILE_PATH, staging) {
-                Ok(512) => staging == new_calib,
-                _ => false,
-            };
-
-        if !read_ok {
-            if backed_up && vfs.read_file(CALIB_BAK_PATH, staging) == Ok(512) {
-                let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, staging);
-            }
-            return Err(());
-        }
-
-        self.raw.copy_from_slice(new_calib);
-        self.valid = true;
-        sign_and_save_sig(vfs, new_calib, mcu_uid);
-        self.bound = true;
-
-        Ok(())
+    sign_and_save_sig(vfs, new_calib, &mcu_uid);
+    let freq_hz = calib::CALIB_BAND_LIMITS[(active.band_idx as usize).min(6)].1;
+    let sql = active.squelch_lvl;
+    let vox = active.vox_lvl;
+    active.load_from_block(
+        CalibrationBlock::from_bytes(new_calib),
+        freq_hz,
+        sql,
+        vox,
+        true,
+    );
+    unsafe {
+        (*core::ptr::addr_of_mut!(crate::POWER_SERVICE))
+            .battery_driver
+            .set_calib_const(active.battery_calib_const());
     }
-
-    pub fn commit_slice(&mut self, vfs: &mut SystemStorage, data: &[u8]) -> Result<(), ()> {
-        if data.len() != 512 || !is_valid_calibration(data) {
-            return Err(());
-        }
-        let arr: &[u8; 512] = unsafe { &*(data.as_ptr() as *const [u8; 512]) };
-        let mcu_uid = bsp::uid::read_mcu_uid();
-        self.commit_with_backup(vfs, arr, &mcu_uid)?;
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::POWER_SERVICE))
-                .battery_driver
-                .set_calib_const(self.battery_calib_const());
-        }
-        Ok(())
-    }
-
-    #[inline(always)]
-    pub fn battery_calib_const(&self) -> u16 {
-        self.as_block().battery_calib_const()
-    }
-
-    #[inline(always)]
-    pub fn battery_curve(&self) -> [u16; 6] {
-        self.as_block().battery_curve
-    }
-
-    #[inline(always)]
-    pub fn xtal_freq_low(&self) -> i16 {
-        self.as_block().xtal_freq_low()
-    }
-
-    #[inline(always)]
-    pub fn raw_bytes(&self) -> &[u8; 512] {
-        &self.raw
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -493,10 +444,9 @@ mod tests {
     }
 
     #[test]
-    fn default_calibration_rle_matches_reference_image() {
-        const REF: &[u8; 512] = include_bytes!("calib_default.dat");
+    fn default_calibration_packbits_matches_reference_image() {
         let mut decoded = [0u8; 512];
         fill_default_calibration(&mut decoded);
-        assert_eq!(&decoded, REF);
+        assert_eq!(&decoded, DEFAULT_CALIB_RAW);
     }
 }

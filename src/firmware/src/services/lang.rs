@@ -93,7 +93,7 @@ impl<const N: usize> LangStrCache<N> {
 }
 
 fn open_hdr_16(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     out: &mut [u8; 16],
 ) -> u16 {
@@ -108,7 +108,7 @@ fn open_hdr_16(
 }
 
 fn load_lang_hdr(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     out_hdr: &mut Option<LangPackHeader>,
 ) -> u16 {
@@ -157,7 +157,7 @@ fn build_lang_path(is_app: bool, stem: &[u8], code: &[u8], out: &mut [u8]) -> us
 }
 
 fn load_font_stem(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     stem: &[u8],
     out_hdr: &mut Option<FontPackHeader>,
 ) -> u16 {
@@ -326,7 +326,10 @@ fn clear_os_state(st: &mut ActiveLang) {
 
 /// Reload the active OS language pack immediately (zero reboot), mount companion external `.fnt`
 /// packs (`/user/fonts/tiny5.fnt` + data-driven script pack), and re-bind any active app pack.
-pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::config::SystemConfig) {
+pub fn reload_os(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    sys: &crate::config::SystemConfig,
+) {
     let st = state_mut();
     if sys.lang_active == 0 {
         if st.os_hdr.is_some()
@@ -455,7 +458,9 @@ fn ext_glyph_width_hook(cp: u16) -> Option<i16> {
     }
 }
 
-fn reload_bound_app(storage: &mut crate::services::SystemStorage) {
+fn reload_bound_app(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
     let st = state_mut();
     st.app_hdr = None;
     st.app_ino = 0;
@@ -477,7 +482,10 @@ fn reload_bound_app(storage: &mut crate::services::SystemStorage) {
 }
 
 /// Bind an optional per-app localized pack (`/user/lang/<stem>_<cc>.lng`) on KRX app launch.
-pub fn bind_app(storage: &mut crate::services::SystemStorage, app_path: &str) {
+pub fn bind_app(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    app_path: &str,
+) {
     state_mut().app_stem.set(extract_stem(app_path));
     reload_bound_app(storage);
 }
@@ -495,7 +503,7 @@ pub fn unbind_app() {
 }
 
 fn lookup_lang_slot<'a>(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     hdr: &LangPackHeader,
     ino: u16,
     primary_hash: u32,
@@ -514,7 +522,7 @@ fn lookup_lang_slot<'a>(
 
 /// Look up `key` via `RAM cache -> app pack -> OS pack`, returning `None` on miss or when inactive.
 pub fn translate_opt<'a>(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     key: &str,
     prefer_short: bool,
     out: &'a mut [u8],
@@ -554,7 +562,7 @@ pub fn translate_opt<'a>(
 /// Translate `key` via `app pack -> OS pack -> English literal` with 0 SPI I/O when inactive.
 #[inline(always)]
 pub fn translate<'a>(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     key: &'a str,
     prefer_short: bool,
     out: &'a mut [u8],
@@ -565,7 +573,7 @@ pub fn translate<'a>(
 /// Populate `km` from the active OS `.lng` pack's optional `[keymap]` entries (`__KM_LABEL__`, `__KM_0__..__KM_9__`).
 #[cfg(feature = "text_input")]
 pub fn load_locale_keymap(
-    storage: &mut crate::services::SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     km: &mut gfx::views::LocaleKeymap,
 ) {
     unsafe { core::ptr::write_bytes(km as *mut _ as *mut u8, 0, core::mem::size_of_val(km)) };

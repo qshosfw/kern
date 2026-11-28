@@ -33,8 +33,8 @@ pub use syscall::*;
 
 /// Read and parse a KRX package header from storage into the top of `TRANSIENT_ARENA`'s scratch
 /// tail, returning `(hdr_buf, summary)` without touching P0 root code or allocating stack frames.
-pub fn read_krx_summary_in_scratch(
-    storage: &mut crate::services::SystemStorage,
+pub fn read_krx_summary_in_scratch<D: kernfs::BlockDevice>(
+    storage: &mut kernfs::KernFS<'_, D>,
     path: &str,
 ) -> Result<
     (&'static [u8], &'static kernel::runtime::KrxSummary<'static>),
@@ -58,9 +58,7 @@ pub fn read_krx_summary_in_scratch(
     let read_len = storage
         .read_file_at(path, 0, hdr_buf)
         .map_err(|e| match e {
-            kernel::service::StorageError::NotFound => {
-                kernel::runtime::KrxLaunchError::FileNotFound
-            }
+            kernfs::FsError::NotFound => kernel::runtime::KrxLaunchError::FileNotFound,
             _ => kernel::runtime::KrxLaunchError::ReadFailed,
         })?;
     let hdr: &'static [u8] = unsafe { core::slice::from_raw_parts(hdr_buf.as_ptr(), read_len) };

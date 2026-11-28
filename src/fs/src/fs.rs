@@ -2,7 +2,28 @@
 
 use crate::device::{BlockDevice, FsError};
 use crate::format::*;
+#[cfg(feature = "secure_fs")]
+use crypto::ascon::Ascon128;
 use crypto::crc::CrcEngine;
+
+#[cfg(feature = "secure_fs")]
+const SECURE_NONCE_LEN: usize = 16;
+#[cfg(feature = "secure_fs")]
+const SECURE_TAG_LEN: usize = 16;
+#[cfg(feature = "secure_fs")]
+const SECURE_HDR_LEN: usize = SECURE_NONCE_LEN + SECURE_TAG_LEN;
+
+/// 8-byte open file descriptor handle for zero-path-walk positional I/O.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct Fd {
+    pub ino: u16,
+    pub perm: u8,
+    pub flags: u8,
+    pub size: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<Fd>() == 8);
 
 #[derive(Clone, Copy)]
 pub(crate) enum MetaQuery<'a> {
@@ -63,6 +84,14 @@ pub struct KernFS<'a, D: BlockDevice> {
     pub(crate) meta_pages: [u16; MAX_META_GROUPS],
     pub(crate) block_table: [u8; MAX_BLOCKS],
     pub(crate) page_buf: [u8; PAGE_SIZE],
+    #[cfg(feature = "secure_fs")]
+    pub(crate) session_unlocked: bool,
+    #[cfg(feature = "secure_fs")]
+    pub(crate) key_installed: bool,
+    #[cfg(feature = "secure_fs")]
+    pub(crate) nonce_ctr: u32,
+    #[cfg(feature = "secure_fs")]
+    pub(crate) enc_key: [u8; 16],
 }
 
 impl<'a, D: BlockDevice> KernFS<'a, D> {
@@ -82,6 +111,46 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 BLOCK_TBL_ERASED,
                 MAX_BLOCKS,
             );
+            #[cfg(feature = "secure_fs")]
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).nonce_ctr), 1);
+        }
+    }
+
+    #[cfg(feature = "secure_fs")]
+    pub fn set_encryption_key(&mut self, key: [u8; 16]) {
+        self.enc_key = key;
+        self.key_installed = true;
+        self.session_unlocked = true;
+    }
+
+    pub fn unlock_session(&mut self) {
+        #[cfg(feature = "secure_fs")]
+        {
+            self.session_unlocked = self.key_installed;
+        }
+    }
+
+    pub fn lock_session(&mut self) {
+        #[cfg(feature = "secure_fs")]
+        {
+            self.session_unlocked = false;
+            for b in self.enc_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            self.key_installed = false;
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_session_unlocked(&self) -> bool {
+        #[cfg(feature = "secure_fs")]
+        {
+            self.session_unlocked
+        }
+        #[cfg(not(feature = "secure_fs"))]
+        {
+            true
         }
     }
 
@@ -577,8 +646,126 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok((self.cur_inode.depth, self.cur_inode.size))
     }
 
+    /// Open a file and return an 8-byte descriptor for zero-path-walk positional I/O.
+    pub fn open(&mut self, path: &str, write: bool) -> Result<Fd, FsError> {
+        self.lookup_inode(path)?;
+        if self.cur_inode.is_dir() {
+            return Err(FsError::InvalidPath);
+        }
+        if write && (self.cur_inode.perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
+            return Err(FsError::AccessDenied);
+        }
+        if (self.cur_inode.perm & ATTR_ENCRYPTED) != 0 && !self.is_session_unlocked() {
+            return Err(FsError::EncryptedNoKey);
+        }
+        Ok(Fd {
+            ino: self.cur_inode.ino,
+            perm: self.cur_inode.perm,
+            flags: self.cur_inode.flags,
+            size: self.cur_inode.size,
+        })
+    }
+
+    #[inline(always)]
+    pub fn read_fd(&mut self, fd: Fd, off: usize, dst: &mut [u8]) -> Result<usize, FsError> {
+        if (fd.perm & ATTR_ENCRYPTED) != 0 {
+            return Err(FsError::EncryptedNoKey);
+        }
+        self.read_ino_at(fd.ino, off, dst)
+    }
+
+    pub fn write_fd(&mut self, fd: &mut Fd, off: usize, src: &[u8]) -> Result<(), FsError> {
+        if (fd.perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
+            return Err(FsError::AccessDenied);
+        }
+        if (fd.perm & ATTR_ENCRYPTED) != 0 {
+            return Err(FsError::EncryptedNoKey);
+        }
+        if self.low_power {
+            return Err(FsError::LowPower);
+        }
+        if !self.mounted || (self.cur_inode.ino != fd.ino && !self.read_inode(fd.ino, None)?) {
+            return Err(FsError::NotFound);
+        }
+        let new_end = off + src.len();
+        let new_size = (self.cur_inode.size as usize).max(new_end);
+        if new_size <= MAX_INLINE_LEN && self.cur_inode.is_inline() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src.as_ptr(),
+                    self.cur_inode.inline_data.as_mut_ptr().add(off),
+                    src.len(),
+                );
+            }
+            self.cur_inode.size = new_size as u32;
+            self.cur_inode.generation = self.global_gen + 1;
+            self.commit_cur_inode(&[])?;
+        } else {
+            self.write_pages_at(off, src)?;
+        }
+        fd.size = self.cur_inode.size;
+        fd.flags = self.cur_inode.flags;
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn read_struct<T: Copy>(&mut self, path: &str, out: &mut T) -> Result<usize, FsError> {
+        let slice = unsafe {
+            core::slice::from_raw_parts_mut(out as *mut T as *mut u8, core::mem::size_of::<T>())
+        };
+        self.read_file(path, slice)
+    }
+
+    #[inline(always)]
+    pub fn write_struct<T: Copy>(&mut self, path: &str, data: &T) -> Result<(), FsError> {
+        let slice = unsafe {
+            core::slice::from_raw_parts(data as *const T as *const u8, core::mem::size_of::<T>())
+        };
+        self.write_file(path, slice)
+    }
+
+    pub fn lookup_ino(&mut self, path: &str) -> Result<u16, FsError> {
+        self.lookup_inode(path)?;
+        if (self.cur_inode.perm & ATTR_ENCRYPTED) != 0 {
+            return Err(FsError::EncryptedNoKey);
+        }
+        Ok(self.cur_inode.ino)
+    }
+
     pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, FsError> {
-        self.read_file_at(path, 0, buf)
+        #[cfg(feature = "secure_fs")]
+        {
+            self.lookup_inode(path)?;
+            if (self.cur_inode.perm & ATTR_ENCRYPTED) != 0 {
+                if !self.session_unlocked {
+                    return Err(FsError::EncryptedNoKey);
+                }
+                let mut hdr = [0u8; SECURE_HDR_LEN];
+                if self.read_cur_inode_at(0, &mut hdr)? < SECURE_HDR_LEN {
+                    return Err(FsError::CorruptedData);
+                }
+                let mut nonce = [0u8; SECURE_NONCE_LEN];
+                nonce.copy_from_slice(&hdr[..SECURE_NONCE_LEN]);
+                let n = self.read_cur_inode_at(SECURE_HDR_LEN, buf)?;
+                let cipher = Ascon128::new(self.enc_key);
+                cipher.apply_keystream(&nonce, &mut buf[..n]);
+                let expected = cipher.compute_mac(&nonce, path.as_bytes(), &buf[..n]);
+                let mut diff = 0u8;
+                for i in 0..SECURE_TAG_LEN {
+                    diff |= expected[i] ^ hdr[SECURE_NONCE_LEN + i];
+                }
+                if diff != 0 {
+                    buf[..n].fill(0);
+                    return Err(FsError::CorruptedData);
+                }
+                return Ok(n);
+            }
+            self.read_cur_inode_at(0, buf)
+        }
+        #[cfg(not(feature = "secure_fs"))]
+        {
+            self.read_file_at(path, 0, buf)
+        }
     }
 
     #[inline(always)]
@@ -588,7 +775,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         offset: usize,
         buf: &mut [u8],
     ) -> Result<usize, FsError> {
-        self.lookup_inode(path)?;
+        self.lookup_ino(path)?;
         self.read_cur_inode_at(offset, buf)
     }
 
@@ -655,7 +842,57 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(copied)
     }
 
+    #[cfg(feature = "secure_fs")]
+    fn write_encrypted(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
+        if !self.session_unlocked {
+            return Err(FsError::EncryptedNoKey);
+        }
+        self.nonce_ctr = self.nonce_ctr.wrapping_add(1);
+        let wear = self.stats().wear_cycles;
+        let mut seed = [0u8; SECURE_NONCE_LEN];
+        seed[..4].copy_from_slice(&self.nonce_ctr.to_le_bytes());
+        seed[4..8].copy_from_slice(&wear.to_le_bytes());
+        let cipher = Ascon128::new(self.enc_key);
+        let nonce = cipher.compute_mac(&seed, path.as_bytes(), data);
+        let tag = cipher.compute_mac(&nonce, path.as_bytes(), data);
+        let mut ks = cipher.keystream_state(&nonce);
+        let mut buf = [0u8; SECURE_HDR_LEN + 64];
+        buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
+        buf[SECURE_NONCE_LEN..SECURE_HDR_LEN].copy_from_slice(&tag);
+        let first = data.len().min(64);
+        buf[SECURE_HDR_LEN..SECURE_HDR_LEN + first].copy_from_slice(&data[..first]);
+        Ascon128::apply_keystream_chunk(&mut ks, &mut buf[SECURE_HDR_LEN..SECURE_HDR_LEN + first]);
+        self.write_file_raw(path, &buf[..SECURE_HDR_LEN + first])?;
+        let mut off = first;
+        while off < data.len() {
+            let n = (data.len() - off).min(64);
+            buf[..n].copy_from_slice(&data[off..off + n]);
+            Ascon128::apply_keystream_chunk(&mut ks, &mut buf[..n]);
+            self.write_at(path, SECURE_HDR_LEN + off, &buf[..n])?;
+            off += n;
+        }
+        Ok(())
+    }
+
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
+        if self.low_power {
+            return Err(FsError::LowPower);
+        }
+        if let Ok(perm) = self.get_permission(path) {
+            if (perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
+                return Err(FsError::AccessDenied);
+            }
+            if (perm & ATTR_ENCRYPTED) != 0 {
+                #[cfg(feature = "secure_fs")]
+                return self.write_encrypted(path, data);
+                #[cfg(not(feature = "secure_fs"))]
+                return Err(FsError::EncryptedNoKey);
+            }
+        }
+        self.write_file_raw(path, data)
+    }
+
+    fn write_file_raw(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
         if self.low_power {
             return Err(FsError::LowPower);
         }
@@ -756,6 +993,14 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// Append fixed or variable records in a bounded cyclic ring buffer (`max_bytes`).
     /// Persists the cyclic write cursor in `inode.root_page` (for `max_bytes <= 65535`).
     pub fn write_ring(&mut self, path: &str, max_bytes: usize, data: &[u8]) -> Result<(), FsError> {
+        if let Ok(perm) = self.get_permission(path) {
+            if (perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
+                return Err(FsError::AccessDenied);
+            }
+            if (perm & ATTR_ENCRYPTED) != 0 {
+                return Err(FsError::EncryptedNoKey);
+            }
+        }
         if max_bytes == 0 || data.len() > max_bytes {
             return Err(FsError::CapacityFull);
         }

@@ -13,4 +13,7 @@ pub mod gc;
 mod tests;
 
 pub use device::{BlockDevice, FsError};
-pub use fs::{FsStats, KernFS};
+pub use format::{
+    ATTR_COMPRESSED, ATTR_ENCRYPTED, ATTR_HIDDEN, ATTR_READ_ONLY, ATTR_SYSTEM, ATTR_UNENCRYPTED,
+};
+pub use fs::{Fd, FsStats, KernFS};

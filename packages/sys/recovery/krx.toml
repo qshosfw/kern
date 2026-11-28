@@ -2,14 +2,15 @@ name = "Recovery"
 output = "recovery.mod"
 author = "KERN-SYS"
 type = "module"
-profile = "p0"
+profile = "p1"
+page_size = 2048
 icon = "SYSTEM"
 caps = ["STORAGE_READ", "STORAGE_WRITE", "DISPLAY_DIRECT", "POWER_MANAGE", "KEYPAD", "SERVICE_REGISTRY", "STORAGE_ADMIN"]
 src = "src"
 root = "recovery.c"
 # Resident root must end before REC_SCRATCH_OFFSET.
 root_max = 3584
-leaves = [
+blocks = [
     "leaf1_menu.c",
     "leaf2_info.c",
     "leaf3_peer.c",

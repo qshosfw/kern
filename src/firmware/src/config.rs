@@ -48,7 +48,7 @@ pub fn is_raw_valid(buf: &[u8], expected_version: u8) -> bool {
 }
 
 pub fn save_config_raw(
-    storage: &mut SystemStorage,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     path: &str,
     buf: &mut [u8],
 ) -> Result<(), ConfigError> {
@@ -120,7 +120,6 @@ macro_rules! config_block {
     };
 }
 
-use crate::services::SystemStorage;
 #[derive(Debug)]
 pub enum ConfigError {
     NotFound,
@@ -175,14 +174,24 @@ const _: () = {
     assert!(core::mem::offset_of!(AppsConfig, crc32) == 60);
 };
 
-fn read_valid_domain(storage: &mut SystemStorage, path: &str, version: u8, tmp: &mut [u8]) -> bool {
+fn read_valid_domain(
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    path: &str,
+    version: u8,
+    tmp: &mut [u8],
+) -> bool {
     let n = tmp.len();
     storage
         .read_file(path, tmp)
         .is_ok_and(|len| len >= n && is_raw_valid(tmp, version))
 }
 
-pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
+pub fn load_or_init_raw(
+    buf: &mut [u8],
+    version: u8,
+    path: &str,
+    storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+) {
     let n = buf.len().min(80);
     #[cfg(not(test))]
     let loaded = crate::data::arena::try_staging_buf().is_some_and(|staging| {
@@ -264,58 +273,79 @@ static CONFIG_METAS: [ConfigMeta; 6] = [
 
 const MASTER_CONFIG_SIZE: usize = core::mem::size_of::<MasterConfig>();
 
-const fn rle_len_default_config() -> usize {
+const fn packbits_len_default_config() -> usize {
     let bytes: [u8; MASTER_CONFIG_SIZE] = unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
-    let mut i = 0;
-    let mut n = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0 {
-            let mut run = 1usize;
-            while i + run < bytes.len() && bytes[i + run] == 0 && run < 255 {
-                run += 1;
-            }
-            n += 2;
-            i += run;
+    let mut r = 0usize;
+    let mut w = 0usize;
+    while r < bytes.len() {
+        let b = bytes[r];
+        let mut run = 1usize;
+        while r + run < bytes.len() && run < 128 && bytes[r + run] == b {
+            run += 1;
+        }
+        if run >= 2 {
+            w += 2;
+            r += run;
         } else {
-            n += 1;
-            i += 1;
+            let start = r;
+            while r < bytes.len()
+                && r - start < 128
+                && !(r + 2 < bytes.len() && bytes[r] == bytes[r + 1] && bytes[r] == bytes[r + 2])
+            {
+                r += 1;
+            }
+            w += 1 + (r - start);
         }
     }
-    n
+    w
 }
 
-const DEFAULT_CFG_RLE_LEN: usize = rle_len_default_config();
+const DEFAULT_CFG_PACKBITS_LEN: usize = packbits_len_default_config();
 
-const fn encode_default_config_rle() -> [u8; DEFAULT_CFG_RLE_LEN] {
+const fn encode_default_config_packbits() -> [u8; DEFAULT_CFG_PACKBITS_LEN] {
     let bytes: [u8; MASTER_CONFIG_SIZE] = unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
-    let mut out = [0u8; DEFAULT_CFG_RLE_LEN];
-    let mut i = 0;
-    let mut o = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0 {
-            let mut run = 1usize;
-            while i + run < bytes.len() && bytes[i + run] == 0 && run < 255 {
-                run += 1;
-            }
-            out[o] = 0;
-            out[o + 1] = run as u8;
-            o += 2;
-            i += run;
+    let mut out = [0u8; DEFAULT_CFG_PACKBITS_LEN];
+    let mut r = 0usize;
+    let mut w = 0usize;
+    while r < bytes.len() {
+        let b = bytes[r];
+        let mut run = 1usize;
+        while r + run < bytes.len() && run < 128 && bytes[r + run] == b {
+            run += 1;
+        }
+        if run >= 2 {
+            out[w] = (257 - run) as u8;
+            out[w + 1] = b;
+            w += 2;
+            r += run;
         } else {
-            out[o] = bytes[i];
-            o += 1;
-            i += 1;
+            let start = r;
+            while r < bytes.len()
+                && r - start < 128
+                && !(r + 2 < bytes.len() && bytes[r] == bytes[r + 1] && bytes[r] == bytes[r + 2])
+            {
+                r += 1;
+            }
+            let len = r - start;
+            out[w] = (len - 1) as u8;
+            w += 1;
+            let mut k = 0;
+            while k < len {
+                out[w + k] = bytes[start + k];
+                k += 1;
+            }
+            w += len;
         }
     }
     out
 }
 
-/// Zero-skip RLE `MasterConfig::DEFAULT` (`0x00 <count>` skips `count` zero bytes; else literal).
-static DEFAULT_MASTER_CONFIG_RLE: [u8; DEFAULT_CFG_RLE_LEN] = encode_default_config_rle();
+/// PackBits-compressed `MasterConfig::DEFAULT`.
+static DEFAULT_MASTER_CONFIG_PB: [u8; DEFAULT_CFG_PACKBITS_LEN] = encode_default_config_packbits();
 
 #[inline(always)]
 fn decode_default_range(start: usize, dst: &mut [u8]) {
-    utils::codec::decode_rle_escape(&DEFAULT_MASTER_CONFIG_RLE, 0, start, dst);
+    utils::codec::packbits_decompress_range(&DEFAULT_MASTER_CONFIG_PB, start, dst);
 }
 
 fn default_config_byte(offset: usize) -> u8 {
@@ -567,7 +597,10 @@ impl MasterConfig {
         unsafe { core::slice::from_raw_parts_mut(s.as_ptr() as *mut u8, s.len()) }
     }
 
-    pub fn load_into(&mut self, storage: &mut SystemStorage) {
+    pub fn load_into(
+        &mut self,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    ) {
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             load_or_init_raw(
                 self.config_bytes_mut(i),
@@ -585,7 +618,10 @@ impl MasterConfig {
     }
 
     /// Arena-safe reload of all valid `/pref/*.cfg` blocks into live RAM (callable from KRX apps).
-    pub fn reload_from_storage(&mut self, storage: &mut SystemStorage) {
+    pub fn reload_from_storage(
+        &mut self,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    ) {
         let mut tmp = [0u8; 80];
         let mut changed = 0u8;
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
@@ -612,7 +648,10 @@ impl MasterConfig {
 
     /// Persist dirty blocks to storage atomically with CRC32 protection.
     #[inline(never)]
-    pub fn flush_dirty(&mut self, storage: &mut SystemStorage) -> Result<(), ConfigError> {
+    pub fn flush_dirty(
+        &mut self,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    ) -> Result<(), ConfigError> {
         if self.dirty == 0 {
             return Ok(());
         }
@@ -648,7 +687,10 @@ impl MasterConfig {
         }
     }
 
-    pub fn save_all(&mut self, storage: &mut SystemStorage) -> Result<(), ConfigError> {
+    pub fn save_all(
+        &mut self,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
+    ) -> Result<(), ConfigError> {
         self.sanitize();
         self.seal_all();
         self.dirty = 0x3F;
@@ -658,7 +700,7 @@ impl MasterConfig {
     /// Reset all preference domains to factory defaults, reseal CRCs, and persist to `/pref/*.cfg`.
     pub fn reset_all_to_defaults(
         &mut self,
-        storage: &mut SystemStorage,
+        storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     ) -> Result<(), ConfigError> {
         let dst = unsafe {
             core::slice::from_raw_parts_mut(self as *mut Self as *mut u8, MASTER_CONFIG_SIZE)
@@ -863,7 +905,7 @@ mod tests {
         let expected: [u8; MASTER_CONFIG_SIZE] =
             unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
         assert_eq!(decoded, expected);
-        assert!(DEFAULT_CFG_RLE_LEN < 240);
+        assert!(DEFAULT_CFG_PACKBITS_LEN < 240);
     }
 
     #[test]

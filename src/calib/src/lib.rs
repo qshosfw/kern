@@ -272,9 +272,8 @@ impl CalibrationBlock {
         }
     }
 
-    /// Convert raw register 0x67 RSSI count into calibrated dBm using 4-point calibration curve.
-    pub fn raw_rssi_to_dbm(&self, freq_hz: u32, raw: u16) -> i16 {
-        let th = self.get_rssi_thresholds(freq_hz);
+    /// Convert raw register 0x67 RSSI count into calibrated dBm using a 4-point RSSI table.
+    pub fn rssi_to_dbm_with_table(th: [u16; 4], raw: u16) -> i16 {
         if th[0] == 0 || th[3] == 0 || th[3] <= th[0] {
             return (raw >> 1) as i16 - 160;
         }
@@ -296,6 +295,12 @@ impl CalibrationBlock {
             }
         }
         -73
+    }
+
+    /// Convert raw register 0x67 RSSI count into calibrated dBm using 4-point calibration curve.
+    #[inline(always)]
+    pub fn raw_rssi_to_dbm(&self, freq_hz: u32, raw: u16) -> i16 {
+        Self::rssi_to_dbm_with_table(self.get_rssi_thresholds(freq_hz), raw)
     }
 
     /// Battery calibration baseline constant at 7.60V (word 3).
@@ -376,6 +381,206 @@ impl CalibrationBlock {
     #[inline(always)]
     pub fn dac_gain(&self) -> u8 {
         self.dac_gain.min(15)
+    }
+}
+
+pub const ACTIVE_CALIB_VALID: u8 = 1 << 0;
+pub const ACTIVE_CALIB_BOUND: u8 = 1 << 1;
+
+/// 64-byte (`2^6`) active-band runtime calibration cache resident in SRAM.
+///
+/// Replaces keeping the full 512-byte `/sys/calib.dat` permanently in RAM (`-448 B` SRAM).
+/// Reloaded from `/sys/calib.dat` via `KERNEL_IO_SCRATCH` on boot, band crossing, or commit.
+#[derive(Debug, Clone, Copy)]
+#[repr(C, align(4))]
+pub struct ActiveCalib {
+    pub battery_curve: [u16; 6], // 0..12 (12 B)
+    pub rssi_th: [u16; 4],       // 12..20 (8 B)
+    pub vox_open: u16,           // 20..22 (2 B)
+    pub vox_close: u16,          // 22..24 (2 B)
+    pub xtal_trim: i16,          // 24..26 (2 B)
+    pub lna_calib: u16,          // 26..28 (2 B)
+    pub mix_calib: u16,          // 28..30 (2 B)
+    pub sql_open_rssi: u8,       // 30 (1 B)
+    pub sql_close_rssi: u8,      // 31 (1 B)
+    pub sql_open_noise: u8,      // 32 (1 B)
+    pub sql_close_noise: u8,     // 33 (1 B)
+    pub sql_open_glitch: u8,     // 34 (1 B)
+    pub sql_close_glitch: u8,    // 35 (1 B)
+    pub tx_power: [[u8; 3]; 3],  // 36..45 (9 B: low/mid/high 3-point PA bias for active band)
+    pub mic_gain_table: [u8; 5], // 45..50 (5 B)
+    pub volume_gain: u8,         // 50 (1 B)
+    pub dac_gain: u8,            // 51 (1 B)
+    pub band_idx: u8,            // 52 (1 B)
+    pub squelch_lvl: u8,         // 53 (1 B)
+    pub vox_lvl: u8,             // 54 (1 B)
+    pub flags: u8,               // 55 (1 B: ACTIVE_CALIB_VALID | ACTIVE_CALIB_BOUND)
+    pub _pad: [u8; 8],           // 56..64 (8 B)
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<ActiveCalib>() == 64);
+    assert!(core::mem::align_of::<ActiveCalib>() == 4);
+};
+
+impl ActiveCalib {
+    pub const fn empty() -> Self {
+        Self {
+            battery_curve: [1438, 2050, 2138, 2227, 2314, 2600],
+            rssi_th: [110, 120, 130, 140],
+            vox_open: 0,
+            vox_close: 0,
+            xtal_trim: 0,
+            lna_calib: 0,
+            mix_calib: 0,
+            sql_open_rssi: 0,
+            sql_close_rssi: 0,
+            sql_open_noise: 127,
+            sql_close_noise: 127,
+            sql_open_glitch: 255,
+            sql_close_glitch: 255,
+            tx_power: [[50, 50, 50], [100, 100, 100], [140, 140, 140]],
+            mic_gain_table: [8, 14, 19, 24, 30],
+            volume_gain: 55,
+            dac_gain: 14,
+            band_idx: 2,
+            squelch_lvl: 3,
+            vox_lvl: 0,
+            flags: 0,
+            _pad: [0; 8],
+        }
+    }
+
+    /// Populate this 64-byte active cache from a transient 512-byte `CalibrationBlock`.
+    pub fn load_from_block(
+        &mut self,
+        block: &CalibrationBlock,
+        freq_hz: u32,
+        squelch_lvl: u8,
+        vox_lvl: u8,
+        bound: bool,
+    ) {
+        let band = get_band_index(freq_hz);
+        let sq = block.get_squelch_thresholds(freq_hz, squelch_lvl);
+        let (v0, v1) = block.get_vox_thresholds(vox_lvl);
+        let tp = block.tx_power[band];
+        self.battery_curve = block.battery_curve;
+        self.rssi_th = block.get_rssi_thresholds(freq_hz);
+        self.vox_close = v0;
+        self.vox_open = v1;
+        self.xtal_trim = block.xtal_freq_low();
+        self.lna_calib = block.lna_calib();
+        self.mix_calib = block.mix_calib();
+        self.sql_open_rssi = sq.open_rssi as u8;
+        self.sql_close_rssi = sq.close_rssi as u8;
+        self.sql_open_noise = sq.open_noise as u8;
+        self.sql_close_noise = sq.close_noise as u8;
+        self.sql_open_glitch = sq.open_glitch as u8;
+        self.sql_close_glitch = sq.close_glitch as u8;
+        self.tx_power = [tp.low, tp.mid, tp.high];
+        self.mic_gain_table = block.mic_sensitivity;
+        self.volume_gain = block.volume_gain();
+        self.dac_gain = block.dac_gain();
+        self.band_idx = band as u8;
+        self.squelch_lvl = squelch_lvl.min(9);
+        self.vox_lvl = vox_lvl.min(10);
+        self.flags = ACTIVE_CALIB_VALID | if bound { ACTIVE_CALIB_BOUND } else { 0 };
+    }
+
+    #[inline(always)]
+    pub const fn is_valid(&self) -> bool {
+        (self.flags & ACTIVE_CALIB_VALID) != 0
+    }
+
+    #[inline(always)]
+    pub const fn is_device_bound(&self) -> bool {
+        (self.flags & ACTIVE_CALIB_BOUND) != 0
+    }
+
+    #[inline(always)]
+    pub const fn battery_calib_const(&self) -> u16 {
+        self.battery_curve[3]
+    }
+
+    #[inline(always)]
+    pub const fn battery_curve(&self) -> [u16; 6] {
+        self.battery_curve
+    }
+
+    #[inline(always)]
+    pub const fn xtal_freq_low(&self) -> i16 {
+        self.xtal_trim
+    }
+
+    #[inline(always)]
+    pub const fn volume_gain(&self) -> u8 {
+        if self.volume_gain < 64 {
+            self.volume_gain
+        } else {
+            58
+        }
+    }
+
+    #[inline(always)]
+    pub const fn dac_gain(&self) -> u8 {
+        if self.dac_gain <= 15 {
+            self.dac_gain
+        } else {
+            15
+        }
+    }
+
+    #[inline(always)]
+    pub const fn mic_gain_db(&self, level: u8) -> u8 {
+        let idx = if level < 5 { level as usize } else { 4 };
+        self.mic_gain_table[idx]
+    }
+
+    pub fn squelch_thresholds(&self, level: u8) -> SquelchThresholds {
+        if level == 0 {
+            return SquelchThresholds {
+                open_rssi: 0,
+                close_rssi: 0,
+                open_noise: 127,
+                close_noise: 127,
+                open_glitch: 255,
+                close_glitch: 255,
+            };
+        }
+        if level == self.squelch_lvl && self.is_valid() {
+            return SquelchThresholds {
+                open_rssi: self.sql_open_rssi as u16,
+                close_rssi: self.sql_close_rssi as u16,
+                open_noise: self.sql_open_noise as u16,
+                close_noise: self.sql_close_noise as u16,
+                open_glitch: self.sql_open_glitch as u16,
+                close_glitch: self.sql_close_glitch as u16,
+            };
+        }
+        // Fallback linear curve when level differs from cached level.
+        let lvl = level.min(9) as u16;
+        let open_rssi = 70 + lvl * 10;
+        SquelchThresholds {
+            open_rssi,
+            close_rssi: open_rssi.saturating_sub(6),
+            open_noise: 65u16.saturating_sub(lvl * 4),
+            close_noise: 75u16.saturating_sub(lvl * 4),
+            open_glitch: 40u16.saturating_sub(lvl * 3),
+            close_glitch: 55u16.saturating_sub(lvl * 3),
+        }
+    }
+
+    pub fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8 {
+        let band = (self.band_idx as usize).min(6);
+        let (lower, middle, upper) = CALIB_BAND_LIMITS[band];
+        let p = (power_level as usize).min(2);
+        let txp = self.tx_power[p];
+        calculate_tx_power(txp[0], txp[1], txp[2], lower, middle, upper, freq_hz)
+    }
+
+    #[inline(always)]
+    pub fn raw_rssi_to_dbm(&self, raw: u16) -> i16 {
+        CalibrationBlock::rssi_to_dbm_with_table(self.rssi_th, raw)
     }
 }
 

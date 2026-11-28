@@ -66,13 +66,7 @@ def check_kernel_hardware_agnosticism():
 
 # Shrinking allowlist of pre-existing MCU/BSP couplings scheduled for migration
 # (RadioFoundry `check_generic.py` pattern: report as [DEBT], fail on any new file).
-KNOWN_DRIVER_MCU_DEBT = {
-    "src/drivers/src/keyboard.rs",
-    "src/drivers/src/keyboard/matrix.rs",
-    "src/drivers/src/usb.rs",
-    "src/drivers/src/usb/cdc.rs",
-    "src/drivers/src/usb/msc.rs",
-}
+KNOWN_DRIVER_MCU_DEBT = set()
 
 
 def check_apps_and_drivers_isolation():

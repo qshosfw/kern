@@ -7,10 +7,11 @@ pub use keys::*;
 pub use matrix::*;
 
 use heapless::Deque;
+use kern_platform_traits::input::KeyMatrix;
 use kernel::event::{KeyCode, KeyState};
 
 #[repr(C)]
-pub struct KeypadScanner {
+pub struct KeypadScanner<M: KeyMatrix> {
     // Keep hot scalars in the first 32 bytes for Cortex-M0+ Thumb-1 imm5 offsets.
     /// Key index currently tracked for Hold and Repeat (0..19)
     held_idx: Option<u8>,
@@ -30,11 +31,13 @@ pub struct KeypadScanner {
     raw_history: [u32; 3],
     /// FIFO event queue for dispatched key transitions
     event_queue: Deque<(KeyCode, KeyState), 8>,
+    /// Board keypad matrix bus (ZST on hardware targets).
+    matrix: M,
 }
 
-impl KeypadScanner {
+impl<M: KeyMatrix> KeypadScanner<M> {
     /// Create a new scanner with DeltaFW standard timing defaults
-    pub const fn new() -> Self {
+    pub const fn new(matrix: M) -> Self {
         Self {
             raw_history: [0; 3],
             debounced: 0,
@@ -45,6 +48,7 @@ impl KeypadScanner {
             last_scan_ms: 0,
             hold_delay_ms: 400, // DeltaFW standard: 400ms hold delay
             event_queue: Deque::new(),
+            matrix,
         }
     }
 
@@ -59,18 +63,18 @@ impl KeypadScanner {
     }
 
     #[inline(always)]
-    pub fn poll_raw_mask() -> u32 {
-        matrix::poll_raw_mask()
+    pub fn poll_raw_mask(&self) -> u32 {
+        self.matrix.poll_raw_mask()
     }
 
     #[inline(always)]
-    pub fn poll_matrix() -> Option<KeyCode> {
-        matrix::poll_matrix()
+    pub fn poll_matrix(&self) -> Option<KeyCode> {
+        matrix::poll_matrix(&self.matrix)
     }
 
     #[inline(always)]
-    pub fn reset_gpio_pins() {
-        matrix::reset_gpio_pins();
+    pub fn reset_gpio_pins(&self) {
+        self.matrix.reset_pins();
     }
 
     /// Retrieve the hold duration in milliseconds of the last released key (for CW/Morse)
@@ -110,7 +114,7 @@ impl KeypadScanner {
 
     /// Advance scanner state machine with elapsed time delta `dt_ms`.
     pub fn scan_with_dt(&mut self, dt_ms: u16) {
-        self.scan_mask_with_dt(matrix::poll_raw_mask(), dt_ms);
+        self.scan_mask_with_dt(self.matrix.poll_raw_mask(), dt_ms);
     }
 
     /// Advance scanner state machine using an explicit raw key mask sample and `dt_ms`.
@@ -191,7 +195,7 @@ impl KeypadScanner {
 
     /// Primary scan routine called from main loop with monotonic time tracking
     pub fn scan(&mut self) -> Option<(KeyCode, KeyState)> {
-        let now = py32_hal::delay::millis();
+        let now = self.matrix.now_ms();
         let dt = if self.last_scan_ms == 0 {
             5
         } else {
@@ -207,9 +211,20 @@ impl KeypadScanner {
 mod tests {
     use super::*;
 
+    struct MockMatrix;
+    impl KeyMatrix for MockMatrix {
+        fn poll_raw_mask(&self) -> u32 {
+            0
+        }
+        fn reset_pins(&self) {}
+        fn now_ms(&self) -> u32 {
+            0
+        }
+    }
+
     #[test]
     fn full_queue_defers_debounced_transition_without_loss() {
-        let mut scanner = KeypadScanner::new();
+        let mut scanner = KeypadScanner::new(MockMatrix);
         // Saturate the queue first
         for i in 0..scanner.event_queue.capacity() {
             assert!(

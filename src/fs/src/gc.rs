@@ -467,6 +467,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
         self.lookup_inode(src)?;
         let mut src_inode = self.cur_inode;
+        if (src_inode.perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0
+            || src.starts_with("/sys/calib.")
+            || dst.starts_with("/sys/calib.")
+        {
+            return Err(FsError::AccessDenied);
+        }
         let src_t = trim_slashes(src);
         let dst_t = trim_slashes(dst);
         if src_inode.is_dir()
@@ -481,6 +487,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         src_inode.name = self.cur_inode.name;
         src_inode.name_len = self.cur_inode.name_len;
         if dst_existed {
+            if (self.cur_inode.perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0 {
+                return Err(FsError::AccessDenied);
+            }
             if self.cur_inode.is_dir() || src_inode.is_dir() {
                 return Err(FsError::InvalidPath);
             }
@@ -497,6 +506,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     pub fn remove(&mut self, path: &str) -> Result<(), FsError> {
         self.lookup_inode(path)?;
+        if (self.cur_inode.perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
+            return Err(FsError::AccessDenied);
+        }
         let ino = self.cur_inode.ino;
         let is_dir = self.cur_inode.is_dir();
         let depth = if is_dir || self.cur_inode.is_inline() {
@@ -522,6 +534,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     pub fn set_permission(&mut self, path: &str, perm: u8) -> Result<(), FsError> {
         self.lookup_inode(path)?;
+        if (self.cur_inode.perm & ATTR_ENCRYPTED) != 0
+            && (perm & ATTR_ENCRYPTED) == 0
+            && !self.is_session_unlocked()
+        {
+            return Err(FsError::EncryptedNoKey);
+        }
         if self.cur_inode.perm == perm {
             return Ok(());
         }

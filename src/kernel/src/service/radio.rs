@@ -14,6 +14,7 @@ pub mod tone;
 pub mod tone_gen;
 pub mod tuner;
 pub mod vernier;
+pub mod view;
 pub mod vox;
 
 pub use af::*;
@@ -30,6 +31,7 @@ pub use tone::*;
 pub use tone_gen::*;
 pub use tuner::*;
 pub use vernier::*;
+pub use view::*;
 pub use vox::*;
 
 /// Transceiver front-panel RF status indicator state.
