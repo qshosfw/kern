@@ -169,15 +169,6 @@ pub unsafe fn op_ui_modal(a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        ui_modal::PROMPT_NUM => {
-            let Some(r) = (unsafe { ptr_ref(a1 as *const ::abi::KrxNumReq) }) else {
-                return ::abi::Status::InvalidArg.to_raw();
-            };
-            let title = unsafe { str_or_default(r.title, r.title_len as usize, "Value") };
-            let unit = unsafe { str_or_default(r.unit, r.unit_len as usize, "") };
-            modal_mut().prompt_number(r.tag, title, unit, r);
-            0
-        }
         ui_modal::GET_TEXT => {
             #[cfg(feature = "text_input")]
             {

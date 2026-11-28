@@ -206,10 +206,16 @@ impl<T: GridItem + 'static> View<GridState<T>> for GridView {
         }
 
         let items_per_page = 6;
+        let total_pages = (((total_items as u32 + 5) * 0xAAAB) >> 18) as usize;
         let page = ((model.selected_idx as u32 * 0xAAAB) >> 18) as usize;
         let start_idx = page * items_per_page;
         let end_idx = (start_idx + items_per_page).min(total_items);
-        let anim_hop = i16::from(((model.tick_counter >> 3) & 1) == 1);
+        let anim_hop = i16::from(!model.is_pressed && ((model.tick_counter >> 3) & 1) == 1);
+        let (base_ty, row_stride, tile_h, label_dy) = if total_pages > 1 {
+            (8u8, 26u8, 25u8, 23u8)
+        } else {
+            (9u8, 27u8, 26u8, 24u8)
+        };
 
         for idx in start_idx..end_idx {
             let page_rel = idx - start_idx;
@@ -219,14 +225,14 @@ impl<T: GridItem + 'static> View<GridState<T>> for GridView {
                 (page_rel, 0u8)
             };
             let tx = 2u8 + (col_idx as u8) * 42;
-            let ty = 8u8 + row_idx * 28;
+            let ty = base_ty + row_idx * row_stride;
             let is_selected = idx == model.selected_idx;
             let item = &model.items[idx];
 
             let fg_color = if is_selected {
                 draw_selection_capsule(
                     canvas,
-                    [tx, ty, 40, 26],
+                    [tx, ty, 40, tile_h],
                     if model.is_pressed {
                         CAPSULE_ROUND
                     } else {
@@ -237,10 +243,10 @@ impl<T: GridItem + 'static> View<GridState<T>> for GridView {
                 Color::Fill
             };
 
-            if model.show_numbers && page_rel < 9 {
+            if model.show_numbers && page_rel < 6 {
                 text::draw_char(
                     canvas,
-                    (tx + 2) as i16,
+                    (tx + 3) as i16,
                     (ty + 6) as i16,
                     (b'1' + page_rel as u8) as char,
                     &FONT,
@@ -258,21 +264,21 @@ impl<T: GridItem + 'static> View<GridState<T>> for GridView {
 
             if model.show_labels {
                 let lbl = text::localize_scratch(item.title(), true);
-                if text::str_width(lbl, &FONT) > 38 {
+                if text::str_width(lbl, &FONT) > 36 {
                     text::draw_str_ellipsis(
                         canvas,
-                        (tx + 1) as i16,
-                        (ty + 24) as i16,
+                        (tx + 2) as i16,
+                        (ty + label_dy) as i16,
                         lbl,
                         &FONT,
                         fg_color,
-                        (tx + 39) as i16,
+                        (tx + 38) as i16,
                     );
                 } else {
                     text::draw_str_align(
                         canvas,
                         (tx + 20) as i16,
-                        (ty + 24) as i16,
+                        (ty + label_dy) as i16,
                         lbl,
                         &FONT,
                         fg_color,
@@ -282,17 +288,16 @@ impl<T: GridItem + 'static> View<GridState<T>> for GridView {
             }
         }
 
-        let total_pages = (((total_items as u32 + 5) * 0xAAAB) >> 18) as usize;
         if total_pages > 1 {
-            let dot_spacing = 6u8;
-            let dots_total_width = (total_pages as u8 - 1) * dot_spacing;
-            let dots_start_x = 64u8 - (dots_total_width >> 1);
+            let dot_spacing = 7u8;
+            let dots_total_width = (total_pages as u8 - 1) * dot_spacing + 4;
+            let dots_start_x = 64u8.saturating_sub(dots_total_width >> 1);
             for p in 0..total_pages {
                 let dx = dots_start_x + (p as u8 * dot_spacing);
                 if p == page {
-                    canvas.fill_rect(dx, 62, 3, 2, Color::Fill);
+                    canvas.fill_rect(dx, 61, 4, 2, Color::Fill);
                 } else {
-                    canvas.draw_pixel(dx + 1, 62, Color::Fill);
+                    canvas.fill_rect(dx + 1, 61, 2, 2, Color::DarkGray);
                 }
             }
         }

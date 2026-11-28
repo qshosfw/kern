@@ -144,9 +144,7 @@ impl AppRegistry {
 
     pub fn render(app_id: usize, canvas: &mut gfx::Canvas, sb_cfg: &mut StatusBarConfig<'_>) {
         if app_id == APP_ID_LAUNCHER {
-            unsafe { (*launcher_ptr()).render(canvas) };
-            sb_cfg.visible = true;
-            sb_cfg.title = Some("Home");
+            unsafe { (*launcher_ptr()).render_with_status(canvas, sb_cfg) };
         } else {
             #[cfg(feature = "krx_native")]
             if Self::is_dynamic_loaded() {

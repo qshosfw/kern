@@ -232,10 +232,10 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
     }
 
     for opt in [s.prefix_icon, s.icon] {
-        if let Some(bmp) = opt
-            && !core::ptr::eq(bmp, &icons::ICON_NONE)
-        {
-            icons::draw_icon_8(canvas, tx, s.y + icon_dy, bmp, tc);
+        if let Some(bmp) = opt {
+            if !core::ptr::eq(bmp, &icons::ICON_NONE) {
+                icons::draw_icon_8(canvas, tx, s.y + icon_dy, bmp, tc);
+            }
             tx += 11;
         }
     }
@@ -288,4 +288,31 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
 #[inline(always)]
 pub fn draw_field(canvas: &mut Canvas, x: u8, y: u8, w: u8, h: u8, bg: Color) {
     canvas.fill_rect(x, y, w, h, bg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_none_prefix_reserves_column_without_overlapping_app_icon() {
+        let mut canvas = Canvas::new();
+        let mut spec = ListRowSpec::new(2, 10, 120, 13, "Radio");
+        spec.prefix_icon = Some(&icons::ICON_NONE);
+        spec.icon = Some(icons::ICON_APP_RADIO);
+        draw_list_row(&mut canvas, &spec);
+
+        // Prefix column x = 5..13 must remain completely blank so caller key badges never collide with `s.icon` at x = 16..24.
+        for x in 5..15usize {
+            assert_eq!(
+                canvas.buffer[1][x] & 0xFC,
+                0,
+                "app icon bled into prefix slot at x={x}"
+            );
+        }
+        assert!(
+            (16..24usize).any(|x| canvas.buffer[1][x] != 0 || canvas.buffer[2][x] != 0),
+            "app icon must render in its own column at x=16..24"
+        );
+    }
 }

@@ -20,9 +20,7 @@ pub use animation::{
 pub use chrome::{StatusBar, StatusRightConfig, ToastBanner, ToastState};
 pub use dialog::{DialogState, DialogView, TextLine, draw_text_screen};
 pub use grid::{GridItem, GridState, GridTile, GridView};
-pub use input::{
-    Charset, LocaleKeymap, NumberPromptState, NumberPromptView, TextPromptState, TextPromptView,
-};
+pub use input::{Charset, LocaleKeymap, TextPromptState, TextPromptView};
 pub use list::{
     ChangeDir, ListItem, ListItemKind, ListModel, ListModelMut, ListNavDir, ListView, ShortString,
     get_edit_change_dir, get_list_nav_dir,

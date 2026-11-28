@@ -5,9 +5,8 @@ use gfx::Canvas;
 #[cfg(feature = "text_input")]
 use gfx::views::{Charset, TextPromptState, TextPromptView};
 use gfx::views::{
-    DialogState, DialogView, KeyRepeater, MarqueeScroller, NumberPromptState, NumberPromptView,
-    OptionSheet, SheetResult, SheetView, ShortString, ToastBanner, ToastState, TransitionProgress,
-    View,
+    DialogState, DialogView, KeyRepeater, MarqueeScroller, OptionSheet, SheetResult, SheetView,
+    ShortString, ToastBanner, ToastState, TransitionProgress, View,
 };
 use kernel::app::ModalResult;
 use kernel::event::{Event, KeyCode, KeyState};
@@ -27,7 +26,6 @@ pub enum ActiveModal {
         KeyRepeater,
         OptionSheet,
     ) = 3,
-    NumberInput(NumberPromptState) = 4,
 }
 
 #[repr(C)]
@@ -61,7 +59,6 @@ impl ModalCompositor {
                         && marquee.is_active())
             }
             ActiveModal::Dialog(model) => !model.anim.is_complete() || model.is_hold_animating(),
-            ActiveModal::NumberInput(model) => !model.anim.is_complete(),
             _ => false,
         }
     }
@@ -217,24 +214,6 @@ impl ModalCompositor {
         }
     }
 
-    pub fn prompt_number(&mut self, tag: u8, title: &str, unit: &str, req: &::abi::KrxNumReq) {
-        unsafe { self.reset_slot(tag, 4) };
-        if let ActiveModal::NumberInput(m) = &mut self.modal {
-            m.value = req.value.clamp(req.min, req.max);
-            m.min = req.min;
-            m.max = req.max;
-            m.step = req.step.max(1);
-            m.decimals = req.decimals.min(4);
-            m.anim = if crate::master_config_ref().display.animations_enabled() {
-                TransitionProgress::new(4)
-            } else {
-                TransitionProgress::completed(4)
-            };
-            m.set_title(title);
-            m.set_unit(unit);
-        }
-    }
-
     pub fn handle_event(&mut self, event: &Event) -> Option<ModalResult<'_>> {
         let tag = self.tag;
         match &mut self.modal {
@@ -303,19 +282,6 @@ impl ModalCompositor {
                     _ => None,
                 }
             }
-            ActiveModal::NumberInput(model) => {
-                NumberPromptView.on_event(model, event);
-                if model.is_done {
-                    Some(ModalResult::NumberInputDone {
-                        tag,
-                        value: model.value,
-                    })
-                } else if model.is_canceled {
-                    Some(ModalResult::Canceled(tag))
-                } else {
-                    None
-                }
-            }
         }
     }
 
@@ -344,9 +310,6 @@ impl ModalCompositor {
                     animated,
                 );
                 hover_ov.set(ov);
-            }
-            ActiveModal::NumberInput(model) => {
-                NumberPromptView.render(canvas, model);
             }
         }
         if self.toast.is_active {

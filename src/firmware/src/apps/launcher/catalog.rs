@@ -21,7 +21,7 @@ pub struct PackageCatalogEntry {
     /// Self-contained 8x8 monochrome icon bitmap from `SECTION_ASSETS` (`[0; 8]` when absent).
     /// Placed at offset 4 (4-byte aligned) to avoid Cortex-M0+ `__aeabi_uwrite4` traps.
     pub icon_8: [u8; 8],
-    /// Reserved alignment padding (`48 B` stride).
+    /// File byte offset of the package's embedded `16x16` `ASSET_ICON_16` bitmap (`0` when absent).
     pub icon_16_off: u16,
     pub title: InlineStr<12>,
     pub path: InlineStr<20>,
@@ -42,7 +42,7 @@ impl PackageCatalogEntry {
     }
 
     /// Resolve the package's 8x8 icon: prefers embedded `SECTION_ASSETS` `ASSET_ICON_8`,
-    /// falling back to the legacy `icon_id` lookup.
+    /// falling back to the `icon_id` system glyph.
     pub fn resolved_icon_8(&self) -> &'static [u8; 8] {
         if self.has_custom_icon_8() {
             unsafe { &*(&self.icon_8 as *const [u8; 8]) }
@@ -50,6 +50,12 @@ impl PackageCatalogEntry {
             gfx::icons::system_icon(u8::try_from(self.icon_id).unwrap_or(::abi::icon::APPS))
                 .unwrap_or(gfx::icons::ICON_APPS)
         }
+    }
+
+    /// Built-in 16x16 launcher icon fallback resolved from `icon_id`.
+    #[inline(always)]
+    pub fn resolved_icon_16(&self) -> &'static [u8; 32] {
+        gfx::icons::icon_16(u8::try_from(self.icon_id).unwrap_or(::abi::icon::APPS))
     }
 }
 
@@ -202,7 +208,7 @@ impl PackageCatalog {
         let stem = unsafe { core::str::from_utf8_unchecked(bytes.get_unchecked(..stem_len)) };
 
         if is_pkg && has_data {
-            if let Ok((_hdr_buf, summary)) =
+            if let Ok((hdr_buf, summary)) =
                 crate::runtime::read_krx_summary_in_scratch(filesystem, path_copy.as_str())
             {
                 let is_valid = summary.preamble.execution_class().is_some();
@@ -216,12 +222,22 @@ impl PackageCatalog {
                 let title = summary.title.filter(|t| !t.is_empty()).unwrap_or(stem);
                 entry.title.set(title);
                 if is_valid {
-                    if let Some(assets) = summary.aux.assets
-                        && let Some((_, _, ic8)) =
+                    if let Some(assets) = summary.aux.assets {
+                        if let Some((_, _, ic8)) =
                             KrxPreamble::find_icon_in_assets(assets, kernel::runtime::ASSET_ICON_8)
-                        && ic8.len() >= 8
-                    {
-                        entry.icon_8.copy_from_slice(&ic8[..8]);
+                            && ic8.len() >= 8
+                        {
+                            entry.icon_8.copy_from_slice(&ic8[..8]);
+                        }
+                        if let Some((_, _, ic16)) =
+                            KrxPreamble::find_icon_in_assets(assets, kernel::runtime::ASSET_ICON_16)
+                            && ic16.len() >= 32
+                        {
+                            let off = ic16.as_ptr() as usize - hdr_buf.as_ptr() as usize;
+                            if off <= u16::MAX as usize {
+                                entry.icon_16_off = off as u16;
+                            }
+                        }
                     }
                     let act_body = summary.aux.actions.unwrap_or(&[]);
                     let mut off = 0usize;

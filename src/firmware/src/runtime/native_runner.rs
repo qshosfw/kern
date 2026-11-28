@@ -801,11 +801,6 @@ pub unsafe fn native_on_modal_result(r: &ModalResult<'_>) -> EventResult {
                 text.len() as u32,
             )
         }
-        ModalResult::NumberInputDone { tag, value } => (
-            *tag,
-            kernel::proc::abi::MODAL_RESULT_NUMBER_DONE,
-            *value as u32,
-        ),
         ModalResult::SheetSelected { tag, index } => (
             *tag,
             kernel::proc::abi::MODAL_RESULT_SHEET_SELECTED,
