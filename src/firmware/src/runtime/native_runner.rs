@@ -174,9 +174,12 @@ pub(crate) fn flush_instruction_pipeline() {
     }
 }
 
-/// 0-wait-state SRAM fast-path way tags (`WAY_TAGS[way] == page_id`) for `P1 v2` hit veneer.
+/// 0-wait-state SRAM fast-path way tags (`WAY_TAGS[way] == page_id`) and loaded sizes
+/// for the `P1 v2` `.data.ramfunc` hit veneer.
 #[cfg(feature = "krx_paged")]
 static mut WAY_TAGS: [u16; 8] = [0xFFFF; 8];
+#[cfg(feature = "krx_paged")]
+static mut WAY_SIZES: [u16; 8] = [0; 8];
 #[cfg(feature = "krx_paged")]
 static mut WAY_BASE_VMA: usize = 0;
 #[cfg(feature = "krx_paged")]
@@ -186,6 +189,7 @@ static mut WAY_PAGE_SHIFT: u8 = 9;
 pub(crate) fn reset_way_tags(base_vma: usize, page_size: u16) {
     unsafe {
         WAY_TAGS = [0xFFFF; 8];
+        WAY_SIZES = [0; 8];
         WAY_BASE_VMA = base_vma;
         WAY_PAGE_SHIFT = if page_size >= 2048 {
             11
@@ -197,17 +201,33 @@ pub(crate) fn reset_way_tags(base_vma: usize, page_size: u16) {
     }
 }
 
-/// 12-cycle `.data.ramfunc` hit-path resolver: returns Thumb target address on way hit or `0` on miss.
 #[cfg(feature = "krx_paged")]
+#[inline(always)]
+pub(crate) fn set_way_tag(way: usize, page_id: u16, loaded_size: u16) {
+    if way < 8 {
+        unsafe {
+            WAY_TAGS[way] = page_id;
+            WAY_SIZES[way] = loaded_size;
+        }
+    }
+}
+
+/// 12-cycle `.data.ramfunc` hit-path resolver: returns Thumb target address on bounds-checked way hit or `0` on miss.
+#[cfg(feature = "krx_paged")]
+#[inline(never)]
 #[cfg_attr(
     all(target_arch = "arm", not(test)),
     unsafe(link_section = ".data.ramfunc")
 )]
 pub fn krx_paged_hit_fast(page_id: u16, func_offset: u16) -> usize {
     let tags = unsafe { &*core::ptr::addr_of!(WAY_TAGS) };
+    let sizes = unsafe { &*core::ptr::addr_of!(WAY_SIZES) };
     let mut w = 0usize;
     while w < 8 {
-        if tags[w] == page_id {
+        if unsafe { *tags.get_unchecked(w) } == page_id {
+            if func_offset >= unsafe { *sizes.get_unchecked(w) } {
+                return 0;
+            }
             let base = unsafe { WAY_BASE_VMA };
             let shift = unsafe { WAY_PAGE_SHIFT } as usize;
             return (base + (w << shift) + (func_offset as usize)) | 1;
@@ -217,56 +237,91 @@ pub fn krx_paged_hit_fast(page_id: u16, func_offset: u16) -> usize {
     0
 }
 
+/// Coalesce a slice of `u16` physical 256 B page IDs into the longest contiguous run
+/// starting at index 0 (`(first_phys, run_pages)`). `first_phys == 0` denotes a sparse zero run.
+#[inline(always)]
+pub(crate) fn coalesce_phys_run(pages: &[u16]) -> (u16, usize) {
+    let first = pages[0];
+    let mut run = 1usize;
+    while run < pages.len() {
+        let next = if first == 0 {
+            0
+        } else {
+            first.wrapping_add(run as u16)
+        };
+        if pages[run] != next {
+            break;
+        }
+        run += 1;
+    }
+    (first, run)
+}
+
+#[inline(never)]
 fn read_slot_pkg_bytes(
     storage: &mut kernfs::KernFS<'_, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>,
     offset: usize,
     dst: &mut [u8],
 ) -> bool {
     let slot = slot_ref();
-    // Fast-path ExtentStreamer: bypass KernFS path/inode walks using cached 12x u16 L1 roots
-    // and direct SPI2 DMA1_Ch3 flash bursts (< 180 us per 512 B page fault).
+    // Fast-path ExtentStreamer: bypass KernFS path/inode walks using cached 12x u16 L1 roots,
+    // batch L1 index reads (up to 8 entries in 1 SPI read), and coalesce contiguous physical
+    // flash pages into a single SPI2 DMA1_Ch3 burst (up to 2048 B in ~85 us @ 24 MHz).
     if slot.l1_depth != 0 && offset.saturating_add(dst.len()) <= slot.file_size as usize {
         let mut copied = 0usize;
         while copied < dst.len() {
             let pos = offset + copied;
-            let lpage = pos >> 8;
+            let start_lpage = pos >> 8;
             let in_page = pos & 0xFF;
-            let take = (dst.len() - copied).min(256 - in_page);
-            let phys = if slot.l1_depth == kernfs::format::DEPTH_DIRECT {
-                if lpage < kernfs::format::MAX_L1_ROOTS {
-                    slot.l1_pages[lpage]
-                } else {
-                    0
+            let rem_bytes = dst.len() - copied;
+            let end_lpage = (pos + rem_bytes - 1) >> 8;
+            let mut batch_pages = (end_lpage - start_lpage + 1).min(8);
+
+            let mut phys_buf = [0u16; 8];
+            if slot.l1_depth == kernfs::format::DEPTH_DIRECT {
+                let mut i = 0usize;
+                while i < batch_pages {
+                    let lp = start_lpage + i;
+                    if lp < kernfs::format::MAX_L1_ROOTS {
+                        phys_buf[i] = slot.l1_pages[lp];
+                    }
+                    i += 1;
                 }
             } else if slot.l1_depth == kernfs::format::DEPTH_SINGLE_INDIRECT {
-                let s = lpage >> 7;
+                let s = start_lpage >> 7;
+                let off_in_l1 = start_lpage & 0x7F;
+                batch_pages = batch_pages.min(128 - off_in_l1);
                 if s < kernfs::format::MAX_L1_ROOTS && slot.l1_pages[s] != 0 {
-                    let idx_addr =
-                        ((slot.l1_pages[s] as u32) << 8) + (((lpage & 0x7F) as u32) << 1);
-                    let mut raw = [0u8; 2];
-                    if storage.dev.read_data(idx_addr, &mut raw).is_err() {
+                    let idx_addr = ((slot.l1_pages[s] as u32) << 8) + ((off_in_l1 as u32) << 1);
+                    let raw = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            phys_buf.as_mut_ptr() as *mut u8,
+                            batch_pages << 1,
+                        )
+                    };
+                    if storage.dev.read_data(idx_addr, raw).is_err() {
                         return false;
                     }
-                    u16::from_le_bytes(raw)
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-            if phys == 0 {
-                dst[copied..copied + take].fill(0);
-            } else {
-                let addr = ((phys as u32) << 8) + (in_page as u32);
-                if storage
-                    .dev
-                    .read_data(addr, &mut dst[copied..copied + take])
-                    .is_err()
-                {
-                    return false;
                 }
             }
-            copied += take;
+
+            let mut p_idx = 0usize;
+            while p_idx < batch_pages && copied < dst.len() {
+                let (first_phys, run_pages) = coalesce_phys_run(&phys_buf[p_idx..batch_pages]);
+                let cur_in_page = if p_idx == 0 { in_page } else { 0 };
+                let run_bytes = ((run_pages << 8) - cur_in_page).min(dst.len() - copied);
+                let chunk = unsafe { dst.get_unchecked_mut(copied..copied + run_bytes) };
+                if first_phys == 0 {
+                    chunk.fill(0);
+                } else {
+                    let addr = ((first_phys as u32) << 8) + (cur_in_page as u32);
+                    if storage.dev.read_data(addr, chunk).is_err() {
+                        return false;
+                    }
+                }
+                copied += run_bytes;
+                p_idx += run_pages;
+            }
         }
         return true;
     }
@@ -292,7 +347,7 @@ fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bo
 #[cfg(feature = "krx_paged")]
 fn read_block_entry_from_pkg(entry_off: u32) -> Option<kernel::runtime::BlockEntry> {
     let mut raw = [0u8; kernel::runtime::BlockEntry::SIZE];
-    if read_active_pkg_region(entry_off as usize, raw.as_mut_ptr() as usize, raw.len()) {
+    if read_slot_pkg_bytes(crate::kern_fs(), entry_off as usize, &mut raw) {
         kernel::runtime::BlockEntry::parse(&raw)
     } else {
         None
@@ -302,7 +357,13 @@ fn read_block_entry_from_pkg(entry_off: u32) -> Option<kernel::runtime::BlockEnt
 #[cfg(feature = "krx_paged")]
 fn stream_paged_way(slot_byte_off: usize, page_size: usize, desc: &StreamedPageDesc) -> bool {
     let raw_len = (desc.raw_size as usize).min(page_size);
-    if raw_len == 0 || slot_byte_off + page_size > crate::data::arena::TRANSIENT_ARENA_BYTES {
+    let zone_a_off = crate::data::arena::zone_a_used_bytes();
+    if raw_len == 0
+        || zone_a_off
+            .saturating_add(slot_byte_off)
+            .saturating_add(page_size)
+            > crate::data::arena::TRANSIENT_ARENA_BYTES
+    {
         return false;
     }
     let slot_vma = crate::data::arena::zone_b_base_ptr() as usize + slot_byte_off;
@@ -337,14 +398,10 @@ fn fault_in_way(page_id: u16, is_demand: bool) -> Option<(usize, StreamedPageDes
         if let Some(w) = slot_mut().window_mut() {
             w.cache.invalidate_way(s);
         }
-        if s < 8 {
-            unsafe { WAY_TAGS[s] = 0xFFFF };
-        }
+        set_way_tag(s, 0xFFFF, 0);
         return None;
     }
-    if s < 8 {
-        unsafe { WAY_TAGS[s] = page_id };
-    }
+    set_way_tag(s, page_id, desc.exec_size);
     if is_demand && let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot_pid) {
         pcb.health.record_page_fault();
     }
@@ -976,11 +1033,7 @@ mod tests {
             slot.code_size = code_size;
             slot.got_base = load_base.wrapping_add(got_off);
 
-            let code_limit = if false {
-                max_arena - overlay_size
-            } else {
-                max_arena
-            };
+            let code_limit = max_arena;
             let ram_vma = if !is_paged && got_off > 0 {
                 slot.got_base
             } else {
@@ -992,7 +1045,7 @@ mod tests {
                 load_base,
                 code_size as u32,
                 overlay_vma,
-                if false { overlay_size } else { 0 },
+                0,
                 ram_vma,
                 ram_size,
             );
@@ -1010,6 +1063,27 @@ mod tests {
                     "mismatch for profile={profile:?} rk={rk:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn extent_streamer_coalesces_contiguous_and_sparse_runs() {
+        assert_eq!(coalesce_phys_run(&[10, 11, 12, 13, 20, 21]), (10, 4));
+        assert_eq!(coalesce_phys_run(&[20, 21, 5]), (20, 2));
+        assert_eq!(coalesce_phys_run(&[0, 0, 0, 7]), (0, 3));
+        assert_eq!(coalesce_phys_run(&[42]), (42, 1));
+
+        #[cfg(feature = "krx_paged")]
+        {
+            reset_way_tags(0x2000_1000, 1024);
+            assert_eq!(krx_paged_hit_fast(0, 0), 0);
+            set_way_tag(2, 5, 600);
+            assert_eq!(
+                krx_paged_hit_fast(5, 0x40),
+                (0x2000_1000 + (2 << 10) + 0x40) | 1
+            );
+            assert_eq!(krx_paged_hit_fast(5, 600), 0); // out-of-bounds offset rejected
+            assert_eq!(krx_paged_hit_fast(6, 0), 0); // miss
         }
     }
 }

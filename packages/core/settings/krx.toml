@@ -1,7 +1,9 @@
 name = "Settings"
 output = "settings.krx"
 profile = "p1"
-page_size = 512
+page_size = 2048
+cache_blocks = 0
+root_max = 2048
 icon = "APP_SETTINGS"
 caps = [
     "DISPLAY_DIRECT",
@@ -14,6 +16,13 @@ caps = [
     "TASK_CONTROL",
 ]
 root = "main.rs"
+blocks = [
+    "page_schema.rs",
+    "page_packages.rs",
+    "page_shortcuts.rs",
+    "page_assets.rs",
+    "page_system.rs",
+]
 
 icon_8 = """
 #..##..#

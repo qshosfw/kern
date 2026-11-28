@@ -195,6 +195,8 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     page_size = m.get("page_size", m.get("leaf_max", LEAF_MAX))
     if profile == pack_krx.PROFILE_P1_PAGED:
         builder.page_size = page_size
+        if "cache_blocks" in m:
+            builder.cache_blocks = int(m["cache_blocks"])
     if "root" in m:
         root_limit = m.get("root_max", None)
         with open(build_unit(src_dir, out_dir, m["root"], root_limit), "rb") as f:
@@ -206,6 +208,10 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
         for block_id, source in enumerate(blocks, start=1 if "root" in m else 0):
             builder.add_block_file(block_id, build_unit(src_dir, out_dir, source, builder.page_size))
     elif profile == pack_krx.PROFILE_P1_PAGED:
+        if len(builder.payload) > builder.page_size:
+            fail(
+                f"{rel_name}: P1 root ({len(builder.payload)} B) exceeds page_size ({builder.page_size} B) without explicit `blocks`"
+            )
         builder.auto_page = True
     for action in m.get("action", []):
         scope = pack_krx.resolve_mask("KRX_SCOPE", action["scope"])

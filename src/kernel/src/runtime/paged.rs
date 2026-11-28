@@ -1,4 +1,4 @@
-//! KRX Demand-Paged Native Subsystem (`P1 v2` Streamed Virtual Code Cache & `P0` Leaf Overlays).
+//! KRX Demand-Paged Native Subsystem (`P1 v2` Streamed Virtual Code Cache).
 //!
 //! Implements the unlimited-size `StreamedWindowCache` (`<= 384 KiB`), `SectionBlockMap`
 //! (`0x0005`) parser, Clock/LRU victim selection with `.krx.pinned` immunity, and the

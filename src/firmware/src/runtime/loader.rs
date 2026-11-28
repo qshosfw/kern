@@ -328,8 +328,9 @@ fn load_krx_into_slot(
             } else {
                 0
             };
-            let avail_cache =
-                crate::data::arena::zone_b_cache_bytes().saturating_sub(cache_base_off as usize);
+            let avail_cache = max_arena
+                .saturating_sub(cache_base_off as usize)
+                .min(super::native_runner::PAGED_CACHE_MAX_BYTES);
             let (bmap_off, bmap_cnt) = summary.aux.block_map.map_or((0, 0), |map| {
                 (
                     (map.as_ptr() as usize).saturating_sub(hdr_base) as u32,
@@ -371,6 +372,7 @@ fn load_krx_into_slot(
                     };
                     slot.current_page = 0;
                     slot.current_slot = 0;
+                    super::native_runner::set_way_tag(0, 0, p0_sz);
                 } else {
                     slot.is_loaded = true;
                     let resolved = super::native_runner::krx_page_fault(init_page, init_off);
