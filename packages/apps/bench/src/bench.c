@@ -10,7 +10,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param);
 
 __attribute__((naked, section(".text.entry")))
 void _start(void) {
-    __asm__ volatile("b krx_main\n");
+    __asm__ volatile("push {lr}\n bl krx_main\n pop {pc}\n");
 }
 
 static u8 g_tab = 0;           // 0 = Widgets, 1 = Menu, 2 = Modal

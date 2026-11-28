@@ -1,0 +1,17 @@
+name = "Recorder"
+output = "recorder.krx"
+profile = "n1"
+icon = "SPEAKER"
+caps = ["RADIO_RX", "AUDIO_OUTPUT", "AUDIO_CAPTURE", "DISPLAY_DIRECT", "KEYPAD"]
+root = "recorder.c"
+
+icon_8 = """
+...##...
+..####..
+..####..
+..####..
+.#.##.#.
+..####..
+...##...
+..####..
+"""

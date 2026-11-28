@@ -78,6 +78,15 @@ def check_apps_and_drivers_isolation():
             stripped = line.split("//", 1)[0]
             if re.search(r"\b(py32_hal|py32f071_pac|py32_pac|bsp|bk4829|st7565|py25q16)::", stripped):
                 errors.append(f"{rel}:{lineno}: resident app touches hardware directly: {stripped.strip()}")
+            if re.search(r"\.radio\.", stripped):
+                errors.append(f"{rel}:{lineno}: R-SINGLE-RF-OWNER violation in app: {stripped.strip()}")
+
+    for rel, src in iter_rs_files("src/firmware/src/orchestrator"):
+        clean = strip_cfg_test(src)
+        for lineno, line in enumerate(clean.splitlines(), 1):
+            stripped = line.split("//", 1)[0]
+            if re.search(r"\b(bk4829)::", stripped) or re.search(r"\.radio\.", stripped):
+                errors.append(f"{rel}:{lineno}: R-SINGLE-RF-OWNER violation in orchestrator: {stripped.strip()}")
 
     for rel, src in iter_rs_files("src/drivers/src"):
         clean = strip_cfg_test(src)

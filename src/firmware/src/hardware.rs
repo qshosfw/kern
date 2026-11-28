@@ -23,8 +23,13 @@ impl SystemSerialPort {
     }
 }
 
-/// Global `SerialCore` port lease & write-fence router (`0 = UsbCdc`, `1 = Uart0`).
+/// Global `SerialCore` port lease & write-fence router
+/// (`0 = UsbCdc`, `1 = Uart0`, and `2 = Wireless` BLE on `target_k10pro`).
+#[cfg(not(feature = "target_k10pro"))]
 pub static mut SERIAL_ROUTER: kernel::service::SerialRouter<2> =
+    kernel::service::SerialRouter::new();
+#[cfg(feature = "target_k10pro")]
+pub static mut SERIAL_ROUTER: kernel::service::SerialRouter<3> =
     kernel::service::SerialRouter::new();
 
 #[cfg(feature = "usb")]
@@ -88,8 +93,15 @@ pub fn active_usb_write(data: &[u8]) -> usize {
     }
 }
 
+#[cfg(not(feature = "target_k10pro"))]
 #[inline(always)]
 pub fn serial_router_mut() -> &'static mut kernel::service::SerialRouter<2> {
+    unsafe { &mut *core::ptr::addr_of_mut!(SERIAL_ROUTER) }
+}
+
+#[cfg(feature = "target_k10pro")]
+#[inline(always)]
+pub fn serial_router_mut() -> &'static mut kernel::service::SerialRouter<3> {
     unsafe { &mut *core::ptr::addr_of_mut!(SERIAL_ROUTER) }
 }
 

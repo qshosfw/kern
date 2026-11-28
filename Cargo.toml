@@ -14,6 +14,7 @@ members = [
     "src/mcu/py32f071/pac",
     "src/mcu/py32f071/hal",
     "src/board/uv-k1",
+    "src/board/uv-k10pro",
     "src/firmware",
     "sdk/rust",
 ]

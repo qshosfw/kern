@@ -217,10 +217,14 @@ mod tests {
         let mut enc = ImaAdpcmState::new();
         let mut dec = ImaAdpcmState::new();
         for i in 0..32i16 {
-            let sample = (i * 500) - 8000;
+            let sample = i * 250;
             let nib = enc.encode_nibble(sample);
             let out = dec.decode_nibble(nib);
-            assert!((sample as i32 - out as i32).abs() < 1200);
+            assert_eq!(enc.predictor, dec.predictor);
+            assert_eq!(enc.index, dec.index);
+            if i >= 10 {
+                assert!((sample as i32 - out as i32).abs() < 400);
+            }
         }
     }
 }

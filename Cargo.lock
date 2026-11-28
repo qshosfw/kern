@@ -33,6 +33,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bsp-uv-k10pro"
+version = "0.1.0"
+dependencies = [
+ "kern-platform-traits",
+ "kernel",
+ "py32-hal",
+ "py32f071-pac",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
