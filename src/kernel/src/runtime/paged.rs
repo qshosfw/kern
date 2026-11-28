@@ -224,7 +224,7 @@ impl<const MAX_SLOTS: usize> StreamedWindowCache<MAX_SLOTS> {
         } else {
             (requested_slots as usize).min(max_by_ram)
         };
-        self.active_slots = def_slots.max(1).min(MAX_SLOTS) as u8;
+        self.active_slots = def_slots.min(MAX_SLOTS) as u8;
 
         if block_map_flash_offset != 0 && block_map_count > 0 {
             self.block_map_flash_offset = block_map_flash_offset;
@@ -320,6 +320,9 @@ impl<const MAX_SLOTS: usize> StreamedWindowCache<MAX_SLOTS> {
         } else {
             let entry_off = self.block_map_flash_offset + ((page_id as u32) << 3);
             let entry = read_block_entry(entry_off).ok_or(PagedError::StorageReadFailed)?;
+            if entry.size == 0 || entry.size > page_bytes {
+                return Err(PagedError::InvalidBlockId);
+            }
             let mut flags = entry.flags;
             if page_id < 16 && (self.rt_pin_mask & (1u16 << page_id)) != 0 {
                 flags |= BLOCK_FLAG_PINNED;
@@ -327,12 +330,12 @@ impl<const MAX_SLOTS: usize> StreamedWindowCache<MAX_SLOTS> {
             let exec_size = if (flags & BLOCK_FLAG_LZSS) != 0 {
                 page_bytes
             } else {
-                entry.size.min(page_bytes)
+                entry.size
             };
             StreamedPageDesc {
                 flash_offset: entry.flash_offset,
                 page_id,
-                raw_size: entry.size.min(page_bytes),
+                raw_size: entry.size,
                 exec_size,
                 flags,
                 _pad: 0,
@@ -357,6 +360,20 @@ impl<const MAX_SLOTS: usize> StreamedWindowCache<MAX_SLOTS> {
     pub fn invalidate_way(&mut self, slot_idx: usize) {
         if slot_idx < MAX_SLOTS {
             self.ways[slot_idx] = CacheWayMeta::empty();
+        }
+    }
+
+    /// Synchronize 0-wait-state `.data.ramfunc` hit timestamps into the LRU victim table.
+    #[inline(always)]
+    pub fn sync_lru_ticks(&mut self, clock: u16, ticks: &[u16; MAX_SLOTS]) {
+        self.access_clock = clock;
+        let limit = (self.active_slots as usize).min(MAX_SLOTS);
+        let mut s = 0;
+        while s < limit {
+            if !self.ways[s].is_empty() {
+                self.ways[s].last_access_tick = ticks[s];
+            }
+            s += 1;
         }
     }
 }
@@ -520,5 +537,32 @@ mod tests {
         }
         assert_eq!(cache.ways[0].resident_page, 0);
         assert!(cache.probe_hit(500).is_some());
+    }
+
+    #[test]
+    fn insufficient_ram_yields_zero_slots_and_sync_lru_preserves_hot_way() {
+        let mut tiny = StreamedWindowCache::<8>::new();
+        tiny.configure(2048, 0, 1024, 0, 0, 0, 4096, 0, 0);
+        assert_eq!(tiny.active_slots, 0);
+        assert_eq!(
+            tiny.alloc_way_for_miss(0, true, |_| None),
+            Err(PagedError::NoUnpinnedSlotAvailable)
+        );
+
+        let mut cache = StreamedWindowCache::<8>::new();
+        cache.configure(512, 2, 1024, 0, 0, 0, 2048, 0, 0);
+        let (w0, _) = cache.alloc_way_for_miss(0, true, |_| None).unwrap();
+        let (w1, _) = cache.alloc_way_for_miss(1, true, |_| None).unwrap();
+        assert_eq!((w0, w1), (0, 1));
+        // Simulate fast .data.ramfunc hit on way 0 (making page 0 hotter than page 1)
+        let mut ticks = [0u16; 8];
+        ticks[0] = 50;
+        ticks[1] = 2;
+        cache.sync_lru_ticks(50, &ticks);
+        // Miss on page 2 must evict cold way 1, NOT hot way 0!
+        let (w2, _) = cache.alloc_way_for_miss(2, true, |_| None).unwrap();
+        assert_eq!(w2, 1);
+        assert_eq!(cache.ways[0].resident_page, 0);
+        assert_eq!(cache.ways[1].resident_page, 2);
     }
 }

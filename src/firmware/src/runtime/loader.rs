@@ -262,6 +262,12 @@ fn load_krx_into_slot(
     else {
         return Err(reap_err(pid, KrxLaunchError::ReadFailed));
     };
+    if !is_bg {
+        let zero_end = (dst_off + dst_cap).min(arena_buf.len());
+        if dst_off + payload_read < zero_end {
+            arena_buf[dst_off + payload_read..zero_end].fill(0);
+        }
+    }
 
     if is_bg {
         return activate_bg_slot(
@@ -303,6 +309,8 @@ fn load_krx_into_slot(
     slot.caps = required_caps;
     slot.set_pkg_path(path);
     slot.pkg_ino = storage.lookup_ino(path).unwrap_or(0);
+    slot.cached_l1_slot = 0xFF;
+    slot.inline_bmap_len = 0;
     if let Ok((depth, fsz)) = storage.file_extents(path, &mut slot.l1_pages) {
         slot.l1_depth = depth;
         slot.file_size = fsz;
@@ -314,29 +322,42 @@ fn load_krx_into_slot(
     if is_paged {
         #[cfg(feature = "krx_paged")]
         {
-            let win = &mut slot.window;
-            win.shadow_stack.clear();
             let pay_size = if exec.payload_size > 0 {
                 exec.payload_size
             } else {
                 payload_read as u32
             };
-            let cache_base_off = if exec.got_offset > 0
-                && (exec.got_offset as usize) <= max_arena.saturating_sub(1024)
-            {
+            let cache_base_off = if exec.got_offset > 0 {
                 (exec.got_offset + 7) & !7
             } else {
                 0
             };
+            if (cache_base_off as usize) >= max_arena {
+                return Err(reap_err(pid, KrxLaunchError::InsufficientRam));
+            }
             let avail_cache = max_arena
                 .saturating_sub(cache_base_off as usize)
                 .min(super::native_runner::PAGED_CACHE_MAX_BYTES);
             let (bmap_off, bmap_cnt) = summary.aux.block_map.map_or((0, 0), |map| {
+                let cnt = map.len() / kernel::runtime::BlockEntry::SIZE;
+                let cached = cnt.min(super::native_runner::INLINE_BMAP_CAP);
+                let mut i = 0usize;
+                while i < cached {
+                    if let Some(e) = kernel::runtime::BlockEntry::parse(
+                        &map[i * kernel::runtime::BlockEntry::SIZE..],
+                    ) {
+                        slot.inline_bmap[i] = e;
+                    }
+                    i += 1;
+                }
+                slot.inline_bmap_len = cached as u8;
                 (
                     (map.as_ptr() as usize).saturating_sub(hdr_base) as u32,
-                    (map.len() / kernel::runtime::BlockEntry::SIZE) as u16,
+                    cnt as u16,
                 )
             });
+            let win = &mut slot.window;
+            win.shadow_stack.clear();
             win.cache.configure(
                 exec.page_size,
                 exec.cache_blocks,
@@ -348,6 +369,9 @@ fn load_krx_into_slot(
                 bmap_off,
                 bmap_cnt,
             );
+            if win.cache.active_slots == 0 {
+                return Err(reap_err(pid, KrxLaunchError::InsufficientRam));
+            }
             super::native_runner::reset_way_tags(
                 crate::data::arena::zone_b_base_ptr() as usize + cache_base_off as usize,
                 win.cache.page_size(),
@@ -372,7 +396,7 @@ fn load_krx_into_slot(
                     };
                     slot.current_page = 0;
                     slot.current_slot = 0;
-                    super::native_runner::set_way_tag(0, 0, p0_sz);
+                    super::native_runner::set_way_tag(0, 0, p0_sz, 1);
                 } else {
                     slot.is_loaded = true;
                     let resolved = super::native_runner::krx_page_fault(init_page, init_off);

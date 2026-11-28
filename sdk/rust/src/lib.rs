@@ -216,8 +216,10 @@ macro_rules! krx_entry {
         #[cfg(all(not(test), target_os = "none"))]
         #[panic_handler]
         fn _krx_panic(_info: &core::panic::PanicInfo) -> ! {
-            loop {
-                core::hint::spin_loop();
+            // Trap synchronously into HardFault -> `try_contain_app_fault` so the OS
+            // unwinds cleanly to the Exception Dialog instead of hanging until IWDG reset.
+            unsafe {
+                core::arch::asm!("udf #0", options(noreturn));
             }
         }
     };

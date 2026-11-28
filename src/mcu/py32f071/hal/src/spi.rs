@@ -323,16 +323,16 @@ pub fn spi2_read_bytes(buffer: &mut [u8]) -> Result<(), SpiError> {
     let ok = {
         let rx_xfer =
             rx_ch.start_scoped(&DMA_SPI_RX_CFG, dr_addr, buffer.as_mut_ptr() as u32, count);
-        unsafe {
-            SPI2.cr2()
-                .write_volatile(spi::CR2_RXDMAEN | spi::CR2_TXDMAEN);
-        }
         let _tx_xfer = tx_ch.start_scoped(
             &DMA_SPI_DUMMY_TX_CFG,
             dr_addr,
             (&DUMMY_FF as *const u8) as u32,
             count,
         );
+        unsafe {
+            SPI2.cr2()
+                .write_volatile(spi::CR2_RXDMAEN | spi::CR2_TXDMAEN);
+        }
         rx_xfer.wait(500_000)
     };
     unsafe { SPI2.cr2().write_volatile(0) };

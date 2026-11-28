@@ -24,6 +24,7 @@ pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 8 x 512B or 4 x 1024B streamed cache slots
 pub const MICRO_DAEMON_ARENA_BYTES: usize = crate::data::arena::ZONE_A_MAX_BYTES;
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
+pub const INLINE_BMAP_CAP: usize = 16;
 
 #[cfg(feature = "krx_paged")]
 #[repr(C)]
@@ -44,7 +45,13 @@ pub(crate) struct NativeExecSlot {
     pub(crate) code_size: u16,
     pub(crate) pkg_ino: u16,
     pub(crate) l1_depth: u8,
+    pub(crate) cached_l1_slot: u8,
+    pub(crate) inline_bmap_len: u8,
+    pub(crate) _pad_meta: u8,
     pub(crate) l1_pages: [u16; kernfs::format::MAX_L1_ROOTS],
+    pub(crate) cached_l1_entries: [u16; 128],
+    #[cfg(feature = "krx_paged")]
+    pub(crate) inline_bmap: [kernel::runtime::BlockEntry; INLINE_BMAP_CAP],
     pub(crate) file_size: u32,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
@@ -174,12 +181,18 @@ pub(crate) fn flush_instruction_pipeline() {
     }
 }
 
-/// 0-wait-state SRAM fast-path way tags (`WAY_TAGS[way] == page_id`) and loaded sizes
-/// for the `P1 v2` `.data.ramfunc` hit veneer.
+/// 0-wait-state SRAM fast-path way tags (`WAY_TAGS[way] == page_id`), loaded sizes,
+/// and true-LRU access ticks for the `P1 v2` `.data.ramfunc` hit veneer.
 #[cfg(feature = "krx_paged")]
 static mut WAY_TAGS: [u16; 8] = [0xFFFF; 8];
 #[cfg(feature = "krx_paged")]
 static mut WAY_SIZES: [u16; 8] = [0; 8];
+#[cfg(feature = "krx_paged")]
+static mut WAY_TICKS: [u16; 8] = [0; 8];
+#[cfg(feature = "krx_paged")]
+static mut WAY_CLOCK: u16 = 0;
+#[cfg(feature = "krx_paged")]
+static mut WAY_LAST_SLOT: u8 = 0;
 #[cfg(feature = "krx_paged")]
 static mut WAY_BASE_VMA: usize = 0;
 #[cfg(feature = "krx_paged")]
@@ -190,6 +203,9 @@ pub(crate) fn reset_way_tags(base_vma: usize, page_size: u16) {
     unsafe {
         WAY_TAGS = [0xFFFF; 8];
         WAY_SIZES = [0; 8];
+        WAY_TICKS = [0; 8];
+        WAY_CLOCK = 0;
+        WAY_LAST_SLOT = 0;
         WAY_BASE_VMA = base_vma;
         WAY_PAGE_SHIFT = if page_size >= 2048 {
             11
@@ -203,16 +219,21 @@ pub(crate) fn reset_way_tags(base_vma: usize, page_size: u16) {
 
 #[cfg(feature = "krx_paged")]
 #[inline(always)]
-pub(crate) fn set_way_tag(way: usize, page_id: u16, loaded_size: u16) {
+pub(crate) fn set_way_tag(way: usize, page_id: u16, loaded_size: u16, tick: u16) {
     if way < 8 {
         unsafe {
             WAY_TAGS[way] = page_id;
             WAY_SIZES[way] = loaded_size;
+            WAY_TICKS[way] = tick;
+            if tick != 0 {
+                WAY_CLOCK = tick;
+            }
         }
     }
 }
 
-/// 12-cycle `.data.ramfunc` hit-path resolver: returns Thumb target address on bounds-checked way hit or `0` on miss.
+/// 12-cycle `.data.ramfunc` hit-path resolver: returns Thumb target address on bounds-checked
+/// way hit (updating true-LRU tick in 0-wait-state SRAM) or `0` on miss.
 #[cfg(feature = "krx_paged")]
 #[inline(never)]
 #[cfg_attr(
@@ -227,6 +248,12 @@ pub fn krx_paged_hit_fast(page_id: u16, func_offset: u16) -> usize {
         if unsafe { *tags.get_unchecked(w) } == page_id {
             if func_offset >= unsafe { *sizes.get_unchecked(w) } {
                 return 0;
+            }
+            let clk = unsafe { WAY_CLOCK }.wrapping_add(1);
+            unsafe {
+                WAY_CLOCK = clk;
+                *(&mut *core::ptr::addr_of_mut!(WAY_TICKS)).get_unchecked_mut(w) = clk;
+                WAY_LAST_SLOT = w as u8;
             }
             let base = unsafe { WAY_BASE_VMA };
             let shift = unsafe { WAY_PAGE_SHIFT } as usize;
@@ -263,10 +290,10 @@ fn read_slot_pkg_bytes(
     offset: usize,
     dst: &mut [u8],
 ) -> bool {
-    let slot = slot_ref();
-    // Fast-path ExtentStreamer: bypass KernFS path/inode walks using cached 12x u16 L1 roots,
-    // batch L1 index reads (up to 8 entries in 1 SPI read), and coalesce contiguous physical
-    // flash pages into a single SPI2 DMA1_Ch3 burst (up to 2048 B in ~85 us @ 24 MHz).
+    let slot = slot_mut();
+    // Fast-path ExtentStreamer: bypass KernFS path/inode walks using cached 12x u16 L1 roots
+    // + a 256 B cached L1 indirect index page (covering 32 KiB per slot with 0 L1 SPI reads),
+    // and coalesce contiguous physical flash pages into a single SPI2 DMA1_Ch3 burst.
     if slot.l1_depth != 0 && offset.saturating_add(dst.len()) <= slot.file_size as usize {
         let mut copied = 0usize;
         while copied < dst.len() {
@@ -292,16 +319,22 @@ fn read_slot_pkg_bytes(
                 let off_in_l1 = start_lpage & 0x7F;
                 batch_pages = batch_pages.min(128 - off_in_l1);
                 if s < kernfs::format::MAX_L1_ROOTS && slot.l1_pages[s] != 0 {
-                    let idx_addr = ((slot.l1_pages[s] as u32) << 8) + ((off_in_l1 as u32) << 1);
-                    let raw = unsafe {
-                        core::slice::from_raw_parts_mut(
-                            phys_buf.as_mut_ptr() as *mut u8,
-                            batch_pages << 1,
-                        )
-                    };
-                    if storage.dev.read_data(idx_addr, raw).is_err() {
-                        return false;
+                    if slot.cached_l1_slot as usize != s {
+                        let idx_addr = (slot.l1_pages[s] as u32) << 8;
+                        let raw = unsafe {
+                            core::slice::from_raw_parts_mut(
+                                slot.cached_l1_entries.as_mut_ptr() as *mut u8,
+                                256,
+                            )
+                        };
+                        if storage.dev.read_data(idx_addr, raw).is_err() {
+                            return false;
+                        }
+                        slot.cached_l1_slot = s as u8;
                     }
+                    phys_buf[..batch_pages].copy_from_slice(
+                        &slot.cached_l1_entries[off_in_l1..off_in_l1 + batch_pages],
+                    );
                 }
             }
 
@@ -333,19 +366,16 @@ fn read_slot_pkg_bytes(
     }
 }
 
-fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bool {
-    let ok = unsafe {
-        let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
-        read_slot_pkg_bytes(crate::kern_fs(), flash_offset, dst)
-    };
-    if ok {
-        flush_instruction_pipeline();
-    }
-    ok
-}
-
 #[cfg(feature = "krx_paged")]
 fn read_block_entry_from_pkg(entry_off: u32) -> Option<kernel::runtime::BlockEntry> {
+    let slot = slot_ref();
+    let bmap_base = slot.window.cache.block_map_flash_offset;
+    if bmap_base != 0 && entry_off >= bmap_base {
+        let idx = ((entry_off - bmap_base) >> 3) as usize;
+        if idx < slot.inline_bmap_len as usize {
+            return Some(slot.inline_bmap[idx]);
+        }
+    }
     let mut raw = [0u8; kernel::runtime::BlockEntry::SIZE];
     if read_slot_pkg_bytes(crate::kern_fs(), entry_off as usize, &mut raw) {
         kernel::runtime::BlockEntry::parse(&raw)
@@ -354,33 +384,66 @@ fn read_block_entry_from_pkg(entry_off: u32) -> Option<kernel::runtime::BlockEnt
     }
 }
 
+/// Fill unused trailing bytes of a code page way with Thumb `udf #0` (`0xDE00`) so wild
+/// fall-through past the end of a page traps cleanly into `HardFault` containment.
 #[cfg(feature = "krx_paged")]
-fn stream_paged_way(slot_byte_off: usize, page_size: usize, desc: &StreamedPageDesc) -> bool {
+#[inline(always)]
+fn trap_fill_page_tail(way_slice: &mut [u8], used_len: usize) {
+    let mut i = (used_len + 1) & !1;
+    while i + 1 < way_slice.len() {
+        way_slice[i] = 0x00;
+        way_slice[i + 1] = 0xDE;
+        i += 2;
+    }
+}
+
+#[cfg(feature = "krx_paged")]
+fn stream_paged_way(
+    slot_byte_off: usize,
+    page_size: usize,
+    desc: &StreamedPageDesc,
+) -> Option<u16> {
     let raw_len = (desc.raw_size as usize).min(page_size);
     let zone_a_off = crate::data::arena::zone_a_used_bytes();
+    let file_size = slot_ref().file_size as usize;
     if raw_len == 0
+        || (file_size > 0 && (desc.flash_offset as usize).saturating_add(raw_len) > file_size)
         || zone_a_off
             .saturating_add(slot_byte_off)
             .saturating_add(page_size)
             > crate::data::arena::TRANSIENT_ARENA_BYTES
     {
-        return false;
+        return None;
     }
     let slot_vma = crate::data::arena::zone_b_base_ptr() as usize + slot_byte_off;
-    if (desc.flags & BLOCK_FLAG_LZSS) != 0 {
+    let slot_slice = unsafe { core::slice::from_raw_parts_mut(slot_vma as *mut u8, page_size) };
+    let actual_len = if (desc.flags & BLOCK_FLAG_LZSS) != 0 {
         let comp_off = page_size - raw_len;
-        if !read_active_pkg_region(desc.flash_offset as usize, slot_vma + comp_off, raw_len) {
-            return false;
+        if !read_slot_pkg_bytes(
+            crate::kern_fs(),
+            desc.flash_offset as usize,
+            &mut slot_slice[comp_off..page_size],
+        ) {
+            return None;
         }
-        let slot_slice = unsafe { core::slice::from_raw_parts_mut(slot_vma as *mut u8, page_size) };
-        let ok = utils::codec::lzss_decompress_inplace(slot_slice, comp_off, page_size).is_ok();
-        if ok {
-            flush_instruction_pipeline();
+        let n = utils::codec::lzss_decompress_inplace(slot_slice, comp_off, page_size).ok()?;
+        if n == 0 || n > page_size {
+            return None;
         }
-        ok
+        n
     } else {
-        read_active_pkg_region(desc.flash_offset as usize, slot_vma, raw_len)
-    }
+        if !read_slot_pkg_bytes(
+            crate::kern_fs(),
+            desc.flash_offset as usize,
+            &mut slot_slice[..raw_len],
+        ) {
+            return None;
+        }
+        raw_len
+    };
+    trap_fill_page_tail(slot_slice, actual_len);
+    flush_instruction_pipeline();
+    Some(actual_len as u16)
 }
 
 #[cfg(feature = "krx_paged")]
@@ -388,20 +451,29 @@ fn fault_in_way(page_id: u16, is_demand: bool) -> Option<(usize, StreamedPageDes
     let slot = slot_mut();
     let slot_pid = slot.pid;
     let win = slot.window_mut()?;
+    // Sync 0-wait-state `.data.ramfunc` fast-hit timestamps before LRU victim selection.
+    win.cache.sync_lru_ticks(unsafe { WAY_CLOCK }, unsafe {
+        &*core::ptr::addr_of!(WAY_TICKS)
+    });
     let page_size = win.cache.page_size() as usize;
-    let (s, desc) = win
+    let (s, mut desc) = win
         .cache
         .alloc_way_for_miss(page_id, is_demand, read_block_entry_from_pkg)
         .ok()?;
+    let tick = win.cache.access_clock;
     let slot_byte_off = win.cache.slot_byte_offset(s);
-    if !stream_paged_way(slot_byte_off, page_size, &desc) {
+    let Some(actual_exec_size) = stream_paged_way(slot_byte_off, page_size, &desc) else {
         if let Some(w) = slot_mut().window_mut() {
             w.cache.invalidate_way(s);
         }
-        set_way_tag(s, 0xFFFF, 0);
+        set_way_tag(s, 0xFFFF, 0, 0);
         return None;
+    };
+    desc.exec_size = actual_exec_size;
+    if let Some(w) = slot_mut().window_mut() {
+        w.cache.ways[s].loaded_size = actual_exec_size;
     }
-    set_way_tag(s, page_id, desc.exec_size);
+    set_way_tag(s, page_id, actual_exec_size, tick);
     if is_demand && let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot_pid) {
         pcb.health.record_page_fault();
     }
@@ -418,7 +490,9 @@ fn fault_in_way(page_id: u16, is_demand: bool) -> Option<(usize, StreamedPageDes
 pub fn krx_page_fault(page_id: u16, func_offset: u16) -> usize {
     let fast_addr = krx_paged_hit_fast(page_id, func_offset);
     if fast_addr != 0 {
-        slot_mut().current_page = page_id;
+        let slot = slot_mut();
+        slot.current_page = page_id;
+        slot.current_slot = unsafe { WAY_LAST_SLOT };
         return fast_addr;
     }
     let slot = slot_mut();
@@ -973,23 +1047,31 @@ pub(crate) fn teardown_slot_and_hw(pid: kernel::proc::Pid, persist_tray: bool) {
             crate::orchestrator::status_tray_mut().clear_icon(pid);
         }
         #[cfg(not(test))]
-        {
-            let client_id = kernel::service::radio::ClientId::for_krx_pid(pid.0);
-            crate::radio_state()
-                .coord
-                .release_client_lock(&mut crate::kern_hw().radio, client_id);
-        }
+        crate::services::radio_mut().revoke_actor(kernel::service::radio::Actor::Proc(pid.0));
     }
     #[cfg(not(test))]
-    if crate::radio_state().coord.is_transmitting {
-        crate::radio_state()
-            .coord
-            .request_ptt_stop(&mut crate::kern_hw().radio);
+    {
+        let radio = crate::services::radio_mut();
+        if radio.is_tx() {
+            radio.request_tx_stop();
+        }
     }
     slot.is_loaded = false;
+    slot.is_paged = false;
     slot.entry_point = 0;
+    slot.l1_depth = 0;
+    slot.cached_l1_slot = 0xFF;
+    slot.inline_bmap_len = 0;
+    slot.pkg_ino = 0;
+    slot.file_size = 0;
     slot.status_bar_has_custom = false;
     slot.pkg_path.clear();
+    #[cfg(feature = "krx_paged")]
+    {
+        slot.window.shadow_stack.clear();
+        reset_way_tags(0, 512);
+    }
+    set_live_api_caps(0);
     #[cfg(feature = "filesystem")]
     crate::services::lang::unbind_app();
     super::fault::clear_loaded_pkg();
@@ -1077,13 +1159,25 @@ mod tests {
         {
             reset_way_tags(0x2000_1000, 1024);
             assert_eq!(krx_paged_hit_fast(0, 0), 0);
-            set_way_tag(2, 5, 600);
+            set_way_tag(2, 5, 600, 1);
             assert_eq!(
                 krx_paged_hit_fast(5, 0x40),
                 (0x2000_1000 + (2 << 10) + 0x40) | 1
             );
+            assert_eq!(unsafe { WAY_LAST_SLOT }, 2);
+            assert_eq!(unsafe { WAY_CLOCK }, 2);
+            assert_eq!(unsafe { WAY_TICKS[2] }, 2);
             assert_eq!(krx_paged_hit_fast(5, 600), 0); // out-of-bounds offset rejected
             assert_eq!(krx_paged_hit_fast(6, 0), 0); // miss
+
+            // Verify unused code page tail is filled with Thumb `udf #0` (0xDE00)
+            let mut page_buf = [0xAAu8; 16];
+            trap_fill_page_tail(&mut page_buf, 5);
+            assert_eq!(&page_buf[..6], &[0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA]);
+            assert_eq!(
+                &page_buf[6..],
+                &[0x00, 0xDE, 0x00, 0xDE, 0x00, 0xDE, 0x00, 0xDE, 0x00, 0xDE]
+            );
         }
     }
 }
