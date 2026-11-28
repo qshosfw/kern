@@ -43,11 +43,7 @@ __attribute__((visibility("hidden"))) extern const u8 dfu_hook_end[];
 static DfuSharedState g_state;
 
 static void root_emit_badge(const KrxApiTable* api, i16 x, const char* key, const char* lbl) {
-    KrxWidget d;
-    d.p0 = (const u8*)key; d.len0 = krx_strlen(key);
-    d.p1 = (const u8*)lbl; d.len1 = krx_strlen(lbl);
-    d.x = x; d.y = 54; d.a = 0u;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_KEY_BADGE, (u32)&d, 0u);
+    krx_ui_draw_key_badge(api, x, 54, (const u8*)key, (u8)krx_strlen(key), (const u8*)lbl, (u8)krx_strlen(lbl));
 }
 
 static void root_draw_softbar(

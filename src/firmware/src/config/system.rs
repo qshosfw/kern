@@ -15,7 +15,6 @@ pub struct SystemConfig {
     pub crc32: u32,
 }
 
-#[inline(never)]
 fn field_str<'a>(bytes: &'a [u8], default: &'a str, empty_is_default: bool) -> &'a str {
     let mut len = 0;
     while len < bytes.len() && bytes[len] != 0 && bytes[len] != b' ' {
@@ -92,7 +91,6 @@ impl SystemConfig {
         field_str(&self.custom_model, "Custom", true)
     }
 
-    #[inline(never)]
     pub fn set_custom_model(&mut self, s: &str) {
         self.custom_model = [b' '; 12];
         let bytes = utils::format::trim_ascii_bytes(s.as_bytes());

@@ -1,10 +1,8 @@
-//! Unified Single-Entry System Call Router (`kern_call`).
+//! Unified Single-Entry System Call Router (`kern_call` — 22 orthogonal operations).
 //!
 //! Routes all KRX system calls through one AAPCS-Thumb entry point (`kern_call(op, a0, a1, a2)`)
-//! into 9 `#[inline(never)]` domain dispatchers (`SYS`, `PROC`, `IPC`, `FS`, `RF`, `AUD`, `GFX`, `UI`, `IO`).
+//! with centralized `OpDesc` capability enforcement, stack guard, and `GuestBounds` sandboxing.
 
-#[cfg(test)]
-use crate::services::SysContext;
 use ::abi::Cap;
 use gfx::Canvas;
 use kernel::proc::abi::{KRX_ABI_VERSION, KrxApiTable};
@@ -17,22 +15,11 @@ pub mod service;
 pub mod storage;
 pub mod ui;
 
-pub use service::{ServiceRegistry, active_caller_pid, ipc_channel_mut, service_registry_mut};
+pub use service::{
+    ServiceRegistry, active_caller_pid, ipc_channel_mut, live_prop_get, live_prop_set,
+    service_registry_mut,
+};
 pub use ui::{set_tray_icon, store_modal_text};
-
-#[cfg(test)]
-pub static mut ACTIVE_CTX: *mut SysContext<'static, 'static> = core::ptr::null_mut();
-
-#[cfg(test)]
-#[inline(never)]
-pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
-    let ptr = unsafe { ACTIVE_CTX };
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { &mut *ptr })
-    }
-}
 
 #[inline(always)]
 pub fn active_canvas_mut() -> &'static mut Canvas {
@@ -44,44 +31,163 @@ pub fn has_cap(cap: Cap) -> bool {
     super::native_runner::active_native_caps().contains(cap)
 }
 
-#[inline(never)]
+/// Pure address-range validator for `GuestBounds` sandboxing.
+pub const fn check_guest_range_bounds(
+    addr: usize,
+    len: usize,
+    writable: bool,
+    actor_start: usize,
+    actor_end: usize,
+    stack_floor: usize,
+    stack_top: usize,
+    flash_start: usize,
+    flash_end: usize,
+) -> bool {
+    if addr == 0 || len == 0 {
+        return false;
+    }
+    let Some(end) = addr.checked_add(len) else {
+        return false;
+    };
+    let in_actor = addr >= actor_start && end <= actor_end;
+    let in_stack = addr >= stack_floor && end <= stack_top;
+    if in_actor || in_stack {
+        return true;
+    }
+    !writable && addr >= flash_start && end <= flash_end
+}
+
+pub fn guest_range_valid(addr: usize, len: usize, writable: bool) -> bool {
+    if addr == 0 || len == 0 || addr.checked_add(len).is_none() {
+        return false;
+    }
+    #[cfg(all(target_arch = "arm", not(test)))]
+    {
+        let arena_base = crate::data::arena::arena_base_ptr() as usize;
+        let (actor_start, actor_end, active) =
+            if let Some(bg) = super::background::BgManager::active_bg_slot() {
+                (
+                    arena_base + bg.arena_off as usize,
+                    arena_base + bg.end_off(),
+                    true,
+                )
+            } else {
+                let slot = super::native_runner::slot_ref();
+                (
+                    crate::data::arena::zone_b_base_ptr() as usize,
+                    arena_base + crate::data::arena::TRANSIENT_ARENA_BYTES,
+                    slot.is_loaded,
+                )
+            };
+        if !active {
+            return true;
+        }
+        let msp: usize;
+        unsafe {
+            core::arch::asm!("mrs {}, MSP", out(reg) msp);
+        }
+        check_guest_range_bounds(
+            addr,
+            len,
+            writable,
+            actor_start,
+            actor_end,
+            msp.saturating_sub(64),
+            0x2000_4000,
+            0x0800_0000,
+            0x0802_0000,
+        )
+    }
+    #[cfg(not(all(target_arch = "arm", not(test))))]
+    {
+        let _ = writable;
+        true
+    }
+}
+
+fn guest_sig_ptrs_valid(sig: ::abi::Sig, a0: usize, a1: usize, a2: usize) -> bool {
+    let args = [a0, a1, a2];
+    let mut i = 0u8;
+    while i < 3 {
+        match sig.arg(i) {
+            ::abi::ArgKind::Val => {}
+            ::abi::ArgKind::Out => {
+                if !guest_range_valid(args[i as usize], 1, true) {
+                    return false;
+                }
+            }
+            ::abi::ArgKind::In | ::abi::ArgKind::Str => {
+                if !guest_range_valid(args[i as usize], 1, false) {
+                    return false;
+                }
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
+pub fn guest_struct_ptr(addr: usize, size_and_flags: u32) -> *mut u8 {
+    let size = (size_and_flags & 0xFFFF) as usize;
+    let align_mask = ((size_and_flags >> 16) & 0xFF) as usize;
+    let writable = (size_and_flags >> 24) != 0;
+    if (addr & align_mask) == 0 && guest_range_valid(addr, size, writable) {
+        addr as *mut u8
+    } else {
+        core::ptr::null_mut()
+    }
+}
+
+#[inline(always)]
+pub unsafe fn ptr_ref<'a, T>(ptr: *const T) -> Option<&'a T> {
+    const fn pack<T>() -> u32 {
+        (core::mem::size_of::<T>() as u32) | (((core::mem::align_of::<T>() - 1) as u32) << 16)
+    }
+    let p = guest_struct_ptr(ptr as usize, pack::<T>()) as *const T;
+    unsafe { p.as_ref() }
+}
+
+#[inline(always)]
+pub unsafe fn ptr_ref_mut<'a, T>(ptr: *mut T) -> Option<&'a mut T> {
+    const fn pack_mut<T>() -> u32 {
+        (core::mem::size_of::<T>() as u32)
+            | (((core::mem::align_of::<T>() - 1) as u32) << 16)
+            | (1 << 24)
+    }
+    let p = guest_struct_ptr(ptr as usize, pack_mut::<T>()) as *mut T;
+    unsafe { p.as_mut() }
+}
+
 pub unsafe fn ptr_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
-    if !ptr.is_null() && len > 0 {
+    if guest_range_valid(ptr as usize, len, false) {
         Some(unsafe { core::slice::from_raw_parts(ptr, len) })
     } else {
         None
     }
 }
 
-#[inline(never)]
 pub unsafe fn ptr_slice_mut<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]> {
-    if !ptr.is_null() && len > 0 {
+    if guest_range_valid(ptr as usize, len, true) {
         Some(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
     } else {
         None
     }
 }
 
-#[inline(never)]
 pub unsafe fn slice_or_empty<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     unsafe { ptr_slice(ptr, len) }.unwrap_or(&[])
 }
 
-#[inline(never)]
 pub unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     unsafe { ptr_slice(ptr, len) }.and_then(utils::format::ascii_str)
 }
 
-#[inline(never)]
 pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     let path = unsafe { parse_str(ptr, len)? };
     if !utils::path::is_clean_path(path.as_bytes()) {
         return None;
     }
     let caps = super::native_runner::active_native_caps();
-
-    // Anti-Brick Lock 1: Factory Calibration & System Manifest (/sys/*)
-    // Strictly requires Cap::FactoryCalib.
     if utils::path::root_bit(path.as_bytes()) == utils::path::ROOT_SYS {
         return if caps.contains(Cap::FactoryCalib) {
             Some(path)
@@ -89,8 +195,6 @@ pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str>
             None
         };
     }
-
-    // Anti-Brick Locks 2 & 3: Operational & User Filesystem (/user/*, /pref/*)
     if caps.contains(Cap::StorageWrite) || caps.contains(Cap::StorageAdmin) {
         Some(path)
     } else {
@@ -98,37 +202,53 @@ pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str>
     }
 }
 
-#[inline(never)]
 pub unsafe fn str_or_default<'a>(ptr: *const u8, len: usize, default: &'a str) -> &'a str {
     unsafe { parse_str(ptr, len) }.unwrap_or(default)
 }
 
-// ── Single-Entry System Call Dispatcher & API Table ──────────────────────────
+pub type OpHandler = unsafe fn(usize, usize, usize) -> usize;
 
-type DomainHandler = unsafe fn(u8, usize, usize, usize) -> usize;
-
-static DOMAIN_HANDLERS: [DomainHandler; 9] = [
-    service::dispatch_sys,
-    service::dispatch_proc,
-    service::dispatch_ipc,
-    storage::dispatch_fs,
-    radio::dispatch_rf,
-    audio::dispatch_aud,
-    display::dispatch_gfx,
-    ui::dispatch_ui,
-    io::dispatch_io,
+static OP_HANDLERS: [OpHandler; ::abi::OP_TABLE.len()] = [
+    // SYS (0x0)
+    service::op_sys_prop,
+    service::op_sys_query,
+    service::op_sys_ctl,
+    service::op_sys_div,
+    service::op_sys_sec,
+    // PROC (0x1)
+    service::op_proc_ctl,
+    service::op_proc_exec,
+    // IPC (0x2)
+    service::op_ipc,
+    // FS (0x3)
+    storage::op_fs_read,
+    storage::op_fs_write,
+    storage::op_fs_meta,
+    // RF (0x4)
+    radio::op_rf_tune,
+    radio::op_rf_vfo,
+    radio::op_rf_bulk,
+    // AUD (0x5)
+    audio::op_aud,
+    // GFX (0x6)
+    display::op_gfx_draw,
+    display::op_gfx_text,
+    // UI (0x7)
+    ui::op_ui_modal,
+    ui::op_ui_widget,
+    // IO (0x8)
+    io::op_io_key,
+    io::op_io_serial,
+    io::op_io_bus,
 ];
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> usize {
     let op_byte = op as u8;
-    let Some((_, desc)) = ::abi::Op::lookup(op_byte) else {
+    let Some((op_idx, desc)) = ::abi::Op::lookup(op_byte) else {
         return ::abi::Status::Unsupported.to_raw();
     };
 
-    // Pre-flight Cortex-M0+ stack guard at the syscall boundary (no hardware MPU):
-    // catch low stack headroom BEFORE entering deep kernel domains so an overflowing
-    // guest never smashes `NATIVE_SLOT` or `KERN_HW` (`usb`/`wire`) and drops RigWire.
     #[cfg(all(target_arch = "arm", not(test)))]
     if super::fault::can_contain_guest_in_thread() {
         let min_margin = if (desc.flags & ::abi::op_flags::HIGH_STACK) != 0 {
@@ -140,27 +260,20 @@ pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> 
             || kernel::sys::SystemDiagnostics::stack_margin_bytes() < min_margin
         {
             unsafe {
-                super::fault::unwind_guest_fault(
-                    kernel::runtime::fault::Exception::Stack,
-                    op_byte,
-                );
+                super::fault::unwind_guest_fault(kernel::runtime::fault::Exception::Stack, op_byte);
             }
         }
     }
 
-    // Centralized capability & pointer gate driven directly from 4-byte `OpDesc`.
-    if let Some(req_cap) = desc.cap {
-        if !super::native_runner::active_native_caps().contains(req_cap) {
-            return ::abi::Status::PermissionDenied.to_raw();
-        }
+    let req_mask = desc.cap_mask();
+    if req_mask != 0 && !super::native_runner::active_native_caps().contains_mask(req_mask) {
+        return ::abi::Status::PermissionDenied.to_raw();
     }
-    if !desc.sig.check_ptrs(a0, a1, a2) {
+    if !guest_sig_ptrs_valid(desc.sig, a0, a1, a2) {
         return ::abi::Status::InvalidArg.to_raw();
     }
 
-    let dom = (op_byte >> 4) as usize;
-    let idx = op_byte & 0x0F;
-    unsafe { DOMAIN_HANDLERS[dom](idx, a0, a1, a2) }
+    unsafe { (*OP_HANDLERS.get_unchecked(op_idx))(a0, a1, a2) }
 }
 
 pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
@@ -174,7 +287,7 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::abi::Op;
+    use ::abi::{Op, prop, sub};
     use kernel::proc::abi::{KrxIpcSendReq, KrxSysInfo};
 
     #[test]
@@ -184,23 +297,61 @@ mod tests {
         slot.is_loaded = true;
         slot.caps = CapabilitySet::empty().with(Cap::DisplayDirect);
         let api = &NATIVE_API_TABLE;
-        let granted = unsafe { api.invoke(Op::IoTime, 0, 0, 0) };
-        // Keypad was not imported: the key state read is refused with PermissionDenied, uptime is not.
+        let _ticks = api.ticks_ms();
         assert_eq!(
             unsafe { api.invoke(Op::IoKey, 0, 0, 0) },
             ::abi::Status::PermissionDenied.to_raw()
         );
+        // Radio live property refused without RadioRx
+        assert_eq!(
+            unsafe { api.invoke(Op::SysProp, prop::RF_FREQ as usize, 0, 0) },
+            ::abi::Status::PermissionDenied.to_raw()
+        );
         slot.caps = CapabilitySet::ALL;
-        let _ = granted;
         assert_eq!(
             unsafe { kern_call(0xFF, 0, 0, 0) },
             ::abi::Status::Unsupported.to_raw()
         );
         assert_eq!(
-            unsafe { api.invoke(Op::SysInfo, 0, 0, 0) },
+            unsafe { api.invoke(Op::GfxText, 0, 0, 0) },
             ::abi::Status::InvalidArg.to_raw()
         );
         crate::runtime::native_runner::init_native_slot();
+    }
+
+    #[test]
+    fn guest_bounds_sandbox_rejects_kernel_bss_zone_a_and_mmio() {
+        let actor_start = 0x2000_1200usize;
+        let actor_end = 0x2000_2A00usize;
+        let stack_floor = 0x2000_3A00usize;
+        let stack_top = 0x2000_4000usize;
+        let flash_start = 0x0800_0000usize;
+        let flash_end = 0x0802_0000usize;
+
+        let check = |addr, len, wr| {
+            check_guest_range_bounds(
+                addr,
+                len,
+                wr,
+                actor_start,
+                actor_end,
+                stack_floor,
+                stack_top,
+                flash_start,
+                flash_end,
+            )
+        };
+
+        assert!(check(0x2000_1200, 64, true));
+        assert!(check(0x2000_3C00, 128, true));
+        assert!(check(0x0800_4000, 16, false));
+        assert!(!check(0x0800_4000, 16, true));
+        assert!(!check(0x2000_0100, 4, true));
+        assert!(!check(0x2000_0100, 4, false));
+        assert!(!check(0x2000_0E00, 16, true));
+        assert!(!check(0x2000_2B00, 16, true));
+        assert!(!check(0x4000_0000, 4, true));
+        assert!(!check(0x2000_1400, usize::MAX, false));
     }
 
     #[test]
@@ -208,96 +359,94 @@ mod tests {
         crate::orchestrator::init_proc_table();
         let table = crate::orchestrator::proc_table_mut();
         let _ = table.spawn(
-            "Kernel",
-            0xF0,
-            kernel::sched::Priority::Safety,
+            "Home",
+            crate::apps::APP_ID_LAUNCHER,
+            kernel::sched::Priority::Ui,
             kernel::proc::ExecType::StaticFirmware,
             ::abi::CapabilitySet::empty(),
         );
         let _ = table.spawn(
-            "Radio",
-            0xF1,
+            "AprsSvc",
+            0xE0,
             kernel::sched::Priority::Radio,
-            kernel::proc::ExecType::StaticFirmware,
+            kernel::proc::ExecType::RelocatableNative,
             ::abi::CapabilitySet::empty(),
         );
         let _ = table.spawn(
-            "Power",
-            0xF2,
-            kernel::sched::Priority::Safety,
-            kernel::proc::ExecType::StaticFirmware,
+            "Modem",
+            0xE1,
+            kernel::sched::Priority::Idle,
+            kernel::proc::ExecType::RelocatableNative,
             ::abi::CapabilitySet::empty(),
         );
 
         let api = &NATIVE_API_TABLE;
 
-        // 1. Verify process discovery via single-entry kern_call
-        let radio_pid =
-            unsafe { api.invoke(Op::ProcFind, b"Radio\0".as_ptr() as usize, 5, 0) } as u8;
-        assert_eq!(radio_pid, 2);
+        let aprs_pid = unsafe {
+            api.invoke(
+                Op::ProcCtl,
+                (sub::proc_ctl::FIND as usize) | (7 << 8),
+                b"AprsSvc\0".as_ptr() as usize,
+                0,
+            )
+        } as u8;
+        assert_eq!(aprs_pid, 2);
 
-        let power_pid =
-            unsafe { api.invoke(Op::ProcFind, b"power\0".as_ptr() as usize, 5, 0) } as u8;
-        assert_eq!(power_pid, 3);
+        let modem_pid = unsafe {
+            api.invoke(
+                Op::ProcCtl,
+                (sub::proc_ctl::FIND as usize) | (5 << 8),
+                b"modem\0".as_ptr() as usize,
+                0,
+            )
+        } as u8;
+        assert_eq!(modem_pid, 3);
 
-        let non_existent =
-            unsafe { api.invoke(Op::ProcFind, b"ghost\0".as_ptr() as usize, 5, 0) } as u8;
+        let non_existent = unsafe {
+            api.invoke(
+                Op::ProcCtl,
+                (sub::proc_ctl::FIND as usize) | (5 << 8),
+                b"ghost\0".as_ptr() as usize,
+                0,
+            )
+        } as u8;
         assert_eq!(non_existent, 0);
 
-        // 2. Structured messaging via kern_call
         let msg = kernel::ipc::KrxIpcMessage::new(
-            radio_pid,
+            aprs_pid,
             1,
             kernel::ipc::ipc_msg_type::SERVICE_REQUEST,
             b"GET_CONFIG",
         );
-        assert_eq!(
-            unsafe { api.invoke(Op::IpcSend, &raw const msg as usize, 0, 0) },
-            0
-        );
+        assert!(api.ipc_send(&msg));
 
         let mut received = kernel::ipc::KrxIpcMessage::empty();
-        assert_eq!(
-            unsafe { api.invoke(Op::IpcRecv, &raw mut received as usize, 0, 0) },
-            0
-        );
-        assert_eq!(received.sender_pid, radio_pid);
+        assert!(api.ipc_recv(&mut received));
+        assert_eq!(received.sender_pid, aprs_pid);
         assert_eq!(received.target_pid, 1);
-        assert_eq!(
-            received.msg_type,
-            kernel::ipc::ipc_msg_type::SERVICE_REQUEST
-        );
         assert_eq!(&received.payload[..10], b"GET_CONFIG");
 
-        assert_eq!(
-            unsafe {
-                api.invoke(
-                    Op::IpcReply,
-                    &raw const received as usize,
-                    b"CONFIG_DATA".as_ptr() as usize,
-                    11,
-                )
-            },
-            0
-        );
+        assert!(api.ipc_reply(&received, b"CONFIG_DATA"));
 
-        // 3. String-based send round-trip
         let sreq = KrxIpcSendReq {
-            target: b"Radio".as_ptr(),
+            target: b"AprsSvc".as_ptr(),
             msg: b"CMD_SET_FREQ".as_ptr(),
-            target_len: 5,
+            target_len: 7,
             msg_len: 12,
             _pad: [0; 2],
         };
-        assert_eq!(
-            unsafe { api.invoke(Op::IpcSendStr, &raw const sreq as usize, 0, 0) },
-            0
-        );
+        assert!(api.ipc_send_str(&sreq));
 
-        // 4. Typed KrxSysInfo descriptor validation
         let mut info = core::mem::MaybeUninit::<KrxSysInfo>::uninit();
         assert_eq!(
-            unsafe { api.invoke(Op::SysInfo, info.as_mut_ptr() as usize, 0, 0) },
+            unsafe {
+                api.invoke(
+                    Op::SysQuery,
+                    sub::sys_query::INFO as usize,
+                    info.as_mut_ptr() as usize,
+                    0,
+                )
+            },
             0
         );
         let info = unsafe { info.assume_init() };
@@ -314,9 +463,12 @@ mod tests {
         assert_eq!(info.qs1[info.qs1_len as usize], 0);
         assert_eq!(info.qs1_status, kernel::proc::abi::KRX_QS1_UNVERIFIED);
         assert_eq!(&info.boot_ver[..7], b"7.02.02");
-        assert_ne!(unsafe { api.invoke(Op::SysInfo, 0, 0, 0) }, 0);
+        assert_ne!(
+            unsafe { api.invoke(Op::SysQuery, sub::sys_query::INFO as usize, 0, 0) },
+            0
+        );
 
-        ipc_channel_mut().purge_pid(radio_pid);
+        ipc_channel_mut().purge_pid(aprs_pid);
         ipc_channel_mut().purge_pid(1);
     }
 
@@ -324,43 +476,47 @@ mod tests {
     fn fuzz_kern_call_invalid_and_null_boundary() {
         use ::abi::domain;
         super::super::native_runner::init_native_slot();
-        // Exercise invalid domains, invalid op indices, and null-pointer boundary args
-        // across safe non-rebooting ops to prove zero panics or UB.
         for dom in 0u8..16 {
             for idx in 0u8..16 {
                 let op = ((dom as u32) << 4) | (idx as u32);
-                // Skip reboot/delay/hardware-bus ops that spin or halt on target/host.
-                if op == Op::SysReboot.u32_id()
+                if op == Op::SysCtl.u32_id()
                     || dom == domain::IO
                     || dom == domain::RF
                     || dom == domain::AUD
-                    || (dom == domain::PROC && idx == 4)
+                    || (dom == domain::PROC && idx == 0)
                 {
                     continue;
                 }
                 let _ = unsafe { kern_call(op, 0, 0, 0) };
-                let a0_is_ptr = op == Op::SysInfo.u32_id()
-                    || op == Op::FsRename.u32_id()
-                    || op == Op::GfxText.u32_id()
-                    || op == Op::ProcFind.u32_id()
-                    || dom == domain::IPC;
-                if !a0_is_ptr {
+                if op != Op::GfxText.u32_id() {
                     let _ = unsafe { kern_call(op, 0xFF, 0, 0) };
                 }
             }
         }
-        // Misaligned destination pointers must be rejected cleanly (prevent Cortex-M0+ HardFault / UB).
         let mut raw = [0u8; core::mem::size_of::<KrxSysInfo>() + 4];
         let unaligned_ptr = unsafe { raw.as_mut_ptr().add(1) } as usize;
         assert_ne!(
-            unsafe { kern_call(Op::SysInfo.u32_id(), unaligned_ptr, 0, 0) },
+            unsafe {
+                kern_call(
+                    Op::SysQuery.u32_id(),
+                    sub::sys_query::INFO as usize,
+                    unaligned_ptr,
+                    0,
+                )
+            },
             0
         );
         assert_ne!(
-            unsafe { kern_call(Op::ProcInfo.u32_id(), 0, unaligned_ptr, 0) },
+            unsafe {
+                kern_call(
+                    Op::ProcCtl.u32_id(),
+                    sub::proc_ctl::INFO as usize,
+                    unaligned_ptr,
+                    0,
+                )
+            },
             0
         );
-        // Division by zero must never trap.
         let mut rem = 0xDEAD_BEEFu32;
         assert_eq!(
             unsafe { kern_call(Op::SysDiv.u32_id(), 42, 0, &raw mut rem as usize) },

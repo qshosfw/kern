@@ -194,26 +194,25 @@ pub enum KrxLaunchError {
 // diagnostics so wording never drifts between surfaces.
 utils::static_bytes!(
     static LAUNCH_ERR_HELP = b"\
-Not installed.\nSync via Kern Dock.\0\
-Storage read failed.\0\
-Corrupt package.\nReinstall in Dock.\0\
-CRC mismatch.\nReinstall in Dock.\0\
+Not installed.\0\
+Read failed.\0\
+Corrupt package.\0\
+CRC mismatch.\0\
 Missing metadata.\0\
 Missing code.\0\
 Unsupported cap.\0\
-Exceeds 6KB RAM.\0\
-Low stack RAM.\0\
-Relocation failed.\0\
-ABI mismatch.\nUpdate app or OS.\0\
-Exceeds 6KB limit.\0\
+Out of RAM.\0\
+Low stack.\0\
+Reloc failed.\0\
+ABI mismatch.\0\
+Image too large.\0\
 Start failed.\0\
 Invalid entry.\0\
-Incomplete package.\nReinstall in Dock.\0\
-Unsupported profile.\0";
+Truncated file.\0\
+Bad profile.\0";
 );
 
 impl KrxLaunchError {
-    #[inline(never)]
     pub const fn index(&self) -> u8 {
         match self {
             Self::FileNotFound => 0,
@@ -341,7 +340,6 @@ pub struct SectionHeader {
 impl SectionHeader {
     pub const SIZE: usize = 4;
 
-    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -420,7 +418,6 @@ const _: () = {
 impl SectionIdentity {
     pub const SIZE: usize = 40;
 
-    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -548,7 +545,6 @@ impl CapBinding {
     pub const FLAG_PIN_PROVIDER: u16 = 1 << 3;
 
     /// Parse a `CapBinding` record from little-endian bytes (6-byte or 8-byte record).
-    #[inline(never)]
     pub fn parse(buf: &[u8], default_slot_idx: u16) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -616,7 +612,6 @@ impl SectionType {
         KrxExecType::from_u8(self.exec_type)
     }
 
-    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -648,11 +643,85 @@ impl SectionType {
 /// Compact, zero-allocation metadata summary extracted from a KRX package header.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KrxAuxSections<'a> {
+    pub assets: Option<&'a [u8]>,
     pub block_map: Option<&'a [u8]>,
     pub leaf_map: Option<&'a [u8]>,
     pub service_exports: Option<&'a [u8]>,
     pub config: Option<&'a [u8]>,
+    pub seal: Option<&'a [u8]>,
     pub actions: Option<&'a [u8]>,
+}
+
+/// Canonical 128-bit SDK/System Package Signing Key for `SECTION_SEAL` (`0x0008`).
+pub const KRX_SEAL_KEY: [u8; 16] = *b"KERN-KRX-SEAL-V2";
+pub const KRX_SEAL_DOMAIN: &[u8] = b"KRX-SEAL-V1";
+
+/// Capabilities in the Signed System Tier requiring a valid `SECTION_SEAL` (`0x0008`).
+pub const PRIVILEGED_CAP_MASK: u32 = (1u32 << (::abi::Cap::FactoryCalib.bit() & 31))
+    | (1u32 << (::abi::Cap::RawPeripheral.bit() & 31))
+    | (1u32 << (::abi::Cap::StorageAdmin.bit() & 31));
+
+/// 32-byte ($2^5$) Cryptographic Capability & Payload Seal (`SECTION_SEAL = 0x0008`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct KrxSeal {
+    pub version: u8,
+    pub alg: u8,
+    pub flags: u16,
+    pub cap_mask: u32,
+    pub payload_crc32: u32,
+    pub min_abi: u16,
+    pub exec_type: u8,
+    pub profile_raw: u8,
+    pub mac_tag: [u8; 16],
+}
+
+const _: () = assert!(core::mem::size_of::<KrxSeal>() == 32);
+
+impl KrxSeal {
+    pub const SIZE: usize = 32;
+    pub const VERSION_V1: u8 = 1;
+    pub const ALG_ASCON128_MAC: u8 = 1;
+
+    pub fn nonce_for_title(title: &str) -> [u8; 16] {
+        let mut nonce = [0u8; 16];
+        let b = title.as_bytes();
+        let n = b.len().min(16);
+        nonce[..n].copy_from_slice(&b[..n]);
+        nonce
+    }
+
+    pub fn verify_summary(summary: &KrxSummary<'_>, exec: &SectionExecution) -> bool {
+        let Some(body) = summary.aux.seal else {
+            return false;
+        };
+        if body.len() < Self::SIZE
+            || body[0] != Self::VERSION_V1
+            || body[1] != Self::ALG_ASCON128_MAC
+        {
+            return false;
+        }
+        let cap_mask = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+        let payload_crc = u32::from_le_bytes([body[8], body[9], body[10], body[11]]);
+        let min_abi = u16::from_le_bytes([body[12], body[13]]);
+        let exec_type = body[14];
+        let profile_raw = body[15];
+        if cap_mask != summary.caps.raw()
+            || payload_crc == 0
+            || payload_crc != summary.preamble.payload_crc32
+            || min_abi != summary.abi
+            || exec_type != (summary.exec_type as u8)
+            || profile_raw != summary.profile(exec).raw_code()
+        {
+            return false;
+        }
+        let mut tag = [0u8; 16];
+        tag.copy_from_slice(&body[16..32]);
+        let nonce = Self::nonce_for_title(summary.title.unwrap_or("App"));
+        crypto::ascon::Ascon128::new(KRX_SEAL_KEY)
+            .verify_mac(&nonce, KRX_SEAL_DOMAIN, &body[..16], &tag)
+            .is_ok()
+    }
 }
 
 /// Declarative App Config Header (`SECTION_CONFIG = 0x0007`, 16 bytes)
@@ -870,10 +939,12 @@ impl<'a> Default for KrxSummary<'a> {
                 reserved: [0; 2],
             },
             aux: KrxAuxSections {
+                assets: None,
                 block_map: None,
                 leaf_map: None,
                 service_exports: None,
                 config: None,
+                seal: None,
                 actions: None,
             },
         }
@@ -893,7 +964,6 @@ impl KrxPreamble {
         Self::scan_hdr_str(hdr, off, true)
     }
 
-    #[inline(never)]
     fn scan_hdr_str(hdr: &[u8], off: u16, packed: bool) -> Option<&str> {
         let s = off as usize;
         if s < Self::SIZE || s >= hdr.len() {
@@ -929,7 +999,6 @@ impl KrxPreamble {
     }
 
     /// Zero-allocation, single-pass inspection of a KRX package header buffer into uninitialized `out`.
-    #[inline(never)]
     pub fn summarize_into<'a, 'b>(
         buf: &'a [u8],
         out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
@@ -993,10 +1062,12 @@ impl KrxPreamble {
                     }
                     out.has_exec = true;
                 }
+                SECTION_ASSETS => out.aux.assets = Some(body),
                 SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
                 SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
                 SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),
                 SECTION_CONFIG => out.aux.config = Some(body),
+                SECTION_SEAL => out.aux.seal = Some(body),
                 SECTION_ACTIONS => out.aux.actions = Some(body),
                 _ => {}
             }
@@ -1017,6 +1088,31 @@ impl KrxPreamble {
         Ok(unsafe { summary.assume_init() })
     }
 
+    /// Scan a `SECTION_ASSETS (0x0004)` body slice for `want_kind` (`ASSET_ICON_8`, `ASSET_ICON_16`, `ASSET_ICON_TRAY`).
+    pub fn find_icon_in_assets<'a>(
+        mut assets: &'a [u8],
+        want_kind: u8,
+    ) -> Option<(u8, u8, &'a [u8])> {
+        while assets.len() >= 4 {
+            let ap = assets.as_ptr();
+            let blen = unsafe { *ap.add(3) } as usize;
+            if 4 + blen > assets.len() {
+                break;
+            }
+            if unsafe { *ap } == want_kind {
+                return Some(unsafe {
+                    (*ap.add(1), *ap.add(2), assets.get_unchecked(4..4 + blen))
+                });
+            }
+            let step = (4 + blen + 3) & !3;
+            if step >= assets.len() {
+                break;
+            }
+            assets = unsafe { assets.get_unchecked(step..) };
+        }
+        None
+    }
+
     /// Look up a self-contained icon bitmap (`ASSET_ICON_8`, `ASSET_ICON_16`, `ASSET_ICON_TRAY`)
     /// inside a package header's `SECTION_ASSETS (0x0004)` without allocating or expanding `KrxSummary`.
     pub fn find_icon_asset<'a>(buf: &'a [u8], want_kind: u8) -> Option<(u8, u8, &'a [u8])> {
@@ -1034,23 +1130,11 @@ impl KrxPreamble {
                 break;
             }
             if sec_id == SECTION_ASSETS {
-                let mut assets = unsafe { rest.get_unchecked(SectionHeader::SIZE..sec_len) };
-                while assets.len() >= 4 {
-                    let ap = assets.as_ptr();
-                    let blen = unsafe { *ap.add(3) } as usize;
-                    if 4 + blen > assets.len() {
-                        break;
-                    }
-                    if unsafe { *ap } == want_kind {
-                        return Some(unsafe {
-                            (*ap.add(1), *ap.add(2), assets.get_unchecked(4..4 + blen))
-                        });
-                    }
-                    let step = (4 + blen + 3) & !3;
-                    if step >= assets.len() {
-                        break;
-                    }
-                    assets = unsafe { assets.get_unchecked(step..) };
+                if let Some(hit) = Self::find_icon_in_assets(
+                    unsafe { rest.get_unchecked(SectionHeader::SIZE..sec_len) },
+                    want_kind,
+                ) {
+                    return Some(hit);
                 }
             }
             let step = (sec_len + 3) & !3;

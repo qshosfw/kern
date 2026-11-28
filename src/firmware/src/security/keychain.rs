@@ -75,7 +75,6 @@ impl PackedStorageKey {
     }
 }
 
-#[inline(never)]
 pub(crate) fn compute_hw_mac(
     uid: &[u8; 12],
     nonce: &[u8; 16],
@@ -88,7 +87,6 @@ pub(crate) fn compute_hw_mac(
     Ascon128::new(key16).compute_mac(nonce, ident, data)
 }
 
-#[inline(never)]
 fn key_valid(
     filesystem: &mut SystemStorage,
     path: &str,
@@ -101,7 +99,6 @@ fn key_valid(
         && &header == ident
 }
 
-#[inline(never)]
 fn fill_rand(trng: &mut HardwareTrng, buf: &mut [u8]) {
     trng.fill_bytes(buf, bsp::entropy::sample_hardware_noise());
 }
@@ -115,7 +112,6 @@ fn init_device_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid:
     let _ = filesystem.write_struct(KEY_PATHS[0], &dev_key);
 }
 
-#[inline(never)]
 pub fn write_passcode_key(
     filesystem: &mut SystemStorage,
     trng: &mut HardwareTrng,
@@ -170,7 +166,6 @@ pub fn write_passcode_key(
         .map_err(|_| ())
 }
 
-#[inline(never)]
 pub fn write_storage_key(
     filesystem: &mut SystemStorage,
     trng: &mut HardwareTrng,
@@ -206,7 +201,6 @@ pub fn write_storage_key(
         .map_err(|_| ())
 }
 
-#[inline(never)]
 pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     let uid = bsp::uid::read_mcu_uid();
     let mut trng = HardwareTrng::new();
@@ -246,7 +240,6 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     }
 }
 
-#[inline(never)]
 pub fn xor_derived_key(
     uid: &[u8; 12],
     seed: &[u8],
@@ -275,7 +268,6 @@ pub fn derive_passcode_kek(
 }
 
 /// Derives a domain-separated, UID-bound 128-bit `FileSystemDriver` key from the 256-bit master key.
-#[inline(never)]
 pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
     let mut perm = crypto::ascon::AsconPermutation::new();
     // Domain tag: "KRN_FS01"

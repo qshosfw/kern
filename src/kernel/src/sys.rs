@@ -99,7 +99,6 @@ impl SystemDiagnostics {
     /// Paint unused stack area with a sentinel pattern (0xDEADBEEF) to allow high-assurance watermarking.
     ///
     /// Fills words between `_stack_end` (end of static BSS/DATA/heap) and the current `MSP` - safety margin.
-    #[inline(never)]
     pub fn paint_stack() {
         #[cfg(target_arch = "arm")]
         {
@@ -205,7 +204,6 @@ impl SystemDiagnostics {
     }
 
     /// Calculate current stack margin remaining (distance between MSP and _stack_end)
-    #[inline(never)]
     pub fn stack_margin_bytes() -> usize {
         #[cfg(target_arch = "arm")]
         {

@@ -25,7 +25,6 @@ impl ProgressHook {
 
 /// Key Derivation Function (PBKDF) using Ascon sponge permutation with in-word PRF stretching,
 /// watchdog feeding, and optional progress callback.
-#[inline(never)]
 pub fn derive_master_key(
     mcu_uid: &[u8; 12],
     user_passcode: &[u8],

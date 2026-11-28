@@ -5,8 +5,6 @@ use crate::config::MasterConfig;
 #[cfg_attr(test, allow(unused_imports))]
 use crate::hardware::SystemHardware;
 use crate::services::RadioState;
-use core::cell::RefCell;
-use cortex_m::interrupt::Mutex;
 #[cfg_attr(test, allow(unused_imports))]
 use cortex_m_rt::{entry, exception};
 use drivers::battery::SystemPower;
@@ -14,7 +12,6 @@ use drivers::battery::SystemPower;
 use drivers::bk4829::Bk4829;
 #[cfg_attr(test, allow(unused_imports))]
 use drivers::st7565::St7565;
-use heapless::Deque;
 use kernel::event::Event;
 
 #[cfg_attr(test, allow(unused_imports))]
@@ -38,10 +35,9 @@ pub mod services;
 pub mod system;
 
 pub use crate::apps::AppRegistry;
-pub use crate::services::SysContext;
 
-/// Global event queue for zero-alloc event-driven kernel dispatch
-pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 6>>> = Mutex::new(RefCell::new(Deque::new()));
+/// Global lock-free 16-slot event ring for event-driven microkernel dispatch.
+pub static EVENT_QUEUE: kernel::ipc::EventRing<Event, 16> = kernel::ipc::EventRing::new();
 
 #[used]
 #[unsafe(link_section = ".uninit")]
@@ -75,7 +71,6 @@ pub static mut CANVAS: gfx::Canvas = gfx::Canvas::new();
 pub static mut AUDIO_CAPTURE: drivers::audio::AudioCaptureDriver<bsp::BspVoiceAdc> =
     drivers::audio::AudioCaptureDriver::new(bsp::BspVoiceAdc);
 
-#[inline(never)]
 pub fn master_config() -> &'static mut MasterConfig {
     unsafe { (*core::ptr::addr_of_mut!(MASTER_CONFIG)).assume_init_mut() }
 }
@@ -85,7 +80,6 @@ pub fn master_config_ref() -> &'static MasterConfig {
     master_config()
 }
 
-#[inline(never)]
 pub fn radio_state() -> &'static mut RadioState {
     unsafe { (*core::ptr::addr_of_mut!(RADIO_STATE)).assume_init_mut() }
 }
@@ -95,34 +89,26 @@ pub fn radio_state_ref() -> &'static RadioState {
     radio_state()
 }
 
-#[inline(never)]
 pub fn system_canvas() -> &'static mut gfx::Canvas {
     unsafe { &mut *core::ptr::addr_of_mut!(CANVAS) }
 }
 
-#[inline(never)]
 pub fn power_service() -> &'static mut SystemPower {
     unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) }
 }
 
-#[inline(never)]
 pub fn calibration_mut() -> &'static mut services::calibration::SystemCalibration {
     unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) }
 }
 
-#[inline(never)]
 pub fn audio_capture_mut() -> &'static mut drivers::audio::AudioCaptureDriver<bsp::BspVoiceAdc> {
     unsafe { &mut *core::ptr::addr_of_mut!(AUDIO_CAPTURE) }
 }
 
-#[cfg(not(test))]
-#[inline(never)]
 pub fn kern_hw() -> &'static mut SystemHardware<'static> {
     unsafe { (*core::ptr::addr_of_mut!(KERN_HW)).assume_init_mut() }
 }
 
-#[cfg(not(test))]
-#[inline(never)]
 pub fn kern_fs() -> &'static mut crate::services::SystemStorage<'static> {
     unsafe { (*core::ptr::addr_of_mut!(KERN_FS)).assume_init_mut() }
 }
@@ -222,7 +208,6 @@ unsafe extern "C" fn pre_init() {
 }
 
 /// Bind active factory/user calibration bytes and battery discharge curve to runtime drivers.
-#[inline(never)]
 pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a, bsp::RadioBus>) {
     let calib = calibration_mut();
     radio.attach_calibration(calib.raw_bytes());
@@ -288,6 +273,23 @@ fn handoff(hw: &mut SystemHardware) {
     apply_active_calibration(&mut hw.radio);
     system::restore_from_config(hw);
 
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
+    {
+        let uid = bsp::uid::read_mcu_uid();
+        let mut key_seed = [0u8; 16];
+        key_seed[..12].copy_from_slice(&uid);
+        let wire_key = crypto::ascon::Ascon128::new(key_seed).compute_mac(
+            b"KERN-RW2-UID-KEY",
+            &[],
+            b"RIGWIRE2",
+        );
+        #[cfg(feature = "filesystem")]
+        let require_writes = crate::security::passcode::is_passcode_set(hw.filesystem);
+        #[cfg(not(feature = "filesystem"))]
+        let require_writes = false;
+        hw.wire.session.set_auth_key(wire_key, require_writes);
+    }
+
     hw.orchestrator
         .set_startup_app(crate::apps::APP_ID_LAUNCHER);
 
@@ -332,12 +334,10 @@ static mut KERN_BOARD: core::mem::MaybeUninit<Board> = core::mem::MaybeUninit::u
 static mut KERN_FLASH: core::mem::MaybeUninit<drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>> =
     core::mem::MaybeUninit::uninit();
 
-#[cfg(not(test))]
 #[unsafe(link_section = ".uninit")]
 static mut KERN_FS: core::mem::MaybeUninit<crate::services::SystemStorage<'static>> =
     core::mem::MaybeUninit::uninit();
 
-#[cfg(not(test))]
 #[unsafe(link_section = ".uninit")]
 static mut KERN_HW: core::mem::MaybeUninit<SystemHardware<'static>> =
     core::mem::MaybeUninit::uninit();
@@ -400,16 +400,10 @@ fn main() -> ! {
         core::ptr::write(core::ptr::addr_of_mut!((*p).filesystem), filesystem);
         #[cfg(feature = "usb")]
         (*p).usb.init_zeroed();
-        #[cfg(feature = "uart")]
-        core::ptr::write(
-            core::ptr::addr_of_mut!((*p).uart),
-            drivers::uart::HardwareUart::new(bsp::Uart1Serial),
-        );
         #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-        drivers::wire::WireDriver::init_in_place(
+        kernel::wire::WireEngine::init_in_place(
             core::ptr::addr_of_mut!((*p).wire),
             hardware::SystemSerialPort::new(),
-            bsp::BspTime,
         );
         &mut *p
     };

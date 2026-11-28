@@ -16,7 +16,6 @@ use crypto::buffer::SecretBuf;
 use crypto::trng::HardwareTrng;
 
 /// Initializes Passcode state on boot:
-#[inline(never)]
 pub fn unwrap_master_key(
     filesystem: &mut SystemStorage,
     uid: &[u8; 12],
@@ -46,7 +45,6 @@ pub fn unwrap_master_key(
 
 /// - If passcode is active: locks session and zeroizes master key.
 /// - If passcode is inactive: derives default storage key and unlocks session.
-#[inline(never)]
 pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeState) {
     if is_passcode_set(filesystem) {
         state.lock();
@@ -67,7 +65,6 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
 }
 
 /// Verifies user passcode against `/sys/passcode.key` with optional progress reporting.
-#[inline(never)]
 pub fn verify_passcode(
     filesystem: &mut SystemStorage,
     passcode: &[u8],
@@ -132,7 +129,6 @@ pub fn verify_passcode(
 
 /// Sets or updates passcode preferences and re-wraps storage master key with optional progress reporting.
 /// `opt_flags` holds `PASSCODE_FLAG_{EXPOSE_LEN|STEALTH|DIGITS_ONLY}` bits.
-#[inline(never)]
 pub fn set_passcode(
     filesystem: &mut SystemStorage,
     state: &mut PasscodeState,
@@ -157,7 +153,8 @@ pub fn set_passcode(
 
     let flags = PASSCODE_FLAG_ENABLED
         | PASSCODE_FLAG_LOCK_BOOT
-        | (opt_flags & (PASSCODE_FLAG_EXPOSE_LEN | PASSCODE_FLAG_STEALTH | PASSCODE_FLAG_DIGITS_ONLY));
+        | (opt_flags
+            & (PASSCODE_FLAG_EXPOSE_LEN | PASSCODE_FLAG_STEALTH | PASSCODE_FLAG_DIGITS_ONLY));
 
     super::keychain::write_passcode_key(
         filesystem,

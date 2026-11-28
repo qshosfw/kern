@@ -55,6 +55,7 @@ class KernDockApp(Adw.Application):
         self._handset_visible = bool(self.runtime.config.get("ui.show_handset", True))
         self._quitting = False
         self._updating_nav = False
+        self._phone = False
 
     def do_activate(self) -> None:
         if self.win is not None:
@@ -75,11 +76,12 @@ class KernDockApp(Adw.Application):
 
         self.win = Adw.ApplicationWindow(application=self, title=APP_NAME)
         self.win.set_icon_name(APP_ID)
-        self.win.set_size_request(380, 600)
+        self.win.set_size_request(360, 480)
 
         self.runtime.on_present_window = lambda: GLib.idle_add(self._present_window)
         self.runtime.on_hide_window = lambda: GLib.idle_add(lambda: (self.win.set_visible(False), False)[1])
         self.runtime.on_toggle_mini = lambda: GLib.idle_add(lambda: (self._set_mini_mode(not self._mini_mode), False)[1])
+        self.runtime.mini_mode_state = lambda: self._mini_mode
         self.runtime.on_navigate_page = lambda pid: GLib.idle_add(lambda: (self._open_tab(pid), False)[1])
         self.runtime.on_quit = lambda: GLib.idle_add(self._force_quit)
 
@@ -149,8 +151,8 @@ class KernDockApp(Adw.Application):
         )
         self.terminal_view = TerminalView(self.runtime, on_toast=self._toast)
 
+        # Handset stage always mirrors the live radio; clip scrubbing/playback lives in the Capture preview.
         self.stage.on_rec_event = self.capture_view.capture_event
-        self.stage.playback_override = lambda: self.capture_view.playback_frame_if_active(self._active_tab_id() == "capture")
 
         # --- Register Core Declarative Pages ---
         for spec in (
@@ -174,7 +176,7 @@ class KernDockApp(Adw.Application):
         self._sync_pages()
 
         # Open pinned non-closable Home tab
-        self._open_tab("overview", pinned=True)
+        self._open_tab("overview", pinned=True, reveal=False)
 
         # Event subscriptions
         self.runtime.events.subscribe("link.connected", lambda _e: (self._stop_connect_pulse(), self._refresh_chrome()), main_thread=True)
@@ -212,6 +214,7 @@ class KernDockApp(Adw.Application):
         self.left_pane = Adw.ToolbarView()
         self.left_pane.add_css_class("handset-pane")
         left_hdr = Adw.HeaderBar(show_end_title_buttons=False)
+        self.left_hdr = left_hdr
 
         # GNOME HIG Radio Connection MenuButton
         self.switcher_btn = Gtk.MenuButton(tooltip_text="Select radio connection")
@@ -273,13 +276,26 @@ class KernDockApp(Adw.Application):
         self.hdr_rec_dot.add_css_class("status-dot")
         self.hdr_rec_dot.add_css_class("rec")
 
+        # Phone header (Phosh / narrow): tab overview button + active page title replace the inline TabBar
+        self.phone_tab_btn = Adw.TabButton(view=self.tab_view, action_name="overview.open", visible=False, margin_start=6, valign=Gtk.Align.CENTER)
+        self.phone_tab_btn.set_tooltip_text("Show Tabs")
+        self.phone_title = Adw.WindowTitle(title="Home", hexpand=True, visible=False)
+        self.phone_new_tab_btn = Gtk.MenuButton(icon_name="tab-new-symbolic", tooltip_text="Open Tool Tab", visible=False)
+        self.phone_new_tab_btn.add_css_class("flat")
+        self.phone_new_tab_popover = Gtk.Popover()
+        self.phone_new_tab_btn.set_popover(self.phone_new_tab_popover)
+        self.tab_view.connect("notify::selected-page", lambda tv, _p: self.phone_title.set_title(tv.get_selected_page().get_title() if tv.get_selected_page() else ""))
+
         end_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, valign=Gtk.Align.CENTER, margin_start=4, margin_end=6)
         end_box.append(self.hdr_rec_dot)
+        end_box.append(self.phone_new_tab_btn)
         end_box.append(menu_b)
         end_box.append(Gtk.WindowControls(side=Gtk.PackType.END))
 
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, hexpand=True)
         top_row.add_css_class("top-tab-header")
+        top_row.append(self.phone_tab_btn)
+        top_row.append(self.phone_title)
         top_row.append(self.tab_bar)
         top_row.append(end_box)
         self.ws_hdr = Gtk.WindowHandle(child=top_row)
@@ -298,9 +314,22 @@ class KernDockApp(Adw.Application):
         ws_view.set_content(ws_body)
 
         # Clean 2-Pane Split: Left Big Radio + Right Native Tabbed Workspace
+        self.tab_overview = Adw.TabOverview(view=self.tab_view, child=ws_view, enable_new_tab=False, hexpand=True)
         self.full_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=True, vexpand=True)
         self.full_box.append(self.left_pane)
-        self.full_box.append(ws_view)
+        self.full_box.append(self.tab_overview)
+
+        # Phone navigation (Phosh / narrow windows): bottom view switcher flips between Radio and Tools.
+        # The view stack only holds empty placeholders; the switcher drives pane visibility so no
+        # widget is ever reparented during breakpoint allocation.
+        self.phone_pages = Adw.ViewStack()
+        self.phone_pages.add_titled_with_icon(Gtk.Box(), "radio", "Radio", "org.kernos.Dock-symbolic")
+        self.phone_pages.add_titled_with_icon(Gtk.Box(), "tools", "Tools", "view-grid-symbolic")
+        self.phone_pages.connect("notify::visible-child-name", lambda *_a: self._sync_layout())
+        self.phone_switcher = Adw.ViewSwitcherBar(stack=self.phone_pages, reveal=False)
+        full_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, vexpand=True)
+        full_wrap.append(self.full_box)
+        full_wrap.append(self.phone_switcher)
 
         # Compact Mini-Dock Mode
         self.mini_box = Adw.ToolbarView()
@@ -317,13 +346,35 @@ class KernDockApp(Adw.Application):
         self.mini_stage_slot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, vexpand=True)
         self.mini_box.set_content(self.mini_stage_slot)
 
-        self.root_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=120)
-        self.root_stack.add_named(self.full_box, "full")
+        # Non-homogeneous: the mini page must not inherit the full 2-pane layout's minimum width.
+        self.root_stack = Gtk.Stack(
+            transition_type=Gtk.StackTransitionType.CROSSFADE,
+            transition_duration=120,
+            hhomogeneous=False,
+            vhomogeneous=False,
+        )
+        self.root_stack.add_named(full_wrap, "full")
         self.root_stack.add_named(self.mini_box, "mini")
         self.root_stack.set_visible_child_name("full")
 
         self.toast_overlay = Adw.ToastOverlay(child=self.root_stack)
         self.win.set_content(self.toast_overlay)
+
+        # Adaptive breakpoint: below the 2-pane minimum switch to phone navigation
+        bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 800sp"))
+        for widget, prop, value in (
+            (self.phone_switcher, "reveal", True),
+            (self.tab_bar, "visible", False),
+            (self.phone_tab_btn, "visible", True),
+            (self.phone_title, "visible", True),
+            (self.phone_new_tab_btn, "visible", True),
+            (self.mini_btn, "visible", False),
+            (self.left_hdr, "show-end-title-buttons", True),
+        ):
+            bp.add_setter(widget, prop, value)
+        bp.connect("apply", lambda _b: self._set_phone_layout(True))
+        bp.connect("unapply", lambda _b: self._set_phone_layout(False))
+        self.win.add_breakpoint(bp)
 
     # =========================================================================
     # Tab Lifecycle & Page Registry
@@ -348,9 +399,11 @@ class KernDockApp(Adw.Application):
         if page is not None and not page.get_pinned():
             self.tab_view.close_page(page)
 
-    def _open_tab(self, page_id: str, *, pinned: bool = False) -> None:
-        if self._mini_mode:
+    def _open_tab(self, page_id: str, *, pinned: bool = False, reveal: bool = True) -> None:
+        if reveal and self._mini_mode:
             self._set_mini_mode(False)
+        if reveal and self._phone:
+            self.phone_pages.set_visible_child_name("tools")
         existing = self._open_tabs.get(page_id)
         if existing is not None:
             self.tab_view.set_selected_page(existing)
@@ -657,28 +710,46 @@ class KernDockApp(Adw.Application):
         self.switcher_popover.set_child(root)
 
     def _rebuild_new_tab_popover(self) -> None:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
-        lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        lb.add_css_class("navigation-sidebar")
-        for spec in self.runtime.pages.ordered():
-            if spec.id == "overview":
-                continue
-            r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4, margin_bottom=4, margin_start=6, margin_end=8)
-            r.append(Gtk.Image.new_from_icon_name(spec.icon))
-            r.append(Gtk.Label(label=spec.title, xalign=0, hexpand=True))
-            row = Gtk.ListBoxRow(child=r)
-            row._page_id = spec.id  # type: ignore[attr-defined]
-            lb.append(row)
-        lb.connect("row-activated", lambda _lb, row: (self.new_tab_popover.popdown(), self._open_tab(row._page_id)))
-        box.append(lb)
-        self.new_tab_popover.set_child(box)
+        for pop in (self.new_tab_popover, self.phone_new_tab_popover):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+            lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+            lb.add_css_class("navigation-sidebar")
+            for spec in self.runtime.pages.ordered():
+                if spec.id == "overview":
+                    continue
+                r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4, margin_bottom=4, margin_start=6, margin_end=8)
+                r.append(Gtk.Image.new_from_icon_name(spec.icon))
+                r.append(Gtk.Label(label=spec.title, xalign=0, hexpand=True))
+                row = Gtk.ListBoxRow(child=r)
+                row._page_id = spec.id  # type: ignore[attr-defined]
+                lb.append(row)
+            lb.connect("row-activated", lambda _lb, row, p=pop: (p.popdown(), self._open_tab(row._page_id)))
+            box.append(lb)
+            pop.set_child(box)
 
     def _set_handset_visible(self, visible: bool) -> None:
         self._handset_visible = visible
         self.runtime.config.set("ui.show_handset", visible)
-        if not self._mini_mode:
-            self.left_pane.set_visible(visible)
+        self._sync_layout()
         self._sync_window_size()
+
+    def _set_phone_layout(self, phone: bool) -> None:
+        self._phone = phone
+        self._sync_layout()
+
+    def _sync_layout(self) -> None:
+        """Single source of truth for pane visibility & stage sizing across desktop, phone and mini modes."""
+        if self._phone:
+            on_radio = self.phone_pages.get_visible_child_name() == "radio"
+            self.left_pane.set_visible(on_radio)
+            self.left_pane.set_hexpand(on_radio)
+            self.tab_overview.set_visible(not on_radio)
+        else:
+            self.left_pane.set_visible(self._handset_visible)
+            self.left_pane.set_hexpand(False)
+            self.tab_overview.set_visible(True)
+        self.stage.set_compact(self._mini_mode or self._phone)
+        self.stage.set_sizing("mini" if self._mini_mode else ("phone" if self._phone else "desktop"))
 
     def _set_mini_mode(self, mini: bool, *, initial: bool = False) -> None:
         self._mini_mode = mini
@@ -686,6 +757,8 @@ class KernDockApp(Adw.Application):
             self.runtime.config.set("ui.mini_mode", mini)
         parent = self.stage.get_parent()
         if mini:
+            if self.win is not None and self.win.is_maximized():
+                self.win.unmaximize()
             if parent is self.left_stage_slot:
                 self.left_stage_slot.remove(self.stage)
             if self.stage.get_parent() is not self.mini_stage_slot:
@@ -697,22 +770,29 @@ class KernDockApp(Adw.Application):
                 self.mini_stage_slot.remove(self.stage)
             if self.stage.get_parent() is not self.left_stage_slot:
                 self.left_stage_slot.append(self.stage)
-            self.left_pane.set_visible(self._handset_visible)
             self.stage.set_visible(True)
             self.root_stack.set_visible_child_name("full")
+        self._sync_layout()
 
         self._updating_nav = True
         self.mini_btn.set_active(mini)
         self._updating_nav = False
         self._sync_window_size()
+        self.runtime.refresh_tray()
 
     def _sync_window_size(self) -> None:
         if self.win is None:
             return
         lw, lh = self.stage.sync_geometry()
         if self._mini_mode:
-            self.win.set_default_size(lw + 28, lh + 130)
+            # Hug the handset: width = stage natural width, height = full mini page at that width.
+            self.win.set_size_request(-1, -1)
+            stage_w = self.stage.measure(Gtk.Orientation.HORIZONTAL, -1)[1]
+            page_h = self.mini_box.measure(Gtk.Orientation.VERTICAL, stage_w)[1]
+            self.win.set_default_size(stage_w, page_h)
         else:
+            # GNOME mobile HIG minimum (360 px wide) so the phone breakpoint can engage on Phosh
+            self.win.set_size_request(360, 480)
             left_w = (lw + 24) if self._handset_visible else 0
             self.win.set_default_size(left_w + 680, max(lh + 128, 700))
 

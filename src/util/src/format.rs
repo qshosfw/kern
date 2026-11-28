@@ -9,7 +9,6 @@
 
 pub const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
-#[inline(never)]
 fn push_bytes(out: &mut [u8], idx: &mut usize, src: &[u8]) {
     let n = src.len().min(out.len().saturating_sub(*idx));
     unsafe {
@@ -128,7 +127,6 @@ pub fn format_mac_address<'a>(_mac: &[u8; 6], out: &'a mut [u8; 17]) -> &'a str 
     unsafe { core::str::from_utf8_unchecked(out) }
 }
 
-#[inline(never)]
 fn put_2digit(out: &mut [u8; 8], off: usize, val: u8) {
     let (d, r) = crate::math::div10_u16(val as u16);
     out[off] = b'0' + d as u8;
@@ -185,7 +183,6 @@ pub fn trim_trailing_slashes(s: &str) -> &str {
 
 /// Validate that `bytes` is pure 7-bit ASCII and return it as `&str` without pulling
 /// `core::str::from_utf8` (368 B) into Cortex-M0+ flash.
-#[inline(never)]
 pub fn ascii_str(bytes: &[u8]) -> Option<&str> {
     if bytes.iter().all(|&b| b < 0x80) {
         // Safety: all bytes are < 0x80, which is valid UTF-8.
@@ -195,7 +192,6 @@ pub fn ascii_str(bytes: &[u8]) -> Option<&str> {
     }
 }
 
-#[inline(never)]
 pub fn trim_ascii_bytes(mut b: &[u8]) -> &[u8] {
     while let [first, rest @ ..] = b {
         if !first.is_ascii_whitespace() {
@@ -214,7 +210,6 @@ pub fn trim_ascii_bytes(mut b: &[u8]) -> &[u8] {
 
 /// Copy UTF-8 `s` into `dst[start..]`, truncating cleanly on a codepoint boundary.
 /// Returns the new total byte length (`<= dst.len()` and `<= 255`).
-#[inline(never)]
 pub fn copy_trunc_utf8(dst: &mut [u8], start: usize, s: &str) -> u8 {
     let b = s.as_bytes();
     let max = dst.len().saturating_sub(start);
@@ -304,7 +299,6 @@ impl<const N: usize> core::ops::Deref for InlineStr<N> {
 }
 
 /// Start byte index of the last UTF-8 codepoint in `b` (or 0 if empty).
-#[inline(never)]
 pub fn last_utf8_start(b: &[u8]) -> usize {
     if b.is_empty() {
         return 0;
@@ -317,7 +311,6 @@ pub fn last_utf8_start(b: &[u8]) -> usize {
 }
 
 /// Insert UTF-8 slice `ins` at byte index `pos` inside `(buf, len)` without `memmove`.
-#[inline(never)]
 pub fn insert_utf8_at(buf: &mut [u8], len: &mut u8, pos: usize, ins: &str) {
     let ib = ins.as_bytes();
     let ilen = ib.len();
@@ -336,7 +329,6 @@ pub fn insert_utf8_at(buf: &mut [u8], len: &mut u8, pos: usize, ins: &str) {
 }
 
 /// Delete the UTF-8 codepoint immediately before byte index `pos` inside `(buf, len)`.
-#[inline(never)]
 pub fn delete_utf8_before(buf: &mut [u8], len: &mut u8, pos: usize) {
     let old_len = (*len as usize).min(buf.len());
     let p = pos.min(old_len);
@@ -359,34 +351,10 @@ impl<const N: usize> Default for InlineStr<N> {
     }
 }
 
-/// Decode escape-run RLE (`esc <count>` skips `count` `esc` bytes; else literal) into `dst`
-/// starting at logical byte offset `start`.
-#[inline(never)]
-pub fn decode_rle_escape(src: &[u8], esc: u8, start: usize, dst: &mut [u8]) {
-    dst.fill(esc);
-    let end = start + dst.len();
-    let mut pos = 0usize;
-    let mut i = 0usize;
-    while i < src.len() && pos < end {
-        let b = src[i];
-        i += 1;
-        if b == esc {
-            pos += src[i] as usize;
-            i += 1;
-        } else {
-            if pos >= start {
-                dst[pos - start] = b;
-            }
-            pos += 1;
-        }
-    }
-}
-
 /// Extract the `idx`-th NUL-delimited UTF-8 string from `packed`.
 ///
 /// Packing string enum tables into one NUL-delimited byte slice avoids per-variant
 /// `(ptr, len)` descriptor tables in `.rodata` (8 bytes saved per entry).
-#[inline(never)]
 pub const fn nth_cstr<'a>(packed: &'a [u8], mut idx: u8) -> &'a str {
     let mut start = 0usize;
     let mut i = 0usize;
@@ -502,10 +470,5 @@ mod tests {
         let end = len as usize;
         delete_utf8_before(&mut buf, &mut len, end);
         assert_eq!(&buf[..len as usize], b"aZ");
-
-        let mut out = [0u8; 6];
-        let enc = [0xAA, 0xFF, 0x04, 0xBB];
-        decode_rle_escape(&enc, 0xFF, 0, &mut out);
-        assert_eq!(out, [0xAA, 0xFF, 0xFF, 0xFF, 0xFF, 0xBB]);
     }
 }

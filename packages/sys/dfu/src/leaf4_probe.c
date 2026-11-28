@@ -97,7 +97,7 @@ u32 leaf4_entry(u32 op, const KrxApiTable* api, void* param) {
     env->target_id       = DFU_TARGET_UV_K1;
     env->origin_tag      = KBHP_ORIGIN_KERN;
     env->fw_version      = krx_sys_os_version(api);
-    env->battery_mv      = (u16)krx_call(api, OP_IO_POWER, SUB_IO_POWER_BATT_MV, 0u, 0u);
+    env->battery_mv      = (u16)krx_prop_get32(api, KRX_PROP_BATT_MV);
     env->app_max_pages   = DFU_APP_MAX_PAGES;
     env->app_flash_base  = DFU_APP_FLASH_BASE;
     env->hook_ver        = KBHP_HOOK_VERSION;
@@ -105,9 +105,9 @@ u32 leaf4_entry(u32 op, const KrxApiTable* api, void* param) {
     env->hook_state_addr = DFU_SRAM_STATE;
 
     u32 flags = KBHP_FLAG_ANTIBRICK_GUARD | KBHP_FLAG_FLASHLIGHT_LOCKED;
-    u32 is_chg = krx_call(api, OP_IO_POWER, SUB_IO_POWER_CHARGING, 0u, 0u);
-    u32 is_low = krx_call(api, OP_IO_POWER, SUB_IO_POWER_LOW, 0u, 0u) |
-                 krx_call(api, OP_IO_POWER, SUB_IO_POWER_CRITICAL, 0u, 0u);
+    u32 is_chg = krx_prop_get32(api, KRX_PROP_CHARGING);
+    u32 is_low = krx_prop_get32(api, KRX_PROP_BATT_LOW) |
+                 krx_prop_get32(api, KRX_PROP_BATT_CRIT);
     if (is_low && !is_chg) flags |= KBHP_FLAG_LOW_BATTERY;
 
     if (*(const volatile u32*)(DFU_FACTORY_PAGE + 0x50u) == 0x71732D31u) {

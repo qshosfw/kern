@@ -16,6 +16,46 @@ pub const INTERFACE_SVC_TRIGGER: u16 = 0x0105;
 
 // ── Lifecycle, Display & Event Descriptors ───────────────────────────────────
 
+/// 32-bit Virtual Function Pointer (`P1 v2`) supporting callbacks across evicted pages up to `384 KiB`:
+/// `0x8000_0000 | ((page_id as u32) << 10) | ((offset as u32) | 1)`.
+/// When bit 31 is `0`, `raw` is a direct resident Thumb-1 address (`N0`/`N1`/`.text.pinned`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Vfp32(pub u32);
+
+impl Vfp32 {
+    pub const VIRTUAL_BIT: u32 = 0x8000_0000;
+
+    #[inline(always)]
+    pub const fn encode_paged(page_id: u16, offset: u16) -> Self {
+        Self(
+            Self::VIRTUAL_BIT
+                | (((page_id as u32) & 0x1F_FFFF) << 10)
+                | (((offset as u32) & 0x03FE) | 1),
+        )
+    }
+
+    #[inline(always)]
+    pub const fn from_resident(thumb_addr: u32) -> Self {
+        Self((thumb_addr & !Self::VIRTUAL_BIT) | 1)
+    }
+
+    #[inline(always)]
+    pub const fn is_virtual(self) -> bool {
+        (self.0 & Self::VIRTUAL_BIT) != 0
+    }
+
+    #[inline(always)]
+    pub const fn page_id(self) -> u16 {
+        ((self.0 & !Self::VIRTUAL_BIT) >> 10) as u16
+    }
+
+    #[inline(always)]
+    pub const fn offset(self) -> u16 {
+        (self.0 & 0x03FE) as u16
+    }
+}
+
 pub const KRX_OP_START: u32 = 0;
 pub const KRX_OP_EVENT: u32 = 1;
 pub const KRX_OP_RENDER: u32 = 2;
@@ -201,33 +241,64 @@ impl KrxApiTable {
 
     /// Invokes `op` and decodes the canonical ABI v5 `Status` return (`>= 0` Ok, `< 0` Err).
     #[inline(always)]
-    pub fn call_result(&self, op: Op, a0: usize, a1: usize, a2: usize) -> Result<usize, crate::Status> {
+    pub fn call_result(
+        &self,
+        op: Op,
+        a0: usize,
+        a1: usize,
+        a2: usize,
+    ) -> Result<usize, crate::Status> {
         crate::Status::from_raw(self.call_op(op, a0, a1, a2))
     }
 
     #[inline(always)]
+    pub fn prop_get32(&self, id: u8) -> u32 {
+        self.call_op(
+            Op::SysProp,
+            (id as usize) | ((crate::sub::sys_prop::GET as usize) << 8),
+            0,
+            0,
+        ) as u32
+    }
+
+    #[inline(always)]
     pub fn prop_get(&self, id: u8) -> u8 {
-        self.call_op(Op::PropGet, id as usize, 0, 0) as u8
+        self.prop_get32(id) as u8
+    }
+
+    #[inline(always)]
+    pub fn prop_set32(&self, id: u8, val: u32) -> usize {
+        self.call_op(
+            Op::SysProp,
+            (id as usize) | ((crate::sub::sys_prop::SET as usize) << 8),
+            val as usize,
+            0,
+        )
     }
 
     #[inline(always)]
     pub fn prop_set(&self, id: u8, val: u8) -> bool {
-        self.call_op(Op::PropSet, id as usize, val as usize, 0) == 0
+        self.prop_set32(id, val as u32) == 0
     }
 
     #[inline(always)]
     pub fn pref_set(&self, id: u8, val: u8) -> bool {
-        self.call_op(Op::PrefSet, id as usize, val as usize, 0) == 0
+        self.call_op(
+            Op::SysProp,
+            (id as usize) | ((crate::sub::sys_prop::PREF as usize) << 8),
+            val as usize,
+            0,
+        ) == 0
     }
 
     #[inline(always)]
     pub fn flush(&self) -> bool {
-        self.call_op(Op::SysFlush, crate::sub::sys_flush::FLUSH as usize, 0, 0) == 0
+        self.call_op(Op::SysQuery, crate::sub::sys_query::FLUSH as usize, 0, 0) == 0
     }
 
     #[inline(always)]
     pub fn reset_all_prefs(&self) -> bool {
-        self.call_op(Op::SysFlush, crate::sub::sys_flush::RESET as usize, 0, 0) == 0
+        self.call_op(Op::SysQuery, crate::sub::sys_query::RESET as usize, 0, 0) == 0
     }
 
     #[inline(always)]
@@ -253,8 +324,7 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn sec_set_passcode(&self, pin: &[u8], flags: u8, max_tries: u8) -> bool {
-        let meta =
-            (pin.len() & 0xFF) | ((flags as usize) << 16) | ((max_tries as usize) << 24);
+        let meta = (pin.len() & 0xFF) | ((flags as usize) << 16) | ((max_tries as usize) << 24);
         self.call_op(
             Op::SysSec,
             crate::sub::sys_sec::SET as usize,
@@ -265,12 +335,17 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn clear(&self) {
-        let _ = self.call_op(Op::GfxClear, 0, 0, 0);
+        let _ = self.call_op(Op::GfxDraw, crate::sub::gfx_draw::CLEAR as usize, 0, 0);
+    }
+
+    #[inline(always)]
+    pub fn framebuffer_ptr(&self) -> *mut u8 {
+        self.call_op(Op::GfxDraw, crate::sub::gfx_draw::FB as usize, 0, 0) as *mut u8
     }
 
     #[inline(always)]
     pub fn commit(&self) {
-        let _ = self.call_op(Op::GfxCommit, 0, 0, 0);
+        let _ = self.call_op(Op::GfxDraw, crate::sub::gfx_draw::COMMIT as usize, 0, 0);
     }
 
     #[inline(always)]
@@ -311,7 +386,7 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn ticks_ms(&self) -> u32 {
-        self.call_op(Op::IoTime, crate::sub::io_time::TICKS_MS as usize, 0, 0) as u32
+        self.prop_get32(crate::prop::TICKS_MS)
     }
 
     #[inline(always)]
@@ -349,27 +424,62 @@ impl KrxApiTable {
     }
 
     #[inline(always)]
-    pub fn draw_scrollbar(&self, x: i16, y: i16, h: u8, scroll: u16, total: u16, visible: u16) {
-        let desc = KrxWidget {
-            p0: core::ptr::null(),
-            p1: core::ptr::null(),
-            x,
-            y,
-            len0: scroll,
-            len1: visible,
-            extra: total,
-            w: 2,
-            h,
-            a: 0,
-            b: 0,
-            _pad: [0; 2],
-        };
+    pub fn clear_corners(&self, x: i16, y: i16, w: u8, h: u8) {
+        let wh = (w as usize) | ((h as usize) << 16);
         let _ = self.call_op(
-            Op::UiWidget,
-            KRX_WIDGET_SCROLLBAR as usize,
-            &raw const desc as usize,
-            0,
+            Op::GfxDraw,
+            crate::sub::gfx_draw::CLR_CORNER as usize,
+            pack_xy(x, y),
+            wh,
         );
+    }
+
+    #[inline(always)]
+    pub fn measure_text(&self, text: &[u8], font: u8) -> i16 {
+        let req = KrxTextReq {
+            text: text.as_ptr(),
+            x: 0,
+            y: 0,
+            len: text.len() as u16,
+            arg: 0,
+            font,
+            color: COLOR_FILL,
+            flags: KRX_TEXT_MEASURE,
+            _pad: 0,
+        };
+        self.call_op(Op::GfxText, &raw const req as usize, 0, 0) as u16 as i16
+    }
+
+    #[inline(always)]
+    pub fn udivmod(&self, n: u32, d: u32) -> u32 {
+        self.call_op(Op::SysDiv, n as usize, d as usize, 0) as u32
+    }
+
+    #[inline(always)]
+    pub fn udivmod_rem(&self, n: u32, d: u32, rem: &mut u32) -> u32 {
+        self.call_op(Op::SysDiv, n as usize, d as usize, rem as *mut u32 as usize) as u32
+    }
+
+    pub fn draw_scrollbar(&self, x: i16, y: i16, h: u8, scroll: u16, total: u16, visible: u16) {
+        if total == 0 || visible == 0 || total <= visible || h < 4 {
+            return;
+        }
+        self.fill_rect(x + 1, y, 1, h, COLOR_FILL);
+        let th = self
+            .udivmod(
+                (h as u32) * (visible as u32) + ((total as u32) >> 1),
+                total as u32,
+            )
+            .clamp(4, h as u32) as u8;
+        let max_off = (total - visible) as u32;
+        let travel = (h - th) as u32;
+        let pos = (scroll as u32).min(max_off);
+        let ty = if pos >= max_off {
+            travel
+        } else {
+            self.udivmod(pos * travel + (max_off >> 1), max_off)
+        };
+        self.fill_rect(x, y + ty as i16, 3, th, COLOR_FILL);
     }
 
     #[inline(always)]
@@ -414,12 +524,7 @@ impl KrxApiTable {
             0,
         );
         if hold_ms > 0 {
-            let _ = self.call_op(
-                Op::UiModal,
-                crate::sub::ui_modal::SET_HOLD as usize,
-                hold_ms as usize,
-                0,
-            );
+            let _ = self.prop_set32(crate::prop::MODAL_HOLD_MS, hold_ms as u32);
         }
     }
 
@@ -461,14 +566,7 @@ impl KrxApiTable {
     }
 
     #[inline(always)]
-    pub fn prompt_text_flags(
-        &self,
-        tag: u8,
-        title: &[u8],
-        initial: &[u8],
-        max_len: u8,
-        flags: u8,
-    ) {
+    pub fn prompt_text_flags(&self, tag: u8, title: &[u8], initial: &[u8], max_len: u8, flags: u8) {
         let req = KrxModalReq {
             title: title.as_ptr(),
             msg: initial.as_ptr(),
@@ -536,74 +634,94 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn draw_bitmap(&self, x: i16, y: i16, w: u8, h: u8, bits: &[u8]) {
-        let desc = KrxWidget {
-            p0: bits.as_ptr(),
-            p1: core::ptr::null(),
-            x,
-            y,
-            len0: bits.len() as u16,
-            len1: 0,
-            extra: 0,
-            w,
-            h,
-            a: 0,
-            b: 0,
-            _pad: [0; 2],
-        };
-        let _ = self.call_op(
-            Op::GfxCtl,
-            crate::sub::gfx_ctl::BITMAP as usize,
-            &raw const desc as usize,
-            0,
-        );
+        let req_bytes = (((w as usize) + 7) >> 3) * (h as usize);
+        if bits.len() < req_bytes || req_bytes == 0 {
+            return;
+        }
+        let a0 = (crate::sub::gfx_draw::BITMAP as usize)
+            | ((COLOR_FILL as usize) << 8)
+            | ((w as usize) << 16)
+            | ((h as usize) << 24);
+        let _ = self.call_op(Op::GfxDraw, a0, pack_xy(x, y), bits.as_ptr() as usize);
     }
 
-    #[inline(always)]
     pub fn draw_tag_badge(&self, x: i16, y: i16, text: &[u8], filled: bool) {
-        let desc = KrxWidget {
-            p0: text.as_ptr(),
-            p1: core::ptr::null(),
-            x,
-            y,
-            len0: text.len() as u16,
-            len1: 0,
-            extra: 0,
-            w: 0,
-            h: 0,
-            a: u8::from(filled),
-            b: 0,
-            _pad: [0; 2],
-        };
-        let _ = self.call_op(
-            Op::UiWidget,
-            KRX_WIDGET_TAG_BADGE as usize,
-            &raw const desc as usize,
-            0,
-        );
+        if text.is_empty() {
+            return;
+        }
+        let tw = (self.measure_text(text, FONT_TOMTHUMB) + 4).max(6) as u8;
+        if filled {
+            self.fill_rect(x, y, tw, 7, COLOR_FILL);
+            self.draw_text(x + 2, y + 6, text, FONT_TOMTHUMB, COLOR_CLEAR, ALIGN_LEFT);
+        } else {
+            self.draw_rect(x, y, tw, 7, COLOR_FILL);
+            self.draw_text(x + 2, y + 6, text, FONT_TOMTHUMB, COLOR_FILL, ALIGN_LEFT);
+        }
     }
 
-    #[inline(always)]
+    pub fn draw_key_badge(&self, x: i16, y: i16, key_s: &[u8], lbl: &[u8]) {
+        if key_s.is_empty() {
+            return;
+        }
+        let kw = (self.measure_text(key_s, FONT_TOMTHUMB) + 4).max(5) as u8;
+        self.fill_rect(x, y, kw, 7, COLOR_FILL);
+        self.clear_corners(x, y, kw, 7);
+        self.draw_text(x + 2, y + 6, key_s, FONT_TOMTHUMB, COLOR_CLEAR, ALIGN_LEFT);
+        if !lbl.is_empty() {
+            self.draw_text(
+                x + kw as i16 + 2,
+                y + 6,
+                lbl,
+                FONT_TOMTHUMB,
+                COLOR_FILL,
+                ALIGN_LEFT,
+            );
+        }
+    }
+
+    pub fn draw_progress_bar(&self, x: i16, y: i16, w: u8, h: u8, pct: u8, border: bool) {
+        if w < 4 || h < 2 {
+            return;
+        }
+        let p = pct.min(100) as u32;
+        self.fill_rect(x, y, w, h, COLOR_CLEAR);
+        if border {
+            self.draw_rect(x, y, w, h, COLOR_FILL);
+            if h >= 5 {
+                self.clear_corners(x, y, w, h);
+            }
+        }
+        let inset = if border { 2u8 } else { 0u8 };
+        let max_fw = w.saturating_sub(inset * 2);
+        let fh = h.saturating_sub(inset * 2).max(1);
+        let fw = self.udivmod((max_fw as u32) * p, 100) as u8;
+        if fw > 0 {
+            self.fill_rect(x + inset as i16, y + inset as i16, fw, fh, COLOR_FILL);
+        }
+    }
+
     pub fn draw_capsule_button(&self, x: i16, y: i16, w: u8, h: u8, text: &[u8], filled: bool) {
-        let desc = KrxWidget {
-            p0: text.as_ptr(),
-            p1: core::ptr::null(),
-            x,
-            y,
-            len0: text.len() as u16,
-            len1: 0,
-            extra: 0,
-            w,
-            h,
-            a: u8::from(filled),
-            b: 0,
-            _pad: [0; 2],
-        };
-        let _ = self.call_op(
-            Op::UiWidget,
-            KRX_WIDGET_CAPSULE_BUTTON as usize,
-            &raw const desc as usize,
-            0,
-        );
+        if w < 4 || h < 5 {
+            return;
+        }
+        if filled {
+            self.fill_rect(x, y, w, h, COLOR_FILL);
+        } else {
+            self.fill_rect(x, y, w, h, COLOR_CLEAR);
+            self.draw_rect(x, y, w, h, COLOR_FILL);
+        }
+        self.clear_corners(x, y, w, h);
+        if !text.is_empty() {
+            let col = if filled { COLOR_CLEAR } else { COLOR_FILL };
+            self.draw_text(
+                x + (w >> 1) as i16,
+                y + h as i16 - 2,
+                text,
+                FONT_TOMTHUMB,
+                col,
+                ALIGN_CENTER,
+            );
+        }
     }
 
     #[inline(always)]
@@ -614,54 +732,64 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn play_beep(&self, beep_type: u8) {
-        let _ = self.call_op(Op::AudTone, beep_type as usize, 0xFFFF, 0);
+        let _ = self.call_op(
+            Op::Aud,
+            (crate::sub::aud::TONE as usize) | ((beep_type as usize) << 8),
+            0xFFFF,
+            0,
+        );
     }
 
     #[inline(always)]
     pub fn battery_mv(&self) -> u16 {
-        self.call_op(Op::IoPower, crate::sub::io_power::BATT_MV as usize, 0, 0) as u16
+        self.prop_get32(crate::prop::BATT_MV) as u16
     }
 
     #[inline(always)]
     pub fn battery_pct(&self) -> u8 {
-        self.call_op(Op::IoPower, crate::sub::io_power::BATT_PCT as usize, 0, 0) as u8
+        self.prop_get(crate::prop::BATT_PCT)
     }
 
     #[inline(always)]
     pub fn mcu_temp_deci_c(&self) -> i16 {
-        self.call_op(Op::IoPower, crate::sub::io_power::MCU_TEMP as usize, 0, 0) as u16 as i16
+        self.prop_get32(crate::prop::MCU_TEMP) as u16 as i16
     }
 
     #[inline(always)]
     pub fn reboot(&self, mode: u8) {
-        let _ = self.call_op(Op::SysReboot, mode as usize, 0, 0);
+        let _ = self.call_op(
+            Op::SysCtl,
+            crate::sub::sys_ctl::REBOOT as usize,
+            mode as usize,
+            0,
+        );
     }
 
     #[inline(always)]
     pub fn stack_free(&self) -> u32 {
-        self.call_op(
-            Op::SysQuery,
-            crate::sub::sys_query::STACK_FREE as usize,
-            0,
-            0,
-        ) as u32
+        self.prop_get32(crate::prop::STACK_FREE)
     }
 
     #[inline(always)]
     pub fn cpu_hz(&self) -> u32 {
-        self.call_op(Op::SysQuery, crate::sub::sys_query::CPU_HZ as usize, 0, 0) as u32
+        self.prop_get32(crate::prop::CPU_HZ)
     }
 
     #[inline(always)]
     pub fn sys_info(&self, out: &mut KrxSysInfo) -> bool {
-        self.call_op(Op::SysInfo, out as *mut KrxSysInfo as usize, 0, 0) == 0
+        self.call_op(
+            Op::SysQuery,
+            crate::sub::sys_query::INFO as usize,
+            out as *mut KrxSysInfo as usize,
+            0,
+        ) == 0
     }
 
     #[inline(always)]
     pub fn set_status_bar(&self, sb: &KrxStatusBar) {
         let _ = self.call_op(
-            Op::UiStatus,
-            crate::sub::ui_status::SET_BAR as usize,
+            Op::UiModal,
+            crate::sub::ui_modal::SET_BAR as usize,
             sb as *const KrxStatusBar as usize,
             0,
         );
@@ -753,12 +881,12 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn battery_ma(&self) -> u16 {
-        self.call_op(Op::IoPower, crate::sub::io_power::BATT_MA as usize, 0, 0) as u16
+        self.prop_get32(crate::prop::BATT_MA) as u16
     }
 
     #[inline(always)]
     pub fn is_charging(&self) -> bool {
-        self.call_op(Op::IoPower, crate::sub::io_power::CHARGING as usize, 0, 0) != 0
+        self.prop_get32(crate::prop::CHARGING) != 0
     }
 
     #[inline(always)]
@@ -773,7 +901,7 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn reload_config(&self) -> bool {
-        self.call_op(Op::SysFlush, 1, 0, 0) == 0
+        self.call_op(Op::SysQuery, crate::sub::sys_query::RELOAD as usize, 0, 0) == 0
     }
 
     #[inline(always)]
@@ -814,13 +942,99 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn call_leaf(&self, leaf_id: u8, arg: u32) -> u32 {
-        self.call_op(Op::ProcLeaf, leaf_id as usize, arg as usize, 0) as u32
+        self.call_op(
+            Op::ProcExec,
+            (crate::sub::proc_exec::LEAF as usize) | ((leaf_id as usize) << 8),
+            arg as usize,
+            0,
+        ) as u32
     }
 
     #[inline(always)]
     pub fn launch_pkg(&self, path: &[u8]) -> bool {
-        let a0 = (PROC_CTL_LAUNCH_PKG as usize) | ((path.len().min(31)) << 8);
+        let a0 = (crate::sub::proc_ctl::LAUNCH_PKG as usize) | ((path.len().min(31)) << 8);
         self.call_op(Op::ProcCtl, a0, path.as_ptr() as usize, 0) == 0
+    }
+
+    #[inline(always)]
+    pub fn self_pid(&self) -> u8 {
+        self.prop_get(crate::prop::SELF_PID)
+    }
+
+    #[inline(always)]
+    pub fn proc_count(&self) -> u8 {
+        self.prop_get(crate::prop::PROC_COUNT)
+    }
+
+    #[inline(always)]
+    pub fn proc_info(&self, index: u8, out: &mut KrxProcInfo) -> bool {
+        let a0 = (crate::sub::proc_ctl::INFO as usize) | ((index as usize) << 8);
+        self.call_op(Op::ProcCtl, a0, out as *mut KrxProcInfo as usize, 0) == 0
+    }
+
+    #[inline(always)]
+    pub fn ipc_send(&self, msg: &KrxIpcMessage) -> bool {
+        self.call_op(
+            Op::Ipc,
+            crate::sub::ipc::SEND as usize,
+            msg as *const KrxIpcMessage as usize,
+            0,
+        ) == 0
+    }
+
+    #[inline(always)]
+    pub fn ipc_recv(&self, out: &mut KrxIpcMessage) -> bool {
+        self.call_op(
+            Op::Ipc,
+            crate::sub::ipc::RECV as usize,
+            out as *mut KrxIpcMessage as usize,
+            0,
+        ) == 0
+    }
+
+    pub fn ipc_reply(&self, req_msg: &KrxIpcMessage, payload: &[u8]) -> bool {
+        let rep = req_msg.reply_to(payload, false);
+        self.ipc_send(&rep)
+    }
+
+    pub fn ipc_poll(&self, dst: &mut [u8]) -> usize {
+        let mut msg = KrxIpcMessage::empty();
+        if self.ipc_recv(&mut msg) {
+            let n = (msg.payload_len as usize).min(dst.len());
+            dst[..n].copy_from_slice(&msg.payload[..n]);
+            n
+        } else {
+            0xFF
+        }
+    }
+
+    pub fn ipc_send_str(&self, req: &KrxIpcSendReq) -> bool {
+        let target_pid = if !req.target.is_null() && req.target_len > 0 {
+            let slice = unsafe { core::slice::from_raw_parts(req.target, req.target_len as usize) };
+            if slice == b"*" || slice == b"ALL" {
+                ipc_target::BROADCAST
+            } else {
+                let pid = self.call_op(
+                    Op::ProcCtl,
+                    (crate::sub::proc_ctl::FIND as usize) | ((req.target_len as usize) << 8),
+                    req.target as usize,
+                    0,
+                ) as u8;
+                if pid == 0 {
+                    return false;
+                }
+                pid
+            }
+        } else {
+            ipc_target::FOREGROUND_APP
+        };
+        let payload = if !req.msg.is_null() && req.msg_len > 0 {
+            unsafe { core::slice::from_raw_parts(req.msg, (req.msg_len as usize).min(24)) }
+        } else {
+            &[]
+        };
+        let msg = KrxIpcMessage::new(0, target_pid, ipc_msg_type::APP_DATA_TRANSFER, payload);
+        self.ipc_send(&msg)
     }
 }
 
@@ -831,25 +1045,29 @@ pub const fn pack_xy(x: i16, y: i16) -> usize {
 
 unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, _a1: usize, _a2: usize) -> usize {
     match op as u8 {
-        x if x == Op::SysQuery.id() => match a0 {
-            0 => KRX_ABI_VERSION as usize,
-            1 => 1024,
-            2 => 48_000_000,
-            _ => 0,
-        },
-        x if x == Op::ProcLeaf.id() => 0xFFFF_FFFF,
-        x if x == Op::ProcSvc.id() => usize::from((a0 & 0xFF) != 1),
-        x if x == Op::IpcPoll.id() => 0xFF,
-        x if x == Op::FsMeta.id() => usize::from(matches!(a0, 2 | 3 | 4)),
-        x if x == Op::RfGet.id() => {
-            if a0 == 1 {
-                (-140i16 as i32 as u32) as usize
+        x if x == Op::SysProp.id() => {
+            if ((a0 >> 8) & 0xFF) == 0 {
+                match (a0 & 0xFF) as u8 {
+                    crate::prop::OS_VERSION => KRX_ABI_VERSION as usize,
+                    crate::prop::STACK_FREE => 1024,
+                    crate::prop::CPU_HZ => 48_000_000,
+                    crate::prop::BATT_MV => 4000,
+                    crate::prop::MCU_TEMP => 250,
+                    crate::prop::RF_RSSI => (-140i16 as i32 as u32) as usize,
+                    _ => 0,
+                }
             } else {
                 0
             }
         }
-        x if x == Op::RfSet.id() => usize::from(matches!(a0, 6 | 8 | 10 | 11)),
-        x if x == Op::AudCtl.id() => usize::from(a0 == 3),
+        x if x == Op::ProcExec.id() => {
+            if (a0 & 0xFF) == crate::sub::proc_exec::LEAF as usize {
+                0xFFFF_FFFF
+            } else {
+                0
+            }
+        }
+        x if x == Op::FsMeta.id() => usize::from(matches!(a0, 2 | 3 | 4 | 5)),
         x if x == Op::GfxDraw.id() => {
             if (a0 & 0xFF) == 5 {
                 6
@@ -857,24 +1075,11 @@ unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, _a1: usize, _a2: usize) 
                 0
             }
         }
-        x if x == Op::IoPower.id() => match a0 {
-            0 => 4000,
-            5 => 250,
-            _ => 0,
-        },
-        x if x == Op::IoTime.id() => usize::from(a0 == 3),
         x if x == Op::IoBus.id() => usize::from(matches!(a0, 0 | 1 | 6)),
-        x if x == Op::SysInfo.id()
-            || x == Op::ProcInfo.id()
+        x if x == Op::SysQuery.id()
             || x == Op::ProcCtl.id()
-            || x == Op::ProcLease.id()
-            || x == Op::ProcMem.id()
-            || x == Op::IpcSend.id()
-            || x == Op::IpcRecv.id()
-            || x == Op::IpcReply.id()
-            || x == Op::IpcSendStr.id()
+            || x == Op::Ipc.id()
             || x == Op::FsWrite.id()
-            || x == Op::FsRename.id()
             || x == Op::RfTune.id()
             || x == Op::RfVfo.id()
             || x == Op::UiWidget.id() =>
@@ -1145,21 +1350,107 @@ pub struct KrxProcInfo {
 
 const _: () = assert!(core::mem::size_of::<KrxProcInfo>() == 32);
 
-/// `Op::ProcCtl` sub-opcodes (`op = a0 & 0xFF`, `target = (a0 >> 8) & 0xFF`, `len = a0 >> 16`).
-pub const PROC_CTL_KILL: u8 = 0;
-pub const PROC_CTL_SET_STATE: u8 = 1;
-pub const PROC_CTL_SET_PRIORITY: u8 = 2;
-pub const PROC_CTL_FOCUS_APP: u8 = 3;
-pub const PROC_CTL_REVOKE_LEASE: u8 = 4;
-pub const PROC_CTL_RESET_STATS: u8 = 5;
-pub const PROC_CTL_LAUNCH_PKG: u8 = 6;
+pub mod ipc_flags {
+    pub const NONE: u8 = 0;
+    pub const REPLY: u8 = 1 << 0;
+    pub const URGENT: u8 = 1 << 1;
+    pub const NEED_ACK: u8 = 1 << 2;
+    pub const ERROR: u8 = 1 << 3;
+}
 
-/// 16-byte power-of-two record readers (`buf != NULL && len >= 16`).
-pub const PROC_CTL_SYS_OVERVIEW: u8 = 0x80;
-pub const PROC_CTL_LEASE_ENTRY: u8 = 0x81;
-pub const PROC_CTL_SVC_ENTRY: u8 = 0x82;
-pub const PROC_CTL_IPC_ENTRY: u8 = 0x83;
-pub const PROC_CTL_PROC_EXT: u8 = 0x84;
+pub mod ipc_target {
+    pub const FOREGROUND_APP: u8 = 0x00;
+    pub const KERNEL: u8 = 0x01;
+    pub const BROADCAST: u8 = 0xFF;
+}
+
+pub mod ipc_msg_type {
+    pub const RAW_DATA: u16 = 0x0000;
+    pub const PING: u16 = 0x0001;
+    pub const PONG: u16 = 0x0002;
+    pub const DAEMON_START: u16 = 0x0010;
+    pub const DAEMON_STOP: u16 = 0x0011;
+    pub const DAEMON_STATUS: u16 = 0x0012;
+    pub const SERVICE_REQUEST: u16 = 0x0020;
+    pub const SERVICE_RESPONSE: u16 = 0x0021;
+    pub const APP_SWITCH: u16 = 0x0030;
+    pub const APP_DATA_TRANSFER: u16 = 0x0031;
+    pub const TELEMETRY_FRAME: u16 = 0x0040;
+}
+
+/// 32-byte zero-heap inter-process communication message (power-of-two $2^5$ layout).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct KrxIpcMessage {
+    pub sender_pid: u8,
+    pub target_pid: u8,
+    pub msg_type: u16,
+    pub payload_len: u8,
+    pub flags: u8,
+    pub seq: u16,
+    pub payload: [u8; 24],
+}
+
+const _: () = assert!(core::mem::size_of::<KrxIpcMessage>() == 32);
+
+impl KrxIpcMessage {
+    pub const fn empty() -> Self {
+        Self {
+            sender_pid: 0,
+            target_pid: 0,
+            msg_type: 0,
+            payload_len: 0,
+            flags: 0,
+            seq: 0,
+            payload: [0u8; 24],
+        }
+    }
+
+    pub fn new(sender_pid: u8, target_pid: u8, msg_type: u16, payload_data: &[u8]) -> Self {
+        let mut msg = Self::empty();
+        msg.sender_pid = sender_pid;
+        msg.target_pid = target_pid;
+        msg.msg_type = msg_type;
+        let len = payload_data.len().min(24);
+        msg.payload_len = len as u8;
+        let mut i = 0;
+        while i < len {
+            msg.payload[i] = payload_data[i];
+            i += 1;
+        }
+        msg
+    }
+
+    pub fn make_reply_in_place(&mut self, payload_data: &[u8], is_error: bool) {
+        core::mem::swap(&mut self.sender_pid, &mut self.target_pid);
+        let len = payload_data.len().min(24);
+        self.payload_len = len as u8;
+        self.payload[..len].copy_from_slice(&payload_data[..len]);
+        self.payload[len..].fill(0);
+        self.flags = ipc_flags::REPLY | if is_error { ipc_flags::ERROR } else { 0 };
+    }
+
+    pub fn reply_to(&self, payload_data: &[u8], is_error: bool) -> Self {
+        let mut rep = *self;
+        rep.make_reply_in_place(payload_data, is_error);
+        rep
+    }
+
+    #[inline(always)]
+    pub const fn is_reply(&self) -> bool {
+        (self.flags & ipc_flags::REPLY) != 0
+    }
+
+    #[inline(always)]
+    pub const fn is_error(&self) -> bool {
+        (self.flags & ipc_flags::ERROR) != 0
+    }
+
+    #[inline(always)]
+    pub const fn is_broadcast(&self) -> bool {
+        self.target_pid == ipc_target::BROADCAST
+    }
+}
 
 /// C-ABI live coordinator telemetry snapshot.
 #[repr(C)]

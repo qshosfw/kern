@@ -110,7 +110,7 @@ pub fn decode_bmp_row(canvas: &mut Canvas, y: u8, row: &[u8; BMP_ROW_BYTES]) {
         }
     }
 
-    canvas.dirty |= 1 << page;
+    canvas.mark_span(page, 0, 127);
 }
 
 /// Zero-RAM streaming encoder: streams BMP header + 64 rows (bottom-up) to a sink callback.

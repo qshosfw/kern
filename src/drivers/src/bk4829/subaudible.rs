@@ -20,9 +20,10 @@ pub const fn ctcss_deci_hz_to_reg(deci_hz: u16) -> u16 {
 }
 
 /// Convert raw `REG_68` CTCSS scan word into deci-Hz (`0.1 Hz` units).
+/// Uses BK4829 bench-verified `20.380 counts/Hz` Q16 reciprocal `32_157` (`1804 -> 885` = `88.5 Hz`).
 #[inline(always)]
 pub const fn reg_to_ctcss_deci_hz(reg68: u16) -> u16 {
-    (((reg68 & 0x1FFF) as u32 * 31_739) >> 16) as u16
+    ((((reg68 & 0x1FFF) as u32) * 32_157 + 32_768) >> 16) as u16
 }
 
 /// 55.0 Hz CTC1 frequency control word (`1136`) for transmitting a 55 Hz STE tail burst.
@@ -37,11 +38,13 @@ pub const CDCSS_134_4HZ_BAUD_REG: u16 = (2 << 13) | 2775;
 /// `REG_51` configuration for active CTCSS (`0x904A`: enable CxCSS, CTCSS mode, gain 74).
 pub const CXCSS_CTRL_CTCSS: u16 = 0x904A;
 
-/// `REG_51` configuration for normal CDCSS (`0x8833`: enable CxCSS, CDCSS 24-bit mode, positive, gain 51).
-pub const CXCSS_CTRL_CDCSS_NORM: u16 = 0x8833;
+/// `REG_51` configuration for normal 23-bit Golay CDCSS (`0xA033`: Bit 11 = 0 23-bit mode,
+/// Bit 13 = 1 silicon-verified positive on-air D023N polarity, gain 51).
+pub const CXCSS_CTRL_CDCSS_NORM: u16 = 0xA033;
 
-/// `REG_51` configuration for inverted CDCSS (`0xA833`: enable CxCSS, CDCSS 24-bit mode, negative, gain 51).
-pub const CXCSS_CTRL_CDCSS_INV: u16 = 0xA833;
+/// `REG_51` configuration for inverted 23-bit Golay CDCSS (`0x8033`: Bit 11 = 0 23-bit mode,
+/// Bit 13 = 0 silicon-verified inverted on-air D023I polarity, gain 51).
+pub const CXCSS_CTRL_CDCSS_INV: u16 = 0x8033;
 
 /// `REG_52` default threshold configuration without active TX phase shift (`0x028F`).
 pub const CXCSS_TAIL_NORMAL: u16 = 0x028F;

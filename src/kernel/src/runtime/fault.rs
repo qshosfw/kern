@@ -114,7 +114,6 @@ impl AppFault {
     /// Formats a human-readable exception summary (e.g.
     /// `"scanner crashed unexpectedly.\nInvalid memory or code.\nAt +0x01A4"`)
     /// into `out` without heap allocation or `core::fmt`.
-    #[inline(never)]
     pub fn format_message<'a>(&self, app_name: &str, out: &'a mut [u8; 96]) -> &'a str {
         let mut pos = 0usize;
         let name = if app_name.is_empty() { "App" } else { app_name };

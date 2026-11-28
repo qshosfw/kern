@@ -125,17 +125,11 @@ fn test_krx_launch_error_diagnostics() {
     );
     assert_eq!(err_cap.describe(), "Unsupported cap.");
 
-    assert_eq!(
-        KrxLaunchError::FileNotFound.describe(),
-        "Not installed.\nSync via Kern Dock."
-    );
-    assert_eq!(
-        KrxLaunchError::InsufficientRam.describe(),
-        "Exceeds 6KB RAM."
-    );
+    assert_eq!(KrxLaunchError::FileNotFound.describe(), "Not installed.");
+    assert_eq!(KrxLaunchError::InsufficientRam.describe(), "Out of RAM.");
     assert_eq!(
         KrxLaunchError::UnsupportedProfile.describe(),
-        "Unsupported profile."
+        "Bad profile."
     );
 
     // Every variant resolves to a non-empty, distinct sentence.
@@ -460,12 +454,15 @@ fn test_native_provisioned_package_full_test_bench() {
     // ── 3. Validate Unified Single-Entry ABI Dispatch ──
     let stub_api = KrxApiTable::safe_stub(required_caps);
     unsafe {
-        assert_eq!(stub_api.invoke(::abi::Op::RfGet, 0, 0, 0), 0);
+        assert_eq!(stub_api.prop_get32(::abi::prop::RF_FREQ), 0);
         assert_eq!(
             stub_api.invoke(::abi::Op::RfTune, 145_000_000, 1, 12_500),
             1
         );
-        assert_eq!(stub_api.invoke(::abi::Op::GfxFb, 0, 0, 0), 0);
+        assert_eq!(
+            stub_api.invoke(::abi::Op::GfxDraw, ::abi::sub::gfx_draw::FB as usize, 0, 0),
+            0
+        );
     }
 
     // ── 4. Validate Process Lifecycle & PCB Ledger Integration ──
@@ -484,10 +481,8 @@ fn test_native_provisioned_package_full_test_bench() {
     let pcb = proc_table.find_mut(pid).expect("Found PCB");
     assert_eq!(pcb.state, crate::proc::ProcState::Ready);
     pcb.set_state(crate::proc::ProcState::Running);
-    pcb.ledger.record_activation();
-    pcb.ledger.record_event();
-    assert_eq!(pcb.ledger.cpu_ticks, 1);
-    assert_eq!(pcb.ledger.ipc_events, 1);
+    pcb.health.record_page_fault();
+    assert_eq!(pcb.health.page_faults, 1);
 
     // ── 5. Validate MemoryMapLayout Boundary & Access Protection ──
     let mut mem_layout = MemoryMapLayout::<4>::new();
@@ -533,7 +528,7 @@ fn test_native_provisioned_package_full_test_bench() {
                 if ev.is_key() {
                     1 // Consumed
                 } else if ev.is_radio_bus() {
-                    let _freq = unsafe { table.invoke(::abi::Op::RfGet, 0, 0, 0) };
+                    let _freq = table.prop_get32(::abi::prop::RF_FREQ);
                     1 // Consumed
                 } else {
                     0 // Ignored
@@ -542,7 +537,7 @@ fn test_native_provisioned_package_full_test_bench() {
             KRX_OP_RENDER => {
                 unsafe {
                     table.invoke(::abi::Op::GfxDraw, 1 | (1 << 8), 0, (128) | (64 << 16));
-                    table.invoke(::abi::Op::GfxCommit, 0, 0, 0);
+                    table.commit();
                 }
                 0
             }
@@ -809,7 +804,7 @@ fn test_native_app_execution_and_abi_integration_bench() {
                 unsafe {
                     table.invoke(::abi::Op::GfxDraw, 1 | (1 << 8), 0, 128 | (64 << 16));
                     table.invoke(::abi::Op::GfxText, &raw const req as usize, 0, 0);
-                    table.invoke(::abi::Op::GfxCommit, 0, 0, 0);
+                    table.commit();
                 }
                 0
             }
@@ -894,44 +889,44 @@ fn test_exhaustive_abi_vtable_verification_bench() {
     let api = KrxApiTable::safe_stub(0xFFFF_FFFF);
 
     unsafe {
-        // SYS & MATH
-        assert_eq!(api.invoke(Op::SysQuery, 0, 0, 0), KRX_ABI_VERSION as usize);
-        assert_eq!(api.invoke(Op::SysQuery, 1, 0, 0), 1024);
-        assert_eq!(api.invoke(Op::SysQuery, 2, 0, 0), 48_000_000);
-        assert_eq!(api.invoke(Op::SysInfo, 0, 0, 0), 1);
+        // SYS & PROP
+        assert_eq!(api.prop_get32(::abi::prop::OS_VERSION), KRX_ABI_VERSION);
+        assert_eq!(api.stack_free(), 1024);
+        assert_eq!(api.cpu_hz(), 48_000_000);
+        assert_eq!(api.invoke(Op::SysQuery, 0, 0, 0), 1);
 
         // PROC & IPC
-        assert_eq!(api.invoke(Op::ProcLeaf, 0, 100, 0), 0xFFFF_FFFF);
-        assert_eq!(api.invoke(Op::ProcSvc, 0 | (0x1234 << 8), 1, 0), 1);
-        assert_eq!(api.invoke(Op::ProcSvc, 1 | (0x1234 << 8), 1, 0), 0);
+        assert_eq!(api.call_leaf(0, 100), 0xFFFF_FFFF);
         assert_eq!(api.invoke(Op::ProcCtl, 0, 0, 0), 1);
-        assert_eq!(api.invoke(Op::IpcSend, 0, 0, 0), 1);
-        assert_eq!(api.invoke(Op::IpcRecv, 0, 0, 0), 1);
-        assert_eq!(api.invoke(Op::IpcPoll, 0, 16, 0), 0xFF);
+        assert_eq!(api.invoke(Op::Ipc, 0, 0, 0), 1);
+        assert_eq!(api.invoke(Op::Ipc, 1, 0, 0), 1);
+        assert_eq!(api.ipc_poll(&mut [0u8; 16]), 0xFF);
 
         // FS
         assert_eq!(api.invoke(Op::FsRead, 0, 0, 0), 0);
         assert_eq!(api.invoke(Op::FsWrite, 0, 0, 0), 1);
         assert_eq!(api.invoke(Op::FsMeta, 2, 0, 0), 1);
-        assert_eq!(api.invoke(Op::FsRename, 0, 0, 0), 1);
+        assert_eq!(api.invoke(Op::FsMeta, 5, 0, 0), 1);
 
         // RF & AUD
         assert_eq!(api.invoke(Op::RfTune, 145_500_000, 1, 12_500), 1);
-        assert_eq!(api.invoke(Op::RfGet, 0, 0, 0), 0);
-        assert_eq!(api.invoke(Op::RfGet, 1, 0, 0) as u32 as i32, -140);
-        assert_eq!(api.invoke(Op::RfSet, 6, 0, 0), 1);
-        assert_eq!(api.invoke(Op::AudCtl, 3, 8000, 0), 1);
+        assert_eq!(api.prop_get32(::abi::prop::RF_FREQ), 0);
+        assert_eq!(api.prop_get32(::abi::prop::RF_RSSI) as i32, -140);
+        assert_eq!(api.prop_set32(::abi::prop::RF_TX, 0), 0);
+        assert_eq!(api.invoke(Op::Aud, 1, 8000, 0), 0);
 
         // GFX & UI
-        assert_eq!(api.invoke(Op::GfxClear, 0, 0, 0), 0);
+        assert_eq!(
+            api.invoke(Op::GfxDraw, ::abi::sub::gfx_draw::CLEAR as usize, 0, 0),
+            0
+        );
         assert_eq!(api.invoke(Op::GfxDraw, 5 | (1 << 8), 0, b'A' as usize), 6);
-        assert_eq!(api.invoke(Op::GfxCommit, 0, 0, 0), 0);
+        api.commit();
         assert_eq!(api.invoke(Op::UiWidget, 1, 0, 0), 1);
 
         // IO
-        assert_eq!(api.invoke(Op::IoPower, 0, 0, 0), 4000);
-        assert_eq!(api.invoke(Op::IoPower, 5, 0, 0), 250);
-        assert_eq!(api.invoke(Op::IoTime, 3, 0, 0), 1);
+        assert_eq!(api.battery_mv(), 4000);
+        assert_eq!(api.mcu_temp_deci_c(), 250);
         assert_eq!(api.invoke(Op::IoBus, 0, 0, 0), 1);
         assert_eq!(api.invoke(Op::IoBus, 6, 0, 0), 1);
     }
@@ -941,38 +936,30 @@ fn test_exhaustive_abi_vtable_verification_bench() {
 fn test_paged_execution_with_shadow_stack_and_leafs_bench() {
     use super::paged::*;
 
-    // 1. Verify ShadowReturnStack push/pop and nesting
     let mut stack = ShadowReturnStack::<4>::new();
     assert_eq!(stack.sp, 0);
 
-    // Simulate nested paged calls:
-    // Frame 1: caller in block 1 at offset 0x0100 calls callee in block 2, return offset 0x0120
-    let frame1 = ReturnFrame {
-        caller_block_id: 1,
-        caller_slot: 0,
+    let frame1 = PageReturnFrame {
+        caller_page_id: 1,
         return_offset: 0x0120,
     };
     assert!(stack.push(frame1).is_ok());
     assert_eq!(stack.sp, 1);
 
-    // Frame 2: block 2 at offset 0x0040 calls callee in block 3, return offset 0x0060
-    let frame2 = ReturnFrame {
-        caller_block_id: 2,
-        caller_slot: 1,
+    let frame2 = PageReturnFrame {
+        caller_page_id: 2,
         return_offset: 0x0060,
     };
     assert!(stack.push(frame2).is_ok());
     assert_eq!(stack.sp, 2);
 
-    // Callee in block 3 completes, executes paged_return() -> restores frame2
     let popped2 = stack.pop().expect("Pop frame 2");
-    assert_eq!(popped2.caller_block_id, 2);
+    assert_eq!(popped2.caller_page_id, 2);
     assert_eq!(popped2.return_offset, 0x0060);
     assert_eq!(stack.sp, 1);
 
-    // Callee in block 2 completes, executes paged_return() -> restores frame1
     let popped1 = stack.pop().expect("Pop frame 1");
-    assert_eq!(popped1.caller_block_id, 1);
+    assert_eq!(popped1.caller_page_id, 1);
     assert_eq!(popped1.return_offset, 0x0120);
     assert_eq!(stack.sp, 0);
 
@@ -983,9 +970,8 @@ fn test_paged_execution_with_shadow_stack_and_leafs_bench() {
     for i in 0..4 {
         assert!(
             stack
-                .push(ReturnFrame {
-                    caller_block_id: i as u8,
-                    caller_slot: 0,
+                .push(PageReturnFrame {
+                    caller_page_id: i as u16,
                     return_offset: 0x10,
                 })
                 .is_ok()
@@ -993,9 +979,8 @@ fn test_paged_execution_with_shadow_stack_and_leafs_bench() {
     }
     assert_eq!(
         stack
-            .push(ReturnFrame {
-                caller_block_id: 99,
-                caller_slot: 0,
+            .push(PageReturnFrame {
+                caller_page_id: 99,
                 return_offset: 0x10,
             })
             .unwrap_err(),
@@ -1076,42 +1061,37 @@ fn test_paged_execution_with_shadow_stack_and_leafs_bench() {
 fn test_streamed_pages_and_lru_cache_bench() {
     use super::paged::*;
 
-    let mut cache = FixedWindowCache::<8, 2>::new();
-    // Configure 4 uniform 1024-byte blocks across 2 cache slots
-    cache.configure(1024, 2, 0x10000, 4096, None);
+    let mut cache = StreamedWindowCache::<8>::new();
+    cache.configure(1024, 2, 2048, 0, 0, 0x10000, 4096, 0, 0);
     assert_eq!(cache.active_slots, 2);
-    assert_eq!(cache.block_count, 4);
+    assert_eq!(cache.page_count, 4);
 
-    // Access Block 0 -> Miss, allocated to Slot 0
-    let (slot0, hit0, _entry0) = cache.resolve_or_select_slot(0).expect("Alloc block 0");
-    assert!(!hit0);
+    let (slot0, _) = cache
+        .alloc_way_for_miss(0, true, |_| None)
+        .expect("Alloc page 0");
     assert_eq!(slot0, 0);
     assert_eq!(cache.fault_count, 1);
     assert_eq!(cache.hit_count, 0);
 
-    // Access Block 1 -> Miss, allocated to Slot 1
-    let (slot1, hit1, _entry1) = cache.resolve_or_select_slot(1).expect("Alloc block 1");
-    assert!(!hit1);
+    let (slot1, _) = cache
+        .alloc_way_for_miss(1, true, |_| None)
+        .expect("Alloc page 1");
     assert_eq!(slot1, 1);
     assert_eq!(cache.fault_count, 2);
     assert_eq!(cache.hit_count, 0);
 
-    // Access Block 0 again -> Cache Hit!
-    let (slot0_again, hit0_again, _entry0_again) =
-        cache.resolve_or_select_slot(0).expect("Hit block 0");
-    assert!(hit0_again);
+    let (slot0_again, _, _) = cache.probe_hit(0).expect("Hit page 0");
     assert_eq!(slot0_again, 0);
     assert_eq!(cache.fault_count, 2);
     assert_eq!(cache.hit_count, 1);
 
-    // Access Block 2 -> All slots full! Evicts least recently used (Block 1 in Slot 1)
-    let (slot_evicted, hit_evicted, _entry2) =
-        cache.resolve_or_select_slot(2).expect("Evict block 1");
-    assert!(!hit_evicted);
-    assert_eq!(slot_evicted, 1); // Evicted slot 1
+    let (slot_evicted, _) = cache
+        .alloc_way_for_miss(2, true, |_| None)
+        .expect("Evict page 1");
+    assert_eq!(slot_evicted, 1);
     assert_eq!(cache.fault_count, 3);
-    assert_eq!(cache.slots[1].resident_block, Some(2));
-    assert_eq!(cache.slots[0].resident_block, Some(0)); // Block 0 kept
+    assert_eq!(cache.ways[1].resident_page, 2);
+    assert_eq!(cache.ways[0].resident_page, 0);
 }
 
 #[test]
@@ -1276,26 +1256,21 @@ fn test_deep_edge_case_ram_orchestration_and_process_stress_bench() {
         "Table must be full"
     );
 
-    // Suspend user apps with distinct CPU tick counts
+    // Suspend user apps so spawn_or_recycle reclaims non-running user slots cleanly
     if let Some(pcb) = table.find_mut(u1) {
         pcb.set_state(ProcState::Suspended);
-        pcb.ledger.cpu_ticks = 500;
     }
     if let Some(pcb) = table.find_mut(u2) {
         pcb.set_state(ProcState::Suspended);
-        pcb.ledger.cpu_ticks = 300; // Victim 2
     }
     if let Some(pcb) = table.find_mut(u3) {
         pcb.set_state(ProcState::Suspended);
-        pcb.ledger.cpu_ticks = 100; // Victim 1 (lowest CPU ticks)
     }
     if let Some(pcb) = table.find_mut(u4) {
         pcb.set_state(ProcState::Running); // Cannot evict running app
-        pcb.ledger.cpu_ticks = 50;
     }
 
     // Test spawn_or_recycle under extreme saturation
-    // Must recycle u3 (lowest CPU ticks among suspended user apps: 100 ticks)
     let recycled1 = table
         .spawn_or_recycle(
             "STREAM_P1",
@@ -1306,12 +1281,11 @@ fn test_deep_edge_case_ram_orchestration_and_process_stress_bench() {
         )
         .unwrap();
     assert!(
-        table.find(u3).is_none(),
-        "Lowest tick suspended process u3 must be evicted"
+        table.find(u4).is_some(),
+        "Running process u4 must not be evicted"
     );
     assert_eq!(table.find(recycled1).unwrap().name, "STREAM_P1");
 
-    // Next victim must be u2 (300 ticks)
     let recycled2 = table
         .spawn_or_recycle(
             "LEAF_P0",
@@ -1321,7 +1295,10 @@ fn test_deep_edge_case_ram_orchestration_and_process_stress_bench() {
             CapabilitySet::NONE,
         )
         .unwrap();
-    assert!(table.find(u2).is_none(), "u2 must be evicted next");
+    assert!(
+        table.find(u4).is_some(),
+        "Running process u4 must not be evicted"
+    );
     assert_eq!(table.find(recycled2).unwrap().name, "LEAF_P0");
 
     // System daemons (PID 1..4) must NEVER be evicted under any circumstances
@@ -1336,76 +1313,60 @@ fn test_deep_edge_case_ram_orchestration_and_process_stress_bench() {
     // ══════════════════════════════════════════════════════════════════
     // 3. DEMAND-PAGED STREAMING & LRU CACHE THRASHING STRESS
     // ══════════════════════════════════════════════════════════════════
-    let mut cache = FixedWindowCache::<16, 2>::new();
-    // Setup 16 blocks: Block 0 has BLOCK_FLAG_PINNED (1)
-    let mut block_map_bytes = [0u8; 16 * BlockEntry::SIZE];
-    for b in 0..16 {
-        let offset = b * BlockEntry::SIZE;
-        block_map_bytes[offset] = b as u8; // block_id
-        block_map_bytes[offset + 1] = if b == 0 { BLOCK_FLAG_PINNED } else { 0 }; // flags
-        block_map_bytes[offset + 2..offset + 4].copy_from_slice(&1024u16.to_le_bytes()); // size = 1024
-        block_map_bytes[offset + 4..offset + 8].copy_from_slice(&((b * 1024) as u32).to_le_bytes()); // flash_offset
-    }
-    cache.configure(1024, 2, 0, 16384, Some(&block_map_bytes));
+    let mut cache = StreamedWindowCache::<8>::new();
+    cache.configure(1024, 2, 2048, 0, 0b0000_0001, 0, 16384, 0, 0);
     assert_eq!(cache.active_slots, 2);
-    assert_eq!(cache.block_count, 16);
+    assert_eq!(cache.page_count, 16);
 
-    // Resolve Block 0 -> Miss, allocated to Slot 0 (pinned!)
-    let (s0, hit0, entry0) = cache.resolve_or_select_slot(0).unwrap();
+    let (s0, entry0) = cache.alloc_way_for_miss(0, true, |_| None).unwrap();
     assert_eq!(s0, 0);
-    assert!(!hit0);
-    assert!(entry0.is_pinned());
-    assert!(cache.slots[0].pinned);
+    assert_ne!(entry0.flags & BLOCK_FLAG_PINNED, 0);
+    assert!(cache.ways[0].is_pinned());
 
-    // Stream blocks 1 through 15 sequentially through the single remaining unpinned slot (Slot 1)
-    for blk in 1..=15 {
-        let (slot, hit, _) = cache.resolve_or_select_slot(blk).unwrap();
+    for blk in 1u16..=15 {
+        let (slot, _) = cache.alloc_way_for_miss(blk, true, |_| None).unwrap();
         assert_eq!(
             slot, 1,
-            "Pinned Slot 0 must NEVER be evicted; Block {} must use Slot 1",
+            "Pinned Slot 0 must NEVER be evicted; Page {} must use Slot 1",
             blk
         );
-        assert!(!hit);
         assert_eq!(
-            cache.slots[0].resident_block,
-            Some(0),
-            "Slot 0 must remain pinned to Block 0"
+            cache.ways[0].resident_page, 0,
+            "Slot 0 must remain pinned to Page 0"
         );
     }
 
-    // Verify hit on pinned block 0
-    let (s0_hit, hit0_again, _) = cache.resolve_or_select_slot(0).unwrap();
+    let (s0_hit, _, _) = cache
+        .probe_hit(0)
+        .expect("Pinned Page 0 must be a cache hit");
     assert_eq!(s0_hit, 0);
-    assert!(hit0_again, "Pinned Block 0 must be a cache hit");
 
     // ══════════════════════════════════════════════════════════════════
     // 4. DEEP SHADOW RETURN STACK NESTING STRESS
     // ══════════════════════════════════════════════════════════════════
     let mut shadow = ShadowReturnStack::<4>::new();
-    for i in 0..4 {
+    for i in 0..4u16 {
         assert!(
             shadow
-                .push(ReturnFrame {
-                    caller_block_id: i,
-                    caller_slot: (i % 2) as u8,
-                    return_offset: (i * 0x40) as u16,
+                .push(PageReturnFrame {
+                    caller_page_id: i,
+                    return_offset: i * 0x40,
                 })
                 .is_ok()
         );
     }
     assert_eq!(
-        shadow.push(ReturnFrame {
-            caller_block_id: 99,
-            caller_slot: 0,
+        shadow.push(PageReturnFrame {
+            caller_page_id: 99,
             return_offset: 0
         }),
         Err(PagedError::ShadowStackOverflow)
     );
 
-    for i in (0..4).rev() {
+    for i in (0..4u16).rev() {
         let frame = shadow.pop().unwrap();
-        assert_eq!(frame.caller_block_id, i);
-        assert_eq!(frame.return_offset, (i * 0x40) as u16);
+        assert_eq!(frame.caller_page_id, i);
+        assert_eq!(frame.return_offset, i * 0x40);
     }
     assert_eq!(shadow.pop(), Err(PagedError::ShadowStackUnderflow));
 

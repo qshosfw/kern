@@ -15,12 +15,47 @@
 //! - Software NSS management
 //! - Baud rate: fPCLK/16
 
+use crate::dma::{
+    CH_SPI1_TX, CH_SPI2_RX, CH_SPI2_TX, DataSize, Direction, DmaChannel, DmaConfig, Priority, req,
+};
 use crate::gpio::Pin;
 use crate::rcc;
 use pac::gpio;
 use pac::spi::{self, SPI1, SPI2};
 
-/// Initialize SPI1 peripheral and configure PA5 (SCK) + PA7 (MOSI) as AF0.
+static DUMMY_FF: u8 = 0xFF;
+
+const DMA_SPI_TX_CFG: DmaConfig = DmaConfig {
+    direction: Direction::MemToPeriph,
+    priority: Priority::High,
+    mem_size: DataSize::Byte8,
+    periph_size: DataSize::Byte8,
+    mem_inc: true,
+    periph_inc: false,
+    circular: false,
+};
+
+const DMA_SPI_DUMMY_TX_CFG: DmaConfig = DmaConfig {
+    direction: Direction::MemToPeriph,
+    priority: Priority::High,
+    mem_size: DataSize::Byte8,
+    periph_size: DataSize::Byte8,
+    mem_inc: false,
+    periph_inc: false,
+    circular: false,
+};
+
+const DMA_SPI_RX_CFG: DmaConfig = DmaConfig {
+    direction: Direction::PeriphToMem,
+    priority: Priority::VeryHigh,
+    mem_size: DataSize::Byte8,
+    periph_size: DataSize::Byte8,
+    mem_inc: true,
+    periph_inc: false,
+    circular: false,
+};
+
+/// Initialize SPI1 peripheral and configure PA5 (SCK) + PA7 (MOSI) as AF0 + DMA1 Ch2 (`SPI1_TX`).
 pub fn init() {
     // Enable SPI1 clock
     rcc::enable_spi1();
@@ -35,12 +70,15 @@ pub fn init() {
     mosi.set_pull(pac::gpio::PULL_NONE);
     mosi.configure_af(pac::gpio::AF0, pac::gpio::SPEED_MEDIUM);
 
+    // Bind DMA1 Channel 2 -> SPI1_TX (0x04)
+    DmaChannel::new(CH_SPI1_TX).remap(req::SPI1_TX);
+
     // BR=/4 (12 MHz @ 48 MHz PCLK)
     set_spi_br(SPI1, 0b001);
 }
 
-/// Initialize SPI2 peripheral for Flash.
-/// PA0 (SCK, AF8), PA1 (MISO, AF9), PA2 (MOSI, AF9).
+/// Initialize SPI2 peripheral for Flash + DMA1 Ch3 (`SPI2_RX`) and Ch4 (`SPI2_TX`).
+/// PA0 (SCK, AF8), PA1 (MOSI, AF9), PA2 (MISO, AF9).
 pub fn init_spi2() {
     unsafe {
         // Enable SPI2 Clock
@@ -59,6 +97,10 @@ pub fn init_spi2() {
     let miso = Pin::new(gpio::GPIOA_BASE, 2);
     miso.set_pull(pac::gpio::PULL_NONE);
     miso.configure_af(9, pac::gpio::SPEED_MEDIUM);
+
+    // Bind DMA1 Channel 3 -> SPI2_RX (0x05) and Channel 4 -> SPI2_TX (0x06)
+    DmaChannel::new(CH_SPI2_RX).remap(req::SPI2_RX);
+    DmaChannel::new(CH_SPI2_TX).remap(req::SPI2_TX);
 
     // BR=/2 = 24MHz (or /4 = 18MHz when PCLK > 48MHz)
     let br = if rcc::sysclk_hz() > 48_000_000 {
@@ -87,7 +129,6 @@ pub enum Spi1Speed {
 }
 
 /// Update SPI baud rate prescaler cleanly after draining active bus transfers.
-#[inline(never)]
 fn set_spi_br(spi_inst: pac::spi::SpiInstance, br: u32) {
     let _ = wait_idle_instance(spi_inst);
     unsafe {
@@ -142,7 +183,6 @@ pub enum SpiError {
 }
 
 /// Transfer a byte over a specific SPI instance (returns received byte).
-#[inline(never)]
 pub fn transfer_byte_instance(spi: pac::spi::SpiInstance, data: u8) -> Result<u8, SpiError> {
     unsafe {
         // Drain any stale RX byte / clear OVR so a prior timeout cannot shift subsequent reads.
@@ -173,7 +213,6 @@ pub fn transfer_byte_instance(spi: pac::spi::SpiInstance, data: u8) -> Result<u8
 }
 
 /// Wait until a specific SPI instance is no longer busy.
-#[inline(never)]
 pub fn wait_idle_instance(spi: pac::spi::SpiInstance) -> Result<(), SpiError> {
     unsafe {
         let mut timeout = 100_000;
@@ -205,13 +244,48 @@ pub fn wait_idle() -> Result<(), SpiError> {
     wait_idle_instance(SPI1)
 }
 
-/// Transmit a slice of bytes over SPI1.
+#[inline(always)]
+unsafe fn drain_rx_ovr(spi: pac::spi::SpiInstance) {
+    unsafe {
+        let _ = spi.dr_8().read_volatile();
+        let _ = spi.sr().read_volatile();
+    }
+}
+
+/// DMA-accelerated TX burst helper shared by `SPI1` (`CH_SPI1_TX`) and `SPI2` (`CH_SPI2_TX`).
+fn dma_write_instance(spi: pac::spi::SpiInstance, dma_ch: u8, data: &[u8]) -> Result<(), SpiError> {
+    if data.len() < 8 || data.len() > u16::MAX as usize {
+        for &b in data {
+            transfer_byte_instance(spi, b)?;
+        }
+        return Ok(());
+    }
+    wait_idle_instance(spi)?;
+    unsafe { drain_rx_ovr(spi) };
+    let mut ch = DmaChannel::new(dma_ch);
+    let ok = {
+        let xfer = ch.start_scoped(
+            &DMA_SPI_TX_CFG,
+            spi.dr_8() as u32,
+            data.as_ptr() as u32,
+            data.len() as u16,
+        );
+        unsafe { spi.cr2().write_volatile(spi::CR2_TXDMAEN) };
+        xfer.wait(500_000)
+    };
+    unsafe { spi.cr2().write_volatile(0) };
+    let idle = wait_idle_instance(spi);
+    unsafe { drain_rx_ovr(spi) };
+    if !ok {
+        return Err(SpiError::Timeout);
+    }
+    idle
+}
+
+/// Transmit a slice of bytes over SPI1 (uses `DMA1_Ch2` for slices `>= 8 B`).
 #[inline]
 pub fn write_bytes(data: &[u8]) -> Result<(), SpiError> {
-    for &b in data {
-        write_byte(b)?;
-    }
-    Ok(())
+    dma_write_instance(SPI1, CH_SPI1_TX, data)
 }
 
 /// Transfer a byte over SPI2 (returns received byte).
@@ -226,22 +300,48 @@ pub fn spi2_write_byte(data: u8) -> Result<(), SpiError> {
     spi2_transfer(data).map(|_| ())
 }
 
-/// Transmit a slice of bytes over SPI2.
-#[inline(never)]
+/// Transmit a slice of bytes over SPI2 (uses `DMA1_Ch4` for slices `>= 8 B`).
+#[inline]
 pub fn spi2_write_bytes(data: &[u8]) -> Result<(), SpiError> {
-    for &b in data {
-        spi2_write_byte(b)?;
-    }
-    Ok(())
+    dma_write_instance(SPI2, CH_SPI2_TX, data)
 }
 
-/// Read multiple bytes over SPI2 by clocking out 0xFF dummy bytes.
-#[inline(never)]
+/// Read multiple bytes over SPI2 at 24 MHz using full-duplex `DMA1_Ch3` (`RX`) + `DMA1_Ch4` (`0xFF` dummy `TX`).
 pub fn spi2_read_bytes(buffer: &mut [u8]) -> Result<(), SpiError> {
-    for b in buffer.iter_mut() {
-        *b = spi2_transfer(0xFF)?;
+    if buffer.len() < 12 || buffer.len() > u16::MAX as usize {
+        for b in buffer.iter_mut() {
+            *b = spi2_transfer(0xFF)?;
+        }
+        return Ok(());
     }
-    Ok(())
+    wait_idle_instance(SPI2)?;
+    unsafe { drain_rx_ovr(SPI2) };
+    let count = buffer.len() as u16;
+    let dr_addr = SPI2.dr_8() as u32;
+    let mut rx_ch = DmaChannel::new(CH_SPI2_RX);
+    let mut tx_ch = DmaChannel::new(CH_SPI2_TX);
+    let ok = {
+        let rx_xfer =
+            rx_ch.start_scoped(&DMA_SPI_RX_CFG, dr_addr, buffer.as_mut_ptr() as u32, count);
+        unsafe {
+            SPI2.cr2()
+                .write_volatile(spi::CR2_RXDMAEN | spi::CR2_TXDMAEN);
+        }
+        let _tx_xfer = tx_ch.start_scoped(
+            &DMA_SPI_DUMMY_TX_CFG,
+            dr_addr,
+            (&DUMMY_FF as *const u8) as u32,
+            count,
+        );
+        rx_xfer.wait(500_000)
+    };
+    unsafe { SPI2.cr2().write_volatile(0) };
+    let idle = wait_idle_instance(SPI2);
+    unsafe { drain_rx_ovr(SPI2) };
+    if !ok {
+        return Err(SpiError::Timeout);
+    }
+    idle
 }
 
 /// Wait until SPI2 is no longer busy.

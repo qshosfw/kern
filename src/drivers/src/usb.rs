@@ -203,7 +203,6 @@ impl UsbDriver {
     }
 
     /// Initialize non-zero fields on an already-zeroed `UsbDriver` instance (avoids stack temporary).
-    #[inline(never)]
     pub fn init_zeroed(&mut self) {
         let def = bsp::pins::BOARD_SPEC.usb_product_default.as_bytes();
         self.product_len = def.len() as u8;
@@ -242,7 +241,6 @@ impl UsbDriver {
         self.rf_tx_active = active;
     }
 
-    #[inline(never)]
     fn set_usb_nvic(enable: bool) {
         #[cfg(all(not(test), target_arch = "arm"))]
         unsafe {
@@ -259,7 +257,6 @@ impl UsbDriver {
     }
 
     /// Truly detach the PY32F071 USB PHY and reset link state before deep STOP sleep.
-    #[inline(never)]
     pub fn disconnect_for_sleep(&mut self) {
         Self::set_usb_nvic(false);
         py32_hal::rcc::disable_usbd();
@@ -282,7 +279,6 @@ impl UsbDriver {
     }
 
     /// Initialize the USBD peripheral clock, CTC SOF auto-trim, and arm interrupt-driven USB.
-    #[inline(never)]
     pub fn init(&mut self) {
         Self::set_usb_nvic(false);
 
@@ -305,7 +301,6 @@ impl UsbDriver {
         Self::set_usb_nvic(true);
     }
 
-    #[inline(never)]
     fn reset_bus_state(&mut self) {
         self.dev_addr = 0;
         self.pending_addr = 0;
@@ -321,7 +316,6 @@ impl UsbDriver {
     /// Interrupt handler (`IRQ 31`): services USB bus resets, EP0 control stages (meeting the
     /// 2 ms `SET_ADDRESS` window even during LCD blits or PA ramps), and CDC Bulk endpoints
     /// with RF packet-error flushing and hardware NAK flow control.
-    #[inline(never)]
     pub fn handle_irq(&mut self) {
         if !self.is_initialized {
             return;
@@ -397,7 +391,6 @@ impl UsbDriver {
     }
 
     #[cfg(feature = "usb_cdc")]
-    #[inline(never)]
     fn drain_cdc_out_ep(&mut self, out_ep: u8) {
         usb_wr(0x0E, out_ep);
         let out_csr = usb_rd(0x19);
@@ -421,7 +414,6 @@ impl UsbDriver {
 
     /// Poll bus lifecycle state (SOF frame counter, connect/disconnect transitions, runaway
     /// reset-storm backoff, and optional MSC endpoints). Returns `Some(UsbEvent)` on transitions.
-    #[inline(never)]
     pub fn poll(&mut self) -> Option<UsbEvent> {
         if !self.is_initialized {
             return None;
@@ -503,7 +495,6 @@ impl UsbDriver {
         event
     }
 
-    #[inline(never)]
     fn ep0_tx_next(&mut self) -> bool {
         if self.ep0_rem > 0 {
             let chunk = (self.ep0_rem as usize).min(USB_EP0_MAX_PACKET_SIZE);
@@ -529,7 +520,6 @@ impl UsbDriver {
         }
     }
 
-    #[inline(never)]
     fn poll_ep0(&mut self) {
         usb_wr(0x0E, 0);
         let csr = usb_rd(0x10);
@@ -597,7 +587,6 @@ impl UsbDriver {
         }
     }
 
-    #[inline(never)]
     fn handle_setup_packet(&mut self, setup: &[u8; 8]) {
         let bm_req_type = setup[0];
         let b_request = setup[1];
@@ -642,7 +631,6 @@ impl UsbDriver {
         }
     }
 
-    #[inline(never)]
     fn ep0_start_string_transfer(&mut self, ascii: &[u8], max_len: u16) {
         let len = ascii.len().min(31);
         let mut desc = core::mem::MaybeUninit::<[u8; 64]>::uninit();
@@ -742,7 +730,6 @@ impl UsbDriver {
         }
     }
 
-    #[inline(never)]
     #[allow(unused_variables)]
     fn handle_class_request(
         &mut self,
@@ -785,7 +772,6 @@ impl UsbDriver {
         self.ep0_stall();
     }
 
-    #[inline(never)]
     fn configure_endpoints(&mut self) {
         #[cfg(feature = "usb_msc")]
         {
@@ -858,7 +844,6 @@ impl UsbDriver {
         }
     }
 
-    #[inline(never)]
     fn ep0_start_transfer(&mut self, data: &[u8], max_len: u16) {
         let total = data.len().min(max_len as usize);
         if total == 0 {
@@ -874,7 +859,6 @@ impl UsbDriver {
         self.ep0_tx_next();
     }
 
-    #[inline(never)]
     fn ep0_write_csr(csr: u8) {
         usb_wr(0x0E, 0);
         usb_wr(0x10, csr);
@@ -956,7 +940,6 @@ impl UsbDriver {
     }
 
     #[cfg(feature = "usb_cdc")]
-    #[inline(never)]
     fn cdc_write_packet(&mut self, in_ep: u8, chunk: &[u8]) -> bool {
         let start = py32_hal::delay::millis();
         loop {
@@ -1023,7 +1006,6 @@ impl UsbDriver {
     }
 
     /// Read incoming serial data chunk from USB CDC ACM and release NAK flow control if armed.
-    #[inline(never)]
     pub fn cdc_read(&mut self, _buf: &mut [u8]) -> usize {
         #[cfg(feature = "usb_cdc")]
         {

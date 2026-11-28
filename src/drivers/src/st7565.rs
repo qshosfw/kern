@@ -9,6 +9,18 @@ pub struct St7565<B> {
     pub subframe: u8,
     pub motion_bypass: bool,
     pub shading_mode: u8,
+    panel_synced: bool,
+    strip_hash: [[u16; 4]; 8],
+}
+
+fn hash_strip_32(strip: &[u8]) -> u16 {
+    let mut h = 0x811C_9DC5u32;
+    let p = strip.as_ptr() as *const u32;
+    for i in 0..8usize {
+        h ^= unsafe { p.add(i).read_unaligned() };
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    ((h >> 16) ^ h) as u16
 }
 
 impl<B: CommandDisplayBus> St7565<B> {
@@ -18,6 +30,8 @@ impl<B: CommandDisplayBus> St7565<B> {
             subframe: 0,
             motion_bypass: false,
             shading_mode: 1,
+            panel_synced: false,
+            strip_hash: [[0; 4]; 8],
         }
     }
 
@@ -40,7 +54,6 @@ impl<B: CommandDisplayBus> St7565<B> {
         self.bus.write_byte(data);
     }
 
-    #[inline(never)]
     fn send_cmds(&mut self, cmds: &[u8]) {
         self.bus.cs_low();
         self.bus.dc_low();
@@ -71,6 +84,13 @@ impl<B: CommandDisplayBus> St7565<B> {
             }
             i = end + 1;
         }
+        self.panel_synced = false;
+    }
+
+    /// Force a full 8-page resynchronization on the next `blit()`.
+    #[inline(always)]
+    pub fn invalidate_sync(&mut self) {
+        self.panel_synced = false;
     }
 
     /// Turn on the LCD panel output (0xAF) cleanly
@@ -95,6 +115,7 @@ impl<B: CommandDisplayBus> St7565<B> {
         #[cfg(target_arch = "arm")]
         self.bus.delay_ms(2);
         self.send_cmds(&[0xA4, 0x40, 0xAF]);
+        self.panel_synced = false;
     }
 
     pub fn set_contrast(&mut self, contrast_percent: u8) {
@@ -144,53 +165,111 @@ impl<B: CommandDisplayBus> St7565<B> {
         }
     }
 
-    /// Blit an explicit subframe slice (0..3) to the ST7565 LCD.
+    fn begin_page_burst(&mut self, bus_open: &mut bool, page: usize, x0: u8) {
+        if !*bus_open {
+            self.bus.cs_low();
+            self.write_cmd(0x40);
+            *bus_open = true;
+        }
+        let hw_col = 4u8 + x0;
+        self.bus.dc_low();
+        self.bus.write_byte(0xB0 | (page as u8 & 0x0F));
+        self.bus.write_byte(0x10 | (hw_col >> 4));
+        self.bus.write_byte(hw_col & 0x0F);
+        self.bus.dc_high();
+    }
+
+    /// Blit an explicit subframe slice (0..3) to the ST7565 LCD using dirty-span & strip-diff DMA bursts.
     pub fn blit_subframe<F: PagedFramebuffer>(
         &mut self,
         canvas: &mut F,
         #[allow(unused_variables)] subframe: u8,
     ) {
-        let dirty = canvas.dirty_mask();
+        let dirty = if self.panel_synced {
+            canvas.dirty_mask()
+        } else {
+            0xFF
+        };
         if dirty == 0 {
             return;
         }
 
-        self.bus.cs_low();
-        self.write_cmd(0x40); // Set start line 0
+        let mut bus_open = false;
 
         for page in 0..8 {
-            if (dirty & (1 << page)) != 0 {
-                // Select Page and Column (Offset 4 for K1 ST7565 panel)
-                self.bus.dc_low();
-                const COL_OFFSET: u8 = 4;
-                self.bus.write_byte(0xB0 | (page as u8 & 0x0F));
-                self.bus.write_byte(0x10 | (COL_OFFSET >> 4));
-                self.bus.write_byte(COL_OFFSET & 0x0F);
+            if (dirty & (1 << page)) == 0 {
+                continue;
+            }
+            let (raw_x0, raw_x1) = if self.panel_synced {
+                canvas.dirty_span(page)
+            } else {
+                (0, (LCD_WIDTH - 1) as u8)
+            };
+            if raw_x0 > raw_x1 || (raw_x1 as usize) >= LCD_WIDTH {
+                continue;
+            }
 
-                // Transmit 128 data bytes for this page
-                self.bus.dc_high();
-                #[cfg(feature = "grayscale")]
-                if self.shading_mode == 0 {
-                    for col in 0..LCD_WIDTH {
-                        let byte = canvas.subframe_byte(page, col, subframe);
-                        self.bus.write_byte(byte);
+            #[cfg(not(feature = "grayscale"))]
+            {
+                let row = canvas.page_bytes(page);
+                let mut x0 = raw_x0 as usize;
+                let mut x1 = raw_x1 as usize;
+
+                // Narrow full-page redraws (`clear()` + immediate-mode render) via 4x32-col strip digests
+                if self.panel_synced && x0 == 0 && x1 == LCD_WIDTH - 1 {
+                    let mut first_q = 4usize;
+                    let mut last_q = 0usize;
+                    for q in 0..4usize {
+                        let s = q << 5;
+                        let h = hash_strip_32(&row[s..s + 32]);
+                        if self.strip_hash[page][q] != h {
+                            self.strip_hash[page][q] = h;
+                            if first_q == 4 {
+                                first_q = q;
+                            }
+                            last_q = q;
+                        }
                     }
-                } else if self.shading_mode == 1 {
-                    for col in 0..LCD_WIDTH {
-                        let byte = canvas.dither_byte(page, col);
-                        self.bus.write_byte(byte);
+                    if first_q == 4 {
+                        continue;
                     }
+                    x0 = first_q << 5;
+                    x1 = (last_q << 5) + 31;
                 } else {
-                    for &byte in canvas.page_bytes(page) {
-                        self.bus.write_byte(byte);
+                    for q in (x0 >> 5)..=(x1 >> 5) {
+                        let s = q << 5;
+                        self.strip_hash[page][q] = hash_strip_32(&row[s..s + 32]);
                     }
                 }
-                #[cfg(not(feature = "grayscale"))]
-                self.bus.write_bytes(canvas.page_bytes(page));
+
+                self.begin_page_burst(&mut bus_open, page, x0 as u8);
+                self.bus.write_bytes(&row[x0..=x1]);
+            }
+
+            #[cfg(feature = "grayscale")]
+            {
+                self.begin_page_burst(&mut bus_open, page, raw_x0);
+                if self.shading_mode == 0 {
+                    for col in (raw_x0 as usize)..=(raw_x1 as usize) {
+                        self.bus
+                            .write_byte(canvas.subframe_byte(page, col, subframe));
+                    }
+                } else if self.shading_mode == 1 {
+                    for col in (raw_x0 as usize)..=(raw_x1 as usize) {
+                        self.bus.write_byte(canvas.dither_byte(page, col));
+                    }
+                } else {
+                    self.bus.write_bytes(
+                        &canvas.page_bytes(page)[(raw_x0 as usize)..=(raw_x1 as usize)],
+                    );
+                }
             }
         }
 
+        self.panel_synced = true;
         canvas.clear_dirty();
-        self.end_transfer();
+        if bus_open {
+            self.end_transfer();
+        }
     }
 }

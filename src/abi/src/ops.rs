@@ -1,8 +1,9 @@
-//! Declarative Unified Kernel Operation Table (`abi!`).
+//! Declarative Orthogonal Kernel Operation Table (`abi!`, 22 operations across 9 domains).
 //!
-//! Single source of truth for KRX `kern_call(op, a0, a1, a2)` and RigWire operation IDs,
-//! sub-opcode constants (`sub::*`), argument signatures (`Sig`), and required capability tokens (`Cap`).
-//! Operation IDs are packed as `(domain << 4) | index` (16 domains x 16 operations).
+//! Single source of truth for KRX `kern_call(op, a0, a1, a2)` operation IDs,
+//! sub-opcode constants (`sub::*`), argument signatures (`Sig`), and capability tokens (`Cap`).
+//! All scalar preferences, live telemetry, and single-register hardware/RF controls route
+//! through `Op::SysProp` (`abi::prop`), eliminating duplicate per-domain getter/setter trees.
 //! Run `./kern abi` after edits to regenerate `sdk/c/krx_ops.h` from these tables.
 
 use crate::Cap;
@@ -11,13 +12,9 @@ use crate::Cap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ArgKind {
-    /// Immediate scalar value (`usize` / `u32`).
     Val = 0,
-    /// Read-only guest buffer or request struct pointer (`*const u8`).
     In = 1,
-    /// Writable guest buffer pointer (`*mut u8`).
     Out = 2,
-    /// Read-only UTF-8/ASCII string pointer (`*const u8`).
     Str = 3,
 }
 
@@ -44,7 +41,6 @@ impl Sig {
         }
     }
 
-    /// Validates that any pointer-typed argument (`In`, `Out`, `Str`) is non-null.
     #[inline(always)]
     pub const fn check_ptrs(self, a0: usize, a1: usize, a2: usize) -> bool {
         let args = [a0, a1, a2];
@@ -74,11 +70,30 @@ pub mod op_flags {
 pub struct OpDesc {
     pub id: u8,
     pub sig: Sig,
-    pub cap: Option<Cap>,
+    pub cap_bit: u8,
     pub flags: u8,
 }
 
-/// One operation domain with its operations, for host-side generators.
+const _: () = assert!(core::mem::size_of::<OpDesc>() == 4);
+
+impl OpDesc {
+    pub const NO_CAP: u8 = 0xFF;
+
+    #[inline(always)]
+    pub const fn cap(self) -> Option<Cap> {
+        Cap::from_bit(self.cap_bit)
+    }
+
+    #[inline(always)]
+    pub const fn cap_mask(self) -> u32 {
+        if self.cap_bit < 32 {
+            1u32 << self.cap_bit
+        } else {
+            0
+        }
+    }
+}
+
 #[cfg(feature = "describe")]
 pub struct DomainInfo {
     pub name: &'static str,
@@ -86,7 +101,6 @@ pub struct DomainInfo {
     pub ops: &'static [OpInfo],
 }
 
-/// One operation: Rust identifier, packed ID and required capability identifier.
 #[cfg(feature = "describe")]
 pub struct OpInfo {
     pub name: &'static str,
@@ -94,14 +108,12 @@ pub struct OpInfo {
     pub cap: Option<&'static str>,
 }
 
-/// One sub-opcode namespace with its `(name, value)` entries.
 #[cfg(feature = "describe")]
 pub struct SubGroupInfo {
     pub name: &'static str,
     pub items: &'static [(&'static str, u8)],
 }
 
-/// Declares the sorted kernel operation table (`Op` enum, `DOMAIN_*` IDs, and `OP_TABLE`).
 macro_rules! abi {
     (
         $(
@@ -111,9 +123,7 @@ macro_rules! abi {
         )*
     ) => {
         pub mod domain {
-            $(
-                pub const $domain: u8 = $dom_id;
-            )*
+            $( pub const $domain: u8 = $dom_id; )*
         }
 
         pub mod idx {
@@ -142,7 +152,7 @@ macro_rules! abi {
                     OpDesc {
                         id: ($dom_id << 4) | $idx,
                         sig: Sig::pack(ArgKind::$a0, ArgKind::$a1, ArgKind::$a2),
-                        cap: abi!(@cap $($cap)?),
+                        cap_bit: abi!(@cap $($cap)?),
                         flags: abi!(@flags $($flags)?),
                     },
                 )*
@@ -189,7 +199,6 @@ macro_rules! abi {
                 (self as u8) & 0x0F
             }
 
-            /// Dense `O(1)` lookup returning `(linear_index, OpDesc)` in one table load.
             #[inline(always)]
             pub fn lookup(id: u8) -> Option<(usize, OpDesc)> {
                 let dom = (id >> 4) as usize;
@@ -205,7 +214,6 @@ macro_rules! abi {
                 }
             }
 
-            /// `OpDesc` of a numeric operation ID: one table load, no scan.
             #[inline(always)]
             pub fn find_desc(id: u8) -> Option<&'static OpDesc> {
                 let dom = (id >> 4) as usize;
@@ -221,22 +229,14 @@ macro_rules! abi {
             }
         }
 
-        /// Capabilities operation `id` needs beyond `granted`: `Some(0)` when it may run,
-        /// `None` when no such operation exists. Uses `OP_TABLE` directly (zero duplicate `.rodata`).
         #[inline(always)]
         pub fn missing_caps(id: u8, granted: u32) -> Option<u32> {
             let (_, desc) = Op::lookup(id)?;
-            Some(match desc.cap {
-                Some(cap) => (1u32 << (cap.bit() & 31)) & !granted,
-                None => 0,
-            })
+            Some(desc.cap_mask() & !granted)
         }
 
         const DOMAIN_COUNT: usize = [$($dom_id),*].len();
 
-        /// Index of each domain's first operation in `OP_TABLE`, plus the table length.
-        /// Domains are contiguous from 0 and indices dense from 0, so
-        /// `OP_TABLE[DOMAIN_BASE[domain] + index]` is the operation.
         const DOMAIN_BASE: [u8; DOMAIN_COUNT + 1] = {
             let mut base = [OP_TABLE.len() as u8; DOMAIN_COUNT + 1];
             let mut i = OP_TABLE.len();
@@ -253,15 +253,14 @@ macro_rules! abi {
             base
         };
     };
-    (@cap) => { None };
-    (@cap $cap:ident) => { Some(Cap::$cap) };
+    (@cap) => { OpDesc::NO_CAP };
+    (@cap $cap:ident) => { Cap::$cap.bit() };
     (@cap_ident) => { None };
     (@cap_ident $cap:ident) => { Some(stringify!($cap)) };
     (@flags) => { op_flags::NONE };
     (@flags $flags:expr) => { $flags };
 }
 
-/// Declares typed sub-opcode namespaces mirrored into `sdk/c/krx_ops.h`.
 macro_rules! abi_sub {
     (
         $(
@@ -292,90 +291,68 @@ macro_rules! abi_sub {
 
 abi! {
     SYS 0x0 {
-        SysInfo    = 0 (Out, Val, Val) @ op_flags::HIGH_STACK,
-        SysQuery   = 1 (Val, Val, Val) @ op_flags::RAW_U32,
-        SysDiv     = 2 (Val, Val, Val) @ op_flags::RAW_U32,
-        SysReboot  = 3 (Val, Val, Val) [PowerManage],
-        SysEvent   = 4 (Val, Val, Val),
-        SysFlush   = 5 (Val, Val, Val) @ op_flags::HIGH_STACK,
-        PropGet    = 6 (Val, Val, Val),
-        PropSet    = 7 (Val, Val, Val),
-        PrefSet    = 8 (Val, Val, Val) [Preferences],
-        SysSec     = 9 (Val, Val, Val) [Preferences] @ op_flags::HIGH_STACK,
+        SysProp   = 0 (Val, Val, Val) @ op_flags::RAW_U32,
+        SysQuery  = 1 (Val, Val, Val) @ op_flags::HIGH_STACK | op_flags::RAW_U32,
+        SysCtl    = 2 (Val, Val, Val) @ op_flags::RAW_U32,
+        SysDiv    = 3 (Val, Val, Val) @ op_flags::RAW_U32,
+        SysSec    = 4 (Val, Val, Val) [Preferences] @ op_flags::HIGH_STACK,
     }
     PROC 0x1 {
-        ProcSelf   = 0 (Val, Val, Val),
-        ProcFind   = 1 (Str, Val, Val) @ op_flags::HIGH_STACK,
-        ProcCount  = 2 (Val, Val, Val),
-        ProcInfo   = 3 (Val, Out, Val) @ op_flags::HIGH_STACK,
-        ProcCtl    = 4 (Val, Val, Val) @ op_flags::HIGH_STACK,
-        ProcLeaf   = 5 (Val, Val, Val) @ op_flags::HIGH_STACK,
-        ProcPaged  = 6 (Val, Val, Val) @ op_flags::HIGH_STACK,
-        ProcLease  = 7 (Val, Val, Val) @ op_flags::HIGH_STACK,
-        ProcMem    = 8 (Val, Out, Val) @ op_flags::HIGH_STACK,
-        ProcSvc    = 9 (Val, Val, Val) @ op_flags::HIGH_STACK,
+        ProcCtl   = 0 (Val, Val, Val) @ op_flags::HIGH_STACK,
+        ProcExec  = 1 (Val, Val, Val) @ op_flags::HIGH_STACK,
     }
     IPC 0x2 {
-        IpcSend    = 0 (In,  Val, Val),
-        IpcRecv    = 1 (Out, Val, Val),
-        IpcReply   = 2 (In,  Val, Val),
-        IpcPoll    = 3 (Out, Val, Val),
-        IpcSendStr = 4 (In,  Val, Val),
+        Ipc       = 0 (Val, Val, Val),
     }
     FS 0x3 {
-        FsRead     = 0 (Val, In,  Val) [StorageRead] @ op_flags::HIGH_STACK,
-        FsWrite    = 1 (Val, In,  Val) [StorageWrite] @ op_flags::HIGH_STACK,
-        FsMeta     = 2 (Val, Val, Val) [StorageRead] @ op_flags::HIGH_STACK,
-        FsRename   = 3 (In,  Val, Val) [StorageWrite] @ op_flags::HIGH_STACK,
+        FsRead    = 0 (Val, In,  Val) [StorageRead] @ op_flags::HIGH_STACK,
+        FsWrite   = 1 (Val, In,  Val) [StorageWrite] @ op_flags::HIGH_STACK,
+        FsMeta    = 2 (Val, Val, Val) [StorageRead] @ op_flags::HIGH_STACK,
     }
     RF 0x4 {
-        RfTune     = 0 (Val, Val, Val) [RadioRx],
-        RfGet      = 1 (Val, Val, Val) [RadioRx] @ op_flags::RAW_U32,
-        RfSet      = 2 (Val, Val, Val) [RadioRx],
-        RfTones    = 3 (Val, Val, Val) [RadioRx],
-        RfVfo      = 4 (Val, Val, Val) [RadioRx],
-        RfBulk     = 5 (Val, Val, Val) [RadioRx],
+        RfTune    = 0 (Val, Val, Val) [RadioRx],
+        RfVfo     = 1 (Val, Val, Val) [RadioRx],
+        RfBulk    = 2 (Val, Val, Val) [RadioRx],
     }
     AUD 0x5 {
-        AudTone    = 0 (Val, Val, Val) [AudioOutput],
-        AudCtl     = 1 (Val, Val, Val) [AudioOutput],
+        Aud       = 0 (Val, Val, Val) [AudioOutput],
     }
     GFX 0x6 {
-        GfxClear   = 0 (Val, Val, Val) [DisplayDirect],
-        GfxDraw    = 1 (Val, Val, Val) [DisplayDirect],
-        GfxText    = 2 (In,  Val, Val) [DisplayDirect],
-        GfxCommit  = 3 (Val, Val, Val) [DisplayDirect],
-        GfxFb      = 4 (Val, Val, Val) [DisplayDirect] @ op_flags::RAW_U32,
-        GfxCtl     = 5 (Val, Val, Val) [DisplayDirect],
+        GfxDraw   = 0 (Val, Val, Val) [DisplayDirect] @ op_flags::RAW_U32,
+        GfxText   = 1 (In,  Val, Val) [DisplayDirect],
     }
     UI 0x7 {
-        UiModal    = 0 (Val, Val, Val) [DisplayDirect] @ op_flags::HIGH_STACK,
-        UiStatus   = 1 (Val, Val, Val) [DisplayDirect] @ op_flags::HIGH_STACK,
-        UiWidget   = 2 (Val, In,  Val) [DisplayDirect] @ op_flags::HIGH_STACK,
+        UiModal   = 0 (Val, Val, Val) [DisplayDirect] @ op_flags::HIGH_STACK,
+        UiWidget  = 1 (Val, In,  Val) [DisplayDirect] @ op_flags::HIGH_STACK,
     }
     IO 0x8 {
-        IoKey      = 0 (Val, Val, Val) [Keypad] @ op_flags::RAW_U32,
-        IoPower    = 1 (Val, Val, Val),
-        IoSerial   = 2 (Val, Val, Val) [SerialComm],
-        IoTime     = 3 (Val, Val, Val) @ op_flags::RAW_U32,
-        IoBus      = 4 (Val, Val, Val) [RawPeripheral],
+        IoKey     = 0 (Val, Val, Val) [Keypad] @ op_flags::RAW_U32,
+        IoSerial  = 1 (Val, Val, Val) [SerialComm],
+        IoBus     = 2 (Val, Val, Val) [RawPeripheral],
     }
 }
 
 abi_sub! {
-    sys_query {
-        OS_VERSION = 0,
-        STACK_FREE = 1,
-        CPU_HZ     = 2,
-        DEVICE_UID = 3,
-        RAND32     = 4,
-        CRC32      = 5,
-        CRC16      = 6,
+    sys_prop {
+        GET        = 0,
+        SET        = 1,
+        PREF       = 2,
     }
-    sys_flush {
-        FLUSH      = 0,
-        RELOAD     = 1,
-        RESET      = 2,
+    sys_query {
+        INFO       = 0,
+        DEVICE_UID = 1,
+        CRC32      = 2,
+        CRC16      = 3,
+        RTC_GET    = 4,
+        FLUSH      = 5,
+        RELOAD     = 6,
+        RESET      = 7,
+    }
+    sys_ctl {
+        DELAY_MS   = 0,
+        DELAY_US   = 1,
+        EVENT      = 2,
+        REBOOT     = 3,
     }
     sys_sec {
         STATUS     = 0,
@@ -383,15 +360,27 @@ abi_sub! {
         VERIFY     = 2,
         SET        = 3,
     }
-    proc_paged {
-        CALL       = 0,
-        RETURN     = 1,
-        FAULT      = 2,
+    proc_ctl {
+        INFO       = 0,
+        MEM        = 1,
+        LEASE      = 2,
+        KILL       = 3,
+        LAUNCH_PKG = 4,
+        FIND       = 5,
+        SVC_REG    = 6,
+        SVC_RES    = 7,
+        SVC_REL    = 8,
     }
-    proc_svc {
-        REGISTER   = 0,
-        RESOLVE    = 1,
-        RELEASE    = 2,
+    proc_exec {
+        LEAF        = 0,
+        PAGED_CALL  = 1,
+        PAGED_RET   = 2,
+        PAGED_FAULT = 3,
+        CALL_VFP    = 4,
+    }
+    ipc {
+        SEND       = 0,
+        RECV       = 1,
     }
     fs_read {
         FILE_AT    = 0,
@@ -412,47 +401,20 @@ abi_sub! {
         REMOVE     = 2,
         MKDIR      = 3,
         FORMAT     = 4,
+        RENAME     = 5,
     }
-    rf_get {
-        FREQ       = 0,
-        RSSI       = 1,
-        CARRIER    = 2,
-        BANDWIDTH  = 3,
-        MODULATION = 4,
-        TX_STATE   = 5,
-        GLITCH     = 6,
-        SNR        = 7,
-        NOISE      = 8,
-        FM_RSSI    = 9,
-        AFC        = 10,
-        AF_FREQ    = 11,
-        AF_AMP     = 12,
-        CTCSS_SCAN = 13,
-    }
-    rf_set {
-        MODULATION = 0,
-        SQUELCH    = 1,
-        TX_POWER   = 2,
-        AF_MODE    = 3,
-        MIC_MUTE   = 4,
-        AGC        = 5,
-        TX         = 6,
-        TAIL       = 7,
-        SUBAUDIBLE = 8,
-        DTMF       = 9,
-        BURST      = 10,
-        UNLOCK_VFO = 11,
-        FM_TUNE    = 12,
-        FM_VOLUME  = 13,
-        FM_MUTE    = 14,
+    rf_tune {
+        SUBAUDIBLE = 1,
+        DTMF       = 2,
+        BURST      = 3,
+        TONES_RAW  = 4,
+        TONES_HZ   = 5,
     }
     rf_vfo {
         GET_CHANNEL = 0,
         SET_CHANNEL = 1,
-        STATE      = 2,
-        WATCH_MODE = 3,
-        LOCK       = 4,
-        MONITOR    = 5,
+        STATE       = 2,
+        LOCK        = 3,
     }
     rf_bulk {
         SWEEP      = 0,
@@ -461,14 +423,11 @@ abi_sub! {
         FSK_SEND   = 3,
         FSK_RECV   = 4,
     }
-    aud_ctl {
-        PATH       = 0,
-        IS_PLAYING = 1,
-        MIC_SAMPLE = 2,
-        CAP_START  = 3,
-        CAP_READ   = 4,
-        CAP_STOP   = 5,
-        IS_CAP     = 6,
+    aud {
+        TONE       = 0,
+        CAP_START  = 1,
+        CAP_READ   = 2,
+        CAP_STOP   = 3,
     }
     gfx_draw {
         LINE       = 0,
@@ -480,56 +439,28 @@ abi_sub! {
         ICON       = 6,
         SCROLL     = 7,
         DOTTED_H   = 8,
-    }
-    gfx_ctl {
-        BITMAP     = 0,
+        CLEAR      = 9,
+        FB         = 10,
+        BITMAP     = 11,
+        COMMIT     = 12,
     }
     ui_modal {
-        CLOSE      = 0,
-        ACTIVE     = 1,
-        ANIMATING  = 2,
-        SET_HOLD   = 3,
-        GET_TEXT   = 4,
-        SHOW       = 5,
-        TOAST      = 6,
-        PROMPT_NUM = 7,
-    }
-    ui_status {
-        SET_BAR    = 0,
-        GET_BAR    = 1,
-        TRAY_ICON  = 2,
+        SHOW       = 0,
+        TOAST      = 1,
+        PROMPT_NUM = 2,
+        GET_TEXT   = 3,
+        SET_BAR    = 4,
+        GET_BAR    = 5,
     }
     io_key {
         POLL       = 0,
         MATRIX     = 1,
         IS_PRESSED = 2,
-        IS_F       = 3,
-        IS_LOCKED  = 4,
-    }
-    io_power {
-        BATT_MV    = 0,
-        BATT_PCT   = 1,
-        BATT_MA    = 2,
-        BATT_TYPE  = 3,
-        BATT_ADC   = 4,
-        MCU_TEMP   = 5,
-        CHARGING   = 6,
-        LOW        = 7,
-        CRITICAL   = 8,
-        BL_WAKE    = 9,
-        FLASHLIGHT = 10,
     }
     io_serial {
         WRITE      = 0,
         READ       = 1,
-        CONNECTED  = 2,
-        FLUSH      = 3,
-    }
-    io_time {
-        TICKS_MS   = 0,
-        DELAY_MS   = 1,
-        DELAY_US   = 2,
-        RTC_GET    = 3,
+        FLUSH      = 2,
     }
     io_bus {
         I2C        = 0,
@@ -548,6 +479,7 @@ mod tests {
 
     #[test]
     fn op_table_ids_are_unique_and_sorted() {
+        assert_eq!(OP_TABLE.len(), 22);
         for w in OP_TABLE.windows(2) {
             assert!(
                 w[0].id < w[1].id,
@@ -556,12 +488,12 @@ mod tests {
                 w[1].id
             );
         }
-        assert_eq!(Op::SysInfo.domain(), domain::SYS);
-        assert_eq!(Op::RfSet.domain(), domain::RF);
-        assert_eq!(Op::RfSet.index(), 2);
+        assert_eq!(Op::SysProp.domain(), domain::SYS);
+        assert_eq!(Op::RfVfo.domain(), domain::RF);
+        assert_eq!(Op::RfVfo.index(), 1);
         assert_eq!(
-            Op::find_desc(Op::SysReboot.id()).unwrap().cap,
-            Some(Cap::PowerManage)
+            Op::find_desc(Op::SysSec.id()).unwrap().cap(),
+            Some(Cap::Preferences)
         );
         assert_eq!(Op::find_desc(0xFF), None);
     }

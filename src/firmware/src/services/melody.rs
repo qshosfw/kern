@@ -3,13 +3,14 @@
 //! Provides zero-alloc dynamic tone sequencing, rich presets (Roger beeps, keypress beeps,
 //! alerts), and custom user-configurable tones decoupled from the hardware driver layer.
 
-pub mod format;
 pub mod presets;
 pub mod types;
 
-pub use format::*;
 pub use presets::*;
 pub use types::*;
+
+#[cfg(all(feature = "filesystem", feature = "boot_jingle"))]
+const TAG_NAME: u8 = 0x01;
 
 use crate::services::SystemStorage;
 use kernel::service::AudioPriority;
@@ -38,9 +39,7 @@ pub trait ToneHardware {
     fn finish_tone_teardown(&mut self, rx_pwr: u16);
 }
 
-impl<'a, B: drivers::bk4829::Bk4829Bus> ToneHardware
-    for drivers::bk4829::Bk4829<'a, B>
-{
+impl<'a, B: drivers::bk4829::Bk4829Bus> ToneHardware for drivers::bk4829::Bk4829<'a, B> {
     #[inline(always)]
     fn tone_gain(&self) -> u8 {
         drivers::bk4829::Bk4829::tone_gain(self)
@@ -106,7 +105,6 @@ impl ToneSequencer {
         self.phase != TonePhase::Idle
     }
 
-    #[inline(never)]
     fn start_current_note<H: ToneHardware>(&mut self, hw: &mut H, now_ms: u32) {
         let note = self.notes[self.idx as usize];
         if note.freq_hz == 0 || note.duration_ms == 0 {
@@ -119,8 +117,34 @@ impl ToneSequencer {
         self.deadline_ms = now_ms.wrapping_add(note.duration_ms as u32);
     }
 
+    fn can_preempt<H: ToneHardware>(&self, hw: &H, prio: u8) -> bool {
+        hw.tone_gain() != 0 && (!self.is_active() || prio >= self.priority)
+    }
+
+    fn arm_loaded<H: ToneHardware>(&mut self, hw: &mut H, prio: u8, count: usize, now_ms: u32) {
+        if count == 0 {
+            return;
+        }
+        if crate::system::is_headless() {
+            crate::system::push_headless_notes(&self.notes[..count]);
+            return;
+        }
+        let was_active = self.is_active();
+        self.len = count as u8;
+        self.idx = 0;
+        self.priority = prio;
+        if !was_active {
+            self.rx_pwr = hw.capture_rx_pwr();
+        }
+        if !hw.begin_tone_sequence() {
+            self.phase = TonePhase::PaWarmup;
+            self.deadline_ms = now_ms.wrapping_add(50);
+        } else {
+            self.start_current_note(hw, now_ms);
+        }
+    }
+
     /// Enqueue a note sequence with explicit priority and timestamp (testable / host-deterministic).
-    #[inline(never)]
     pub fn enqueue_at<H: ToneHardware>(
         &mut self,
         hw: &mut H,
@@ -135,57 +159,49 @@ impl ToneSequencer {
             crate::system::push_headless_notes(notes);
             return;
         }
-        if hw.tone_gain() == 0 {
-            return;
-        }
         let prio = priority as u8;
-        if self.is_active() && prio < self.priority {
+        if !self.can_preempt(hw, prio) {
             return;
         }
-        let count = notes.len().min(SEQUENCER_MAX_NOTES);
-        self.notes[..count].copy_from_slice(&notes[..count]);
-        self.len = count as u8;
-        self.idx = 0;
-        self.priority = prio;
-        if !self.is_active() {
-            self.rx_pwr = hw.capture_rx_pwr();
-        }
-        if !hw.begin_tone_sequence() {
-            self.phase = TonePhase::PaWarmup;
-            self.deadline_ms = now_ms.wrapping_add(50);
-        } else {
-            self.start_current_note(hw, now_ms);
-        }
+        let count = fill_notes(notes, &mut self.notes);
+        self.arm_loaded(hw, prio, count, now_ms);
     }
 
     /// Compact 4-register AAPCS entry point (`r0..r3`, zero stack spills) for UI/system tones.
-    #[inline(never)]
     pub fn enqueue<H: ToneHardware>(&mut self, hw: &mut H, notes: &[ToneNote]) {
         self.enqueue_at(hw, AudioPriority::UiTone, notes, py32_hal::delay::millis());
     }
 
-    /// Load a roger melody file directly into the sequencer buffer (zero stack array) and play.
-    #[inline(never)]
+    /// Load a roger melody file directly into `self.notes` (zero stack copy) and play.
     pub fn enqueue_roger_file<H: ToneHardware>(
         &mut self,
         hw: &mut H,
         storage: &mut SystemStorage,
         path: &str,
     ) {
-        let mut buf = [ToneNote::new(0, 0); SEQUENCER_MAX_NOTES];
-        let n = load_roger_notes_slice(storage, path, &mut buf);
-        if n > 0 {
-            self.enqueue_at(
-                hw,
-                AudioPriority::TxRoger,
-                &buf[..n],
-                py32_hal::delay::millis(),
-            );
+        let prio = AudioPriority::TxRoger as u8;
+        if crate::system::is_headless() || self.can_preempt(hw, prio) {
+            let n = load_roger_notes_slice(storage, path, &mut self.notes);
+            self.arm_loaded(hw, prio, n, py32_hal::delay::millis());
+        }
+    }
+
+    /// Load and enqueue the configured boot jingle directly into `self.notes` (zero stack copy).
+    pub fn enqueue_jingle<H: ToneHardware>(
+        &mut self,
+        hw: &mut H,
+        storage: &mut SystemStorage,
+        boot_jingle_mode: u8,
+        path: &str,
+    ) {
+        let prio = AudioPriority::UiTone as u8;
+        if crate::system::is_headless() || self.can_preempt(hw, prio) {
+            let n = load_jingle_notes(storage, boot_jingle_mode, path, &mut self.notes);
+            self.arm_loaded(hw, prio, n, py32_hal::delay::millis());
         }
     }
 
     /// Advance the sequencer when `now_ms` reaches `deadline_ms`. Safe across `u32` wraparound.
-    #[inline(never)]
     pub fn tick<H: ToneHardware>(&mut self, hw: &mut H, now_ms: u32) {
         if self.phase == TonePhase::Idle {
             return;
@@ -218,7 +234,6 @@ impl ToneSequencer {
     }
 
     /// Drain an active cue synchronously before deep-sleep clock shutdown.
-    #[inline(never)]
     pub fn drain_blocking<H: ToneHardware>(&mut self, hw: &mut H) {
         while self.is_active() {
             py32_hal::wdt::Watchdog::feed();
@@ -228,7 +243,6 @@ impl ToneSequencer {
     }
 
     /// Immediately silence any in-flight tone and restore RX power/AF state (e.g. on PTT TX start).
-    #[inline(never)]
     pub fn abort<H: ToneHardware>(&mut self, hw: &mut H) {
         if self.is_active() {
             hw.mute_tone_note();
@@ -240,7 +254,6 @@ impl ToneSequencer {
     }
 }
 
-#[inline(never)]
 fn read_kt_file(
     storage: &mut SystemStorage,
     path: &str,
@@ -289,7 +302,7 @@ fn parse_kt_bytes(raw: &[u8], allow_krgr: bool, out: &mut [ToneNote]) -> usize {
     let mut written = 0usize;
     while pos + 4 <= n && written < count {
         let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
-        let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
+        let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]).min(1500);
         out[written] = ToneNote::new(freq, dur);
         written += 1;
         pos += 4;
@@ -307,7 +320,6 @@ fn fill_notes(slice: &[ToneNote], out: &mut [ToneNote]) -> usize {
     count
 }
 
-#[inline(never)]
 pub fn load_roger_notes_slice(
     storage: &mut SystemStorage,
     path: &str,
@@ -320,23 +332,12 @@ pub fn load_roger_notes_slice(
     fill_notes(pool_slice(RANGE_ROGER_CLASSIC), out)
 }
 
-/// Load roger melody notes into `out` from storage path, with fallback to classic default.
-#[inline(never)]
-pub fn load_roger_notes(
-    storage: &mut SystemStorage,
-    path: &str,
-    out: &mut [ToneNote; MAX_MELODY_NOTES],
-) -> usize {
-    load_roger_notes_slice(storage, path, out)
-}
-
 /// Load jingle melody notes into `out` from storage path, or fallback to selected preset.
-#[inline(never)]
 pub fn load_jingle_notes(
     storage: &mut SystemStorage,
     boot_jingle_mode: u8,
     path: &str,
-    out: &mut [ToneNote; MAX_MELODY_NOTES],
+    out: &mut [ToneNote],
 ) -> usize {
     if boot_jingle_mode == 0 {
         return 0;

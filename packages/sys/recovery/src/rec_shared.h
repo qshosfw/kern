@@ -82,7 +82,7 @@ typedef struct {
     const char* (*nth_s)(const char* tbl, u8 idx);
     void        (*fmt_hex)(char* dst, const u8* src, u32 n);
     u16         (*rd_at)(const KrxApiTable* api, const char* path, u8 plen, u32 off, u8* buf, u16 len);
-    u16         (*pwr_get)(const KrxApiTable* api, u8 sub);
+    u16         (*prop_get)(const KrxApiTable* api, u8 prop);
     /* SRAM-safe bare-metal helpers (live in resident root SRAM, zero internal-flash fetches) */
     void        (*py25_read)(u32 addr, u8* dst, u32 len);
     void        (*lcd_bar)(u32 done, u32 total);

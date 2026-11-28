@@ -10,6 +10,7 @@ pub(crate) enum MetaQuery<'a> {
     FreeSlot,
     ListDir(u16),
     CountFiles,
+    CountEncrypted,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -98,7 +99,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.data_ino = 0;
     }
 
-    #[inline(never)]
     pub(crate) fn reset_tables(&mut self) {
         self.hot_hash = 0;
         self.hot_ino = 0;
@@ -114,7 +114,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.low_power = low_power;
     }
 
-    #[inline(never)]
     pub(crate) fn page_counts(&self) -> (u16, u16, u16) {
         let mut free_pages = 0u16;
         let mut obs_pages = 0u16;
@@ -131,7 +130,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         (free_pages, obs_pages, bad_blocks)
     }
 
-    #[inline(never)]
     pub fn stats(&self) -> FsStats {
         let total = D::TOTAL_BLOCKS as u16;
         let (free_pages, obs_pages, bad_blocks) = self.page_counts();
@@ -150,7 +148,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
-    #[inline(never)]
     pub(crate) fn read_tag(&mut self, phys_page: u16) -> Result<(), FsError> {
         let (block, slot) = split_phys_page(phys_page);
         if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || slot == 0 {
@@ -160,7 +157,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             .read(tag_flash_offset(block, slot), self.cur_tag.as_bytes_mut())
     }
 
-    #[inline(never)]
     pub(crate) fn load_page(&mut self, phys_page: u16) -> Result<(), FsError> {
         if phys_page != 0 && self.cur_page == phys_page {
             return Ok(());
@@ -176,7 +172,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(())
     }
 
-    #[inline(never)]
     pub(crate) fn load_page_or_zero(&mut self, phys: u16) -> Result<(), FsError> {
         if phys != 0 {
             self.load_page(phys)
@@ -187,7 +182,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
-    #[inline(never)]
     pub(crate) fn program_page_buf(
         &mut self,
         phys: u16,
@@ -222,7 +216,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(phys)
     }
 
-    #[inline(never)]
     pub(crate) fn set_tag_state(&mut self, phys_page: u16, new_state: u8) -> Result<(), FsError> {
         let (block, slot) = split_phys_page(phys_page);
         if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || slot == 0 {
@@ -248,7 +241,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     /// O(1) direct inode read by inode number `ino >= 2`.
-    #[inline(never)]
     pub(crate) fn read_inode(
         &mut self,
         ino: u16,
@@ -323,11 +315,23 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                             matched += 1;
                         }
                     }
+                    MetaQuery::CountEncrypted => {
+                        if !self.cur_inode.is_dir() && (self.cur_inode.perm & 0x08) != 0 {
+                            matched += 1;
+                        }
+                    }
                     MetaQuery::FreeSlot => {}
                 }
             }
         }
         Ok(matched)
+    }
+
+    pub fn count_encrypted_files(&mut self) -> usize {
+        if !self.mounted {
+            return 0;
+        }
+        self.scan_meta(MetaQuery::CountEncrypted, None).unwrap_or(0) as usize
     }
 
     #[inline(always)]
@@ -339,7 +343,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(self.scan_meta(MetaQuery::Child(parent_ino, name), None)? != 0)
     }
 
-    #[inline(never)]
     pub(crate) fn alloc_ino(&mut self) -> Result<u16, FsError> {
         let ino = self.scan_meta(MetaQuery::FreeSlot, None)?;
         if ino == 0 {
@@ -349,7 +352,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
-    #[inline(never)]
     pub(crate) fn init_new_cur_inode(&mut self, parent_ino: u16, name: &[u8]) {
         self.cur_inode = Inode::EMPTY;
         self.cur_inode.parent_ino = parent_ino;
@@ -470,7 +472,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
-    #[inline(never)]
     pub(crate) fn lookup_inode(&mut self, path: &str) -> Result<(), FsError> {
         let hash = CrcEngine::crc32(path.as_bytes());
         if self.mounted && self.hot_ino >= 2 && self.hot_hash == hash {
@@ -487,12 +488,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(())
     }
 
-    #[inline(never)]
     pub fn exists(&mut self, path: &str) -> bool {
         self.lookup_inode(path).is_ok()
     }
 
-    #[inline(never)]
     pub fn stat_info(&mut self, path: &str) -> Result<(usize, bool), FsError> {
         self.lookup_inode(path)?;
         Ok((self.cur_inode.size as usize, self.cur_inode.is_dir()))
@@ -508,13 +507,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.cur_inode.ino
     }
 
-    #[inline(never)]
     pub fn get_permission(&mut self, path: &str) -> Result<u8, FsError> {
         self.lookup_inode(path)?;
         Ok(self.cur_inode.perm)
     }
 
-    #[inline(never)]
     pub fn create_dir(&mut self, path: &str) -> Result<(), FsError> {
         if path == "/" {
             return if self.mounted {
@@ -535,41 +532,46 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.commit_cur_inode(&[])
     }
 
-    #[inline(never)]
-    pub(crate) fn resolve_data_page(&mut self, lpage_idx: u16) -> Result<u16, FsError> {
-        let depth = self.cur_inode.depth;
+    pub(crate) fn resolve_inode_page(
+        &mut self,
+        inode: &Inode,
+        lpage_idx: usize,
+    ) -> Result<u16, FsError> {
+        let depth = inode.depth;
         let s = if depth == DEPTH_DIRECT {
-            lpage_idx as usize
+            lpage_idx
         } else if depth == DEPTH_SINGLE_INDIRECT {
-            (lpage_idx >> 7) as usize
+            lpage_idx >> 7
         } else {
             return Ok(0);
         };
         if s >= MAX_L1_ROOTS {
             return Ok(0);
         }
-        let mut p = self.cur_inode.l1_page(s);
+        let mut p = inode.l1_page(s);
         if p != 0 && depth == DEPTH_SINGLE_INDIRECT {
             self.load_page(p)?;
-            p = read_idx_u16(&self.page_buf, (lpage_idx & 0x7F) as usize);
+            p = read_idx_u16(&self.page_buf, lpage_idx & 0x7F);
         }
         Ok(p)
     }
 
-    /// Return `(depth, size)` and the up-to-8 L1 physical page IDs for a non-inline file.
-    /// Used by bare-metal SRAM flashers / Stage-2 `kboot` to stream files from SPI flash
-    /// without invoking internal-flash filesystem code during erase/program cycles.
-    #[inline(never)]
-    pub fn file_extents(
-        &mut self,
-        path: &str,
-        out_l1: &mut [u16; 8],
-    ) -> Result<(u8, u32), FsError> {
+    #[inline(always)]
+    pub(crate) fn resolve_data_page(&mut self, lpage_idx: u16) -> Result<u16, FsError> {
+        let inode = self.cur_inode;
+        self.resolve_inode_page(&inode, lpage_idx as usize)
+    }
+
+    /// Return `(depth, size)` and up to `MAX_L1_ROOTS` (`12`) L1 physical page IDs (`<= 384 KiB`).
+    /// Used by Stage-2 `kboot` and `FsRead::EXTENTS` to stream verified firmware images over DMA.
+    pub fn file_extents(&mut self, path: &str, out_l1: &mut [u16]) -> Result<(u8, u32), FsError> {
         self.lookup_inode(path)?;
         if self.cur_inode.is_dir() || self.cur_inode.is_inline() {
             return Err(FsError::InvalidPath);
         }
-        for i in 0..8 {
+        out_l1.fill(0);
+        let n = out_l1.len().min(MAX_L1_ROOTS);
+        for i in 0..n {
             out_l1[i] = self.cur_inode.l1_page(i);
         }
         Ok((self.cur_inode.depth, self.cur_inode.size))
@@ -590,7 +592,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.read_cur_inode_at(offset, buf)
     }
 
-    #[inline(never)]
     pub fn read_ino_at(
         &mut self,
         ino: u16,
@@ -654,7 +655,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(copied)
     }
 
-    #[inline(never)]
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
         if self.low_power {
             return Err(FsError::LowPower);
@@ -763,8 +763,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         if cur_sz + data.len() <= max_bytes {
             self.append_file(path, data)?;
             if self.lookup_inode(path).is_ok() {
+                let end = cur_sz + data.len();
                 self.cur_inode.flags |= INODE_FLAG_RING;
-                self.cur_inode.root_page = ((cur_sz + data.len()) % max_bytes) as u16;
+                self.cur_inode.root_page = if end >= max_bytes { 0 } else { end as u16 };
                 let _ = self.commit_cur_inode(&[]);
             }
             Ok(())
@@ -774,8 +775,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 Err(FsError::NotFound) if self.mounted => return self.write_file(path, data),
                 Err(e) => return Err(e),
             }
-            let cursor = (self.cur_inode.root_page as usize) % max_bytes;
-            let next_cursor = (cursor + data.len()) % max_bytes;
+            let raw_cur = self.cur_inode.root_page as usize;
+            let cursor = if raw_cur >= max_bytes { 0 } else { raw_cur };
+            let mut next_cursor = cursor + data.len();
+            if next_cursor >= max_bytes {
+                next_cursor -= max_bytes;
+            }
             self.cur_inode.flags |= INODE_FLAG_RING;
             self.cur_inode.root_page = next_cursor as u16;
             let first = (max_bytes - cursor).min(data.len());

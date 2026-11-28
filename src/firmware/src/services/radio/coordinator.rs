@@ -304,18 +304,18 @@ impl RadioCoordinator {
         self.adaptive_squelch_enabled = true;
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn active_channel(&self) -> &ChannelConfig {
         &self.channels[self.active_vfo.index().min(self.channels.len() - 1)]
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn active_channel_mut(&mut self) -> &mut ChannelConfig {
         let idx = self.active_vfo.index().min(self.channels.len() - 1);
         &mut self.channels[idx]
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn listening_channel(&self) -> &ChannelConfig {
         &self.channels[self.listening_vfo.index().min(self.channels.len() - 1)]
     }
@@ -437,7 +437,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn resync_after_unlock<R: RadioService>(&mut self, radio: &mut R, was_muted: bool) {
         self.dwell.reset_dwell();
         let locked = self.arbitrator.is_locked();
@@ -535,7 +534,6 @@ impl RadioCoordinator {
 
     pub const FSK_CLIENT: ClientToken = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::SERVICE);
 
-    #[inline(never)]
     pub fn set_audio_muted<R: RfAudioPath>(&mut self, radio: &mut R, muted: bool) {
         if self.audio_path_muted != muted {
             self.audio_path_muted = muted;
@@ -683,8 +681,175 @@ impl RadioCoordinator {
         }
     }
 
+    /// Atomically tune `slot` and retune hardware only if `slot` currently owns the physical receiver.
+    pub fn tune_slot<R: RfChannel + RfSquelch>(
+        &mut self,
+        radio: &mut R,
+        slot: VfoSlot,
+        freq_hz: u32,
+        bandwidth: Option<Bandwidth>,
+        step: Option<StepSetting>,
+    ) {
+        let idx = slot.index().min(self.channels.len() - 1);
+        let ch = &mut self.channels[idx];
+        ch.rx_freq = Frequency::new(freq_hz);
+        if let Some(bw) = bandwidth {
+            ch.bandwidth = bw;
+        }
+        if let Some(st) = step {
+            ch.step = st;
+        }
+        if self.is_slot_hardware_active(slot) {
+            radio.configure_channel(&self.channels[idx]);
+        }
+    }
+
+    /// Update modulation (`0`), squelch (`1`), power (`2`), or direct transceiver AF/mic/AGC (`3..=5`)
+    /// on `slot`, touching physical hardware only when `slot` is active on the receiver.
+    pub fn set_slot_param(
+        &mut self,
+        radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
+        slot: VfoSlot,
+        op: u8,
+        val: u8,
+    ) {
+        use drivers::bk4829::AfType;
+        const AF_LUT: [AfType; 8] = [
+            AfType::Mute,
+            AfType::Fm,
+            AfType::Mute,
+            AfType::Mute,
+            AfType::Baseband1,
+            AfType::Baseband2,
+            AfType::Mute,
+            AfType::Am,
+        ];
+        let idx = slot.index().min(self.channels.len() - 1);
+        let hw_active = self.is_slot_hardware_active(slot);
+        match op {
+            0 => {
+                let mode = ModulationMode::from_u8(val);
+                self.channels[idx].modulation = mode;
+                if hw_active {
+                    RfModulation::set_modulation(radio, mode);
+                }
+            }
+            1 => {
+                let sql = val.min(9);
+                self.channels[idx].squelch_level = sql;
+                if hw_active {
+                    RfSquelch::set_squelch_level(radio, sql);
+                }
+            }
+            2 => {
+                let pwr = RfPowerLevel::from_u8(val);
+                self.channels[idx].power = pwr;
+                if hw_active {
+                    RfChannel::set_power_level(radio, pwr);
+                }
+            }
+            3 => radio.set_af(AF_LUT.get(val as usize).copied().unwrap_or(AfType::Mute)),
+            4 => radio.mute_mic(val != 0),
+            _ => radio.set_agc(val != 0),
+        }
+    }
+
+    /// Update RX and/or TX subaudible tone on the active VFO slot and apply to hardware when receiving.
+    pub fn set_subaudible_split<R: RfSubaudible>(
+        &mut self,
+        radio: &mut R,
+        set_rx: bool,
+        set_tx: bool,
+        tone: SubaudibleTone,
+    ) {
+        let slot = self.active_vfo;
+        let idx = slot.index().min(self.channels.len() - 1);
+        if set_rx {
+            self.channels[idx].rx_subaudible = tone;
+        }
+        if set_tx {
+            self.channels[idx].tx_subaudible = tone;
+        }
+        if set_rx && self.is_slot_hardware_active(slot) {
+            radio.set_rx_subaudible(tone);
+        }
+        if set_tx {
+            radio.set_tx_subaudible(tone);
+        }
+    }
+
+    /// Perform a muted RSSI sweep across `out_rssi.len().min(128)` channels and restore `listening_vfo`.
+    pub fn sweep_rssi(
+        &mut self,
+        radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
+        start_hz: u32,
+        step_hz: u32,
+        out_rssi: &mut [i16],
+    ) -> usize {
+        if self.is_transmitting {
+            return 0;
+        }
+        let count = out_rssi.len().min(128);
+        radio.set_af(drivers::bk4829::AfType::Mute);
+        let mut freq = start_hz;
+        for slot in &mut out_rssi[..count] {
+            RfChannel::set_rx_frequency(radio, Frequency::new(freq));
+            *slot = radio.get_rssi_dbm();
+            freq = freq.saturating_add(step_hz);
+        }
+        let restore_slot = self.listening_vfo;
+        self.select_vfo(radio, restore_slot);
+        count
+    }
+
+    /// Emit timed DDS frequency-word symbols onto the transceiver tone generator.
+    pub fn emit_symbols<R: RfToneGenerator>(
+        radio: &mut R,
+        symbols: &[kernel::proc::abi::KrxSymbol],
+    ) {
+        for sym in symbols {
+            radio.set_tone1_freq_word(sym.freq_word);
+            py32_hal::delay::delay_us(sym.duration_us as u32);
+        }
+    }
+
+    /// Program dual DDS tones in Hz onto the transceiver.
+    pub fn set_dual_tones_hz<R: RfToneGenerator>(
+        radio: &mut R,
+        tone1_hz: u16,
+        tone1_gain: u8,
+        tone2_hz: u16,
+        tone2_gain: u8,
+    ) {
+        use kernel::service::radio::tone_gen::calc_tone_word;
+        radio.set_dual_tones_raw(
+            calc_tone_word(tone1_hz),
+            tone1_gain,
+            calc_tone_word(tone2_hz),
+            tone2_gain,
+        );
+    }
+
+    /// Program dual DDS DTMF row/column words for ASCII `0..9, A..D, *, #`.
+    pub fn set_dtmf<R: RfToneGenerator>(radio: &mut R, digit: u8, gain: u8) {
+        static ROW_WORDS: [u16; 4] = [7196, 7950, 8796, 9715];
+        static COL_WORDS: [u16; 4] = [12482, 13793, 15249, 16860];
+        let norm = if digit.is_ascii_lowercase() {
+            digit - 32
+        } else {
+            digit
+        };
+        let mut words = (0u16, 0u16);
+        for (idx, &key) in b"123A456B789C*0#D".iter().enumerate() {
+            if key == norm {
+                words = (ROW_WORDS[idx >> 2], COL_WORDS[idx & 3]);
+                break;
+            }
+        }
+        radio.set_dual_tones_raw(words.0, gain, words.1, gain);
+    }
+
     /// Check granular transmission permission for a specific VFO slot and client token.
-    #[inline(never)]
     pub fn check_tx_permission(&self, slot: VfoSlot, client: ClientToken) -> TxPermission {
         if self.is_transmitting && matches!(self.tx_state, TxState::Active | TxState::LeadIn { .. })
         {
@@ -740,18 +905,17 @@ impl RadioCoordinator {
     ///
     /// When enabled, unmutes receiver audio regardless of carrier/subaudible thresholds,
     /// illuminates the green RX status LED, and pauses Dual Watch hopping on the monitored channel.
-    #[inline(never)]
     pub fn set_monitor<R: RadioService>(&mut self, radio: &mut R, enabled: bool) {
         if self.is_transmitting && enabled {
             return;
         }
         self.monitor_active = enabled;
         if enabled {
-            bsp::set_status_led(bsp::StatusLed::Green);
+            radio.set_rf_led(kernel::service::radio::RfLedState::RxGreen);
             self.set_audio_muted(radio, false);
         } else if !self.carrier_active {
             if !self.is_transmitting {
-                bsp::set_status_led(bsp::StatusLed::Off);
+                radio.set_rf_led(kernel::service::radio::RfLedState::Off);
             }
             self.set_audio_muted(radio, true);
         }
@@ -862,7 +1026,7 @@ impl RadioCoordinator {
             self.tx_state = TxState::Active;
             radio.mute_mic(false);
         }
-        bsp::set_status_led(bsp::StatusLed::Red);
+        radio.set_rf_led(kernel::service::radio::RfLedState::TxRed);
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
         self.pa_thermal_foldback_active = false;
@@ -898,10 +1062,10 @@ impl RadioCoordinator {
         self.ptt_latched = false;
         self.tx_state = TxState::Idle;
         self.pa_thermal_foldback_active = false;
-        bsp::set_status_led(if self.carrier_active || self.monitor_active {
-            bsp::StatusLed::Green
+        radio.set_rf_led(if self.carrier_active || self.monitor_active {
+            kernel::service::radio::RfLedState::RxGreen
         } else {
-            bsp::StatusLed::Off
+            kernel::service::radio::RfLedState::Off
         });
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
@@ -914,17 +1078,8 @@ impl RadioCoordinator {
         ) {
             self.listening_vfo = self.active_vfo;
         }
-        let rx_ch = self.listening_channel();
-        let freq = rx_ch.effective_rx_freq();
-        let pwr = rx_ch.power;
-        let mod_mode = rx_ch.modulation;
-        let bw = rx_ch.bandwidth;
-        let rx_subaudible = rx_ch.effective_rx_subaudible();
-        radio.set_rx_frequency(freq);
-        radio.set_power_level(pwr);
-        radio.set_modulation(mod_mode);
-        radio.set_bandwidth(bw);
-        radio.set_rx_subaudible(rx_subaudible);
+        let idx = self.listening_vfo.index().min(self.channels.len() - 1);
+        radio.configure_channel(&self.channels[idx]);
     }
 
     /// High-level request to initiate PTT transmission on behalf of user or client.
@@ -1079,7 +1234,6 @@ impl RadioCoordinator {
     // ── 1750 Hz Repeater Access Tone Burst ──
 
     /// Trigger a 1750 Hz tone burst for European/international repeater access.
-    #[inline(never)]
     pub fn trigger_1750hz_burst<R: RadioService>(
         &mut self,
         radio: &mut R,
@@ -1115,113 +1269,112 @@ impl RadioCoordinator {
         }
     }
 
+    #[inline(never)]
     fn load_record_into_channel(ch: &mut ChannelConfig, rec: &crate::data::ChannelRecord) {
-    use crate::data::ChannelRecord;
-    ch.rx_freq = Frequency::<Hertz>::new(rec.rx_frequency_hz);
-    ch.tx_shift = if rec.tx_frequency_hz != 0 && rec.tx_frequency_hz != rec.rx_frequency_hz {
-        let rx = rec.rx_frequency_hz;
-        let tx = rec.tx_frequency_hz;
-        if tx >= rx {
-            RepeaterShift::Positive(Frequency::<Hertz>::new(tx - rx))
+        use crate::data::ChannelRecord;
+        ch.rx_freq = Frequency::<Hertz>::new(rec.rx_frequency_hz);
+        ch.tx_shift = if rec.tx_frequency_hz != 0 && rec.tx_frequency_hz != rec.rx_frequency_hz {
+            let rx = rec.rx_frequency_hz;
+            let tx = rec.tx_frequency_hz;
+            if tx >= rx {
+                RepeaterShift::Positive(Frequency::<Hertz>::new(tx - rx))
+            } else {
+                RepeaterShift::Negative(Frequency::<Hertz>::new(rx - tx))
+            }
         } else {
-            RepeaterShift::Negative(Frequency::<Hertz>::new(rx - tx))
-        }
-    } else {
-        RepeaterShift::Simplex
-    };
-    ch.step = StepSetting::from_hz_x10(rec.step_hz_x10);
-    ch.bandwidth =
-        if rec.bandwidth_50hz >= 400 || (rec.flags & ChannelRecord::FLAG_WIDE_FILTER) != 0 {
-            Bandwidth::Wide25k
-        } else if rec.bandwidth_50hz > 0 && rec.bandwidth_50hz <= 150 {
-            Bandwidth::Narrow6k25
-        } else {
-            Bandwidth::Narrow12k5
+            RepeaterShift::Simplex
         };
-    ch.modulation = ModulationMode::from_u8(rec.modulation);
-    ch.power = if rec.power_mw == 0 || rec.power_mw >= 4000 {
-        RfPowerLevel::High
-    } else if rec.power_mw >= 1500 {
-        RfPowerLevel::Medium
-    } else {
-        RfPowerLevel::Low
-    };
-    ch.rx_subaudible = rec.rx_subaudible_tone();
-    ch.tx_subaudible = rec.tx_subaudible_tone();
-    ch.squelch_level = rec.squelch_level;
-    ch.flags = rec.flags;
-    ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
-    ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
-    ch.compander = CompanderMode::from_u8(rec.compand);
-    ch.scrambler = if rec.scram_mode == 0 {
-        ScramblerMode::Off
-    } else {
-        ScramblerMode::InvertFrequency(rec.scram_param.max(rec.scram_mode))
-    };
-    ch.ste_mode = CssTailMode::from_u8(rec.ste);
-    ch.mic_gain_db = rec.mic_gain;
-    ch.roger_id = rec.roger;
-    ch.tot_limit_15s = rec.tx_limit;
-    ch.proto = rec.proto;
-    ch.proto_ref = rec.proto_ref;
-}
+        ch.step = StepSetting::from_hz_x10(rec.step_hz_x10);
+        ch.bandwidth =
+            if rec.bandwidth_50hz >= 400 || (rec.flags & ChannelRecord::FLAG_WIDE_FILTER) != 0 {
+                Bandwidth::Wide25k
+            } else if rec.bandwidth_50hz > 0 && rec.bandwidth_50hz <= 150 {
+                Bandwidth::Narrow6k25
+            } else {
+                Bandwidth::Narrow12k5
+            };
+        ch.modulation = ModulationMode::from_u8(rec.modulation);
+        ch.power = if rec.power_mw == 0 || rec.power_mw >= 4000 {
+            RfPowerLevel::High
+        } else if rec.power_mw >= 1500 {
+            RfPowerLevel::Medium
+        } else {
+            RfPowerLevel::Low
+        };
+        ch.rx_subaudible = rec.rx_subaudible_tone();
+        ch.tx_subaudible = rec.tx_subaudible_tone();
+        ch.squelch_level = rec.squelch_level;
+        ch.flags = rec.flags;
+        ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
+        ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
+        ch.compander = CompanderMode::from_u8(rec.compand);
+        ch.scrambler = if rec.scram_mode == 0 {
+            ScramblerMode::Off
+        } else {
+            ScramblerMode::InvertFrequency(rec.scram_param.max(rec.scram_mode))
+        };
+        ch.ste_mode = CssTailMode::from_u8(rec.ste);
+        ch.mic_gain_db = rec.mic_gain;
+        ch.roger_id = rec.roger;
+        ch.tot_limit_15s = rec.tx_limit;
+        ch.proto = rec.proto;
+        ch.proto_ref = rec.proto_ref;
+    }
 
+    #[inline(never)]
     fn save_channel_to_record(ch: &ChannelConfig, rec: &mut crate::data::ChannelRecord) {
-    use crate::data::ChannelRecord;
-    const BW_50HZ: [u16; 3] = [500, 250, 125];
-    const PWR_MW: [u16; 3] = [500, 2000, 5000];
+        use crate::data::ChannelRecord;
+        const BW_50HZ: [u16; 3] = [500, 250, 125];
+        const PWR_MW: [u16; 3] = [500, 2000, 5000];
 
-    rec.rx_frequency_hz = ch.rx_freq.raw();
-    rec.tx_frequency_hz = match ch.tx_shift {
-        RepeaterShift::Simplex => 0,
-        RepeaterShift::Positive(off) => ch.rx_freq.raw().saturating_add(off.raw()),
-        RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
-    };
-    rec.step_hz_x10 = ch.step.in_hz_x10();
-    rec.bandwidth_50hz = BW_50HZ[ch.bandwidth as usize];
-    rec.modulation = ch.modulation.to_u8();
-    rec.power_mw = PWR_MW[ch.power as usize];
-    rec.set_rx_subaudible_tone(ch.rx_subaudible);
-    rec.set_tx_subaudible_tone(ch.tx_subaudible);
-    rec.squelch_level = ch.squelch_level;
+        rec.rx_frequency_hz = ch.rx_freq.raw();
+        rec.tx_frequency_hz = match ch.tx_shift {
+            RepeaterShift::Simplex => 0,
+            RepeaterShift::Positive(off) => ch.rx_freq.raw().saturating_add(off.raw()),
+            RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
+        };
+        rec.step_hz_x10 = ch.step.in_hz_x10();
+        rec.bandwidth_50hz = BW_50HZ[ch.bandwidth as usize];
+        rec.modulation = ch.modulation.to_u8();
+        rec.power_mw = PWR_MW[ch.power as usize];
+        rec.set_rx_subaudible_tone(ch.rx_subaudible);
+        rec.set_tx_subaudible_tone(ch.tx_subaudible);
+        rec.squelch_level = ch.squelch_level;
 
-    let mut flags = ch.flags & !(ChannelRecord::FLAG_REVERSE | ChannelRecord::FLAG_BUSY_LOCKOUT);
-    if ch.reverse {
-        flags |= ChannelRecord::FLAG_REVERSE;
-    }
-    if ch.busy_lock {
-        flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
-    }
-    rec.flags = flags;
-    rec.compand = ch.compander as u8;
-    match ch.scrambler {
-        ScramblerMode::Off => {
-            rec.scram_mode = 0;
-            rec.scram_param = 0;
+        let mut flags =
+            ch.flags & !(ChannelRecord::FLAG_REVERSE | ChannelRecord::FLAG_BUSY_LOCKOUT);
+        if ch.reverse {
+            flags |= ChannelRecord::FLAG_REVERSE;
         }
-        ScramblerMode::InvertFrequency(code) => {
-            rec.scram_mode = 1;
-            rec.scram_param = code;
+        if ch.busy_lock {
+            flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
         }
+        rec.flags = flags;
+        rec.compand = ch.compander as u8;
+        match ch.scrambler {
+            ScramblerMode::Off => {
+                rec.scram_mode = 0;
+                rec.scram_param = 0;
+            }
+            ScramblerMode::InvertFrequency(code) => {
+                rec.scram_mode = 1;
+                rec.scram_param = code;
+            }
+        }
+        rec.ste = ch.ste_mode as u8;
+        rec.mic_gain = ch.mic_gain_db;
+        rec.roger = ch.roger_id;
+        rec.tx_limit = ch.tot_limit_15s;
+        rec.proto = ch.proto;
+        rec.proto_ref = ch.proto_ref;
+        rec.record_crc = rec.compute_crc();
     }
-    rec.ste = ch.ste_mode as u8;
-    rec.mic_gain = ch.mic_gain_db;
-    rec.roger = ch.roger_id;
-    rec.tx_limit = ch.tot_limit_15s;
-    rec.proto = ch.proto;
-    rec.proto_ref = ch.proto_ref;
-    rec.record_crc = rec.compute_crc();
-}
 
     // ── Memory Channel Loading & Serialization ──
 
     /// Populate the canonical 18-byte `KrxRadioState` snapshot directly from coordinator fields.
     #[inline(never)]
-    pub fn fill_krx_state(
-        &self,
-        token: ClientToken,
-        dst: &mut kernel::proc::abi::KrxRadioState,
-    ) {
+    pub fn fill_krx_state(&self, token: ClientToken, dst: &mut kernel::proc::abi::KrxRadioState) {
         let dw = match self.dual_watch {
             DualWatchMode::Off => 0,
             DualWatchMode::EqualDwell { .. } => 1,
@@ -1252,8 +1405,11 @@ impl RadioCoordinator {
     }
 
     /// Apply packed `[active_vfo, dual_watch, cross_band, bclo]` watch-mode word (`0xFF` = keep).
-    #[inline(never)]
-    pub fn apply_watch_mode<R: RfChannel + RfSquelch>(&mut self, radio: &mut R, packed: u32) -> bool {
+    pub fn apply_watch_mode<R: RfChannel + RfSquelch>(
+        &mut self,
+        radio: &mut R,
+        packed: u32,
+    ) -> bool {
         let active_vfo = packed as u8;
         let dual_watch = (packed >> 8) as u8;
         let cross_band = (packed >> 16) as u8;
@@ -1301,7 +1457,6 @@ impl RadioCoordinator {
     }
 
     /// Load a ChannelRecord from codeplug/KernFS storage into a target VFO slot.
-    #[inline(never)]
     pub fn load_channel_into_vfo<R: RfChannel + RfSquelch>(
         &mut self,
         radio: &mut R,
@@ -1329,7 +1484,6 @@ impl RadioCoordinator {
     }
 
     /// Serialize current VFO tuning parameters into a ChannelRecord with zero attribute loss.
-    #[inline(never)]
     pub fn save_vfo_to_channel(&self, slot: VfoSlot, rec: &mut crate::data::ChannelRecord) {
         let idx = slot.index().min(self.channels.len() - 1);
         Self::save_channel_to_record(&self.channels[idx], rec);
@@ -1374,7 +1528,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn tick_tx<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         // Lead-in countdown before unmuting mic
         if let TxState::LeadIn { remaining_ms } = self.tx_state {
@@ -1467,7 +1620,6 @@ impl RadioCoordinator {
 
     // ── Main 10ms System Tick ──
 
-    #[inline(never)]
     fn calc_watch_target(&self, idx: usize) -> Option<(u16, VfoSlot)> {
         match self.dual_watch {
             DualWatchMode::Off => None,
@@ -1495,15 +1647,10 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn tick_tone_burst<R: RadioService>(&mut self, radio: &mut R) {
         if let AudioRoutingState::ToneBurstActive { remaining_ms } = self.audio_routing {
             if remaining_ms <= 10 {
-                radio.mute_tones();
-                self.audio_routing = AudioRoutingState::NormalVoice;
-                if self.is_transmitting && self.tx_state == TxState::Active {
-                    radio.mute_mic(false);
-                }
+                self.stop_1750hz_burst(radio);
             } else {
                 self.audio_routing = AudioRoutingState::ToneBurstActive {
                     remaining_ms: remaining_ms.saturating_sub(10),
@@ -1512,7 +1659,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn tick_arbitrator<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         let arb_ev = self.arbitrator.tick(10)?;
         match arb_ev {
@@ -1549,7 +1695,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn process_carrier_active<R: RadioService>(&mut self, radio: &mut R, idx: usize) -> RadioEvent {
         self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
 
@@ -1564,7 +1709,7 @@ impl RadioCoordinator {
         if !self.carrier_active {
             self.carrier_active = true;
             if !self.is_transmitting {
-                bsp::set_status_led(bsp::StatusLed::Green);
+                radio.set_rf_led(kernel::service::radio::RfLedState::RxGreen);
             }
             if !self.arbitrator.is_locked() || !self.arbitrator.active_lock.audio_muted {
                 self.set_audio_muted(radio, false);
@@ -1652,7 +1797,7 @@ impl RadioCoordinator {
             self.ste.reset();
             if !self.monitor_active {
                 if !self.is_transmitting {
-                    bsp::set_status_led(bsp::StatusLed::Off);
+                    radio.set_rf_led(kernel::service::radio::RfLedState::Off);
                 }
                 self.set_audio_muted(radio, true);
             }
@@ -1854,9 +1999,6 @@ mod tests {
         fn set_mic_gain(&mut self, _gain_db: u8) {}
         fn set_rf_volume(&mut self, _level: u8) {}
         fn set_tone_gain(&mut self, _gain: u8) {}
-        fn play_tone(&mut self, _freq_hz: u16, _duration_ms: u16) {}
-        fn play_tone_sequence(&mut self, _notes: &[ToneNote]) {}
-        fn play_tone_sequence_with_gain(&mut self, _notes: &[ToneNote], _gain: u8) {}
         fn mute_audio(&mut self, mute: bool) {
             self.muted = mute;
         }

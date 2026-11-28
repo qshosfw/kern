@@ -71,6 +71,37 @@ pub enum SquelchType {
 
 // ── BK4829 Driver ───────────────────────────────────────────────────────────
 
+/// Table-driven register bitfield patch `(reg, clear_mask, set_mask)`.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct RegPatch {
+    pub reg: u8,
+    pub clear: u16,
+    pub set: u16,
+}
+
+const fn build_volatile_mask() -> [u32; 4] {
+    let mut m = [0u32; 4];
+    const VOL: &[u8] = &[
+        0x00, 0x02, 0x07, 0x08, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x32, 0x58, 0x59, 0x5E, 0x5F, 0x61,
+        0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x7E,
+    ];
+    let mut i = 0;
+    while i < VOL.len() {
+        let r = VOL[i] as usize;
+        m[r >> 5] |= 1u32 << (r & 31);
+        i += 1;
+    }
+    m
+}
+
+const VOLATILE_REGS: [u32; 4] = build_volatile_mask();
+
+#[inline(always)]
+const fn is_volatile_reg(addr: u8) -> bool {
+    addr >= 128 || (VOLATILE_REGS[(addr >> 5) as usize] & (1u32 << (addr & 31))) != 0
+}
+
 #[repr(C)]
 pub struct Bk4829<'a, B> {
     pub(crate) tone_gain: u8,
@@ -80,12 +111,15 @@ pub struct Bk4829<'a, B> {
     pub(crate) squelch_level: u8,
     pub(crate) squelch_open: bool,
     pub(crate) subaudible_matched: bool,
+    pub(crate) tone_hold_polls: u8,
     pub(crate) tail_burst_latched: bool,
     pub(crate) loopback_active: bool,
+    pub(crate) saved_mod_dev: u16,
     pub(crate) baseline_xtal_trim: i16,
     pub(crate) cur_xtal_trim: i16,
-    pub(crate) gpio_shadow: u16,
     pub(crate) current_freq_hz: u32,
+    pub(crate) shadow_valid: [u32; 4],
+    pub(crate) shadow: [u16; 128],
     pub(crate) bus: B,
     pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) rx_subaudible: kernel::service::radio::SubaudibleTone,
@@ -94,26 +128,57 @@ pub struct Bk4829<'a, B> {
 }
 
 impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
-    /// Performs a live physical 16-bit BK4829 register read.
+    /// Clear all cached shadow register validity bits (e.g. across soft reset).
     #[inline(always)]
+    pub fn invalidate_shadow(&mut self) {
+        self.shadow_valid = [0; 4];
+    }
+
+    /// Reads a 16-bit BK4829 register, returning the shadow cache for non-volatile registers.
     pub fn read_reg(&mut self, addr: u8) -> u16 {
+        if !is_volatile_reg(addr) {
+            let idx = (addr >> 5) as usize;
+            let bit = 1u32 << (addr & 31);
+            if (self.shadow_valid[idx] & bit) != 0 {
+                return unsafe { *self.shadow.get_unchecked(addr as usize) };
+            }
+            let val = self.bus.read_reg(addr);
+            if val != 0xFFFF {
+                unsafe { *self.shadow.get_unchecked_mut(addr as usize) = val };
+                self.shadow_valid[idx] |= bit;
+            }
+            return val;
+        }
         self.bus.read_reg(addr)
     }
 
-    /// Performs a live physical 16-bit BK4829 register write.
-    #[inline(always)]
+    /// Writes a 16-bit BK4829 register, eliding redundant bus writes for unchanged non-volatile values.
     pub fn write_reg(&mut self, addr: u8, val: u16) {
+        if !is_volatile_reg(addr) {
+            let idx = (addr >> 5) as usize;
+            let bit = 1u32 << (addr & 31);
+            let slot = unsafe { self.shadow.get_unchecked_mut(addr as usize) };
+            if (self.shadow_valid[idx] & bit) != 0 && *slot == val {
+                return;
+            }
+            *slot = val;
+            self.shadow_valid[idx] |= bit;
+        }
         self.bus.write_reg(addr, val);
     }
 
-    #[inline(never)]
     pub(crate) fn apply_reg_vals(&mut self, regs: &[(u8, u16)]) {
         for &(reg, val) in regs {
             self.write_reg(reg, val);
         }
     }
 
-    #[inline(never)]
+    pub fn apply_reg_patches(&mut self, patches: &[RegPatch]) {
+        for p in patches {
+            self.update_reg_bits(p.reg, p.clear, p.set);
+        }
+    }
+
     pub(crate) fn apply_demod_af(&mut self, unmuted: bool) {
         if unmuted {
             self.set_af(self.active_demod_af);
@@ -124,7 +189,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         }
     }
 
-    #[inline(never)]
     fn finish_freq_tune(&mut self, freq_hz: u32, uhf_path: bool, low: u16, high: u16) {
         let old_uhf = self.current_freq_hz >= 174_000_000;
         self.current_freq_hz = freq_hz;
@@ -140,18 +204,15 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     }
 
     /// Clear `clear_mask` bits and set `set_mask` bits on a register via live RMW.
-    #[inline(never)]
     pub(crate) fn update_reg_bits(&mut self, addr: u8, clear_mask: u16, set_mask: u16) {
         let val = (self.read_reg(addr) & !clear_mask) | set_mask;
         self.write_reg(addr, val);
     }
 
-    #[inline(never)]
     fn rmw_reg_bit(&mut self, addr: u8, mask: u16, set: bool) {
         self.update_reg_bits(addr, mask, if set { mask } else { 0 });
     }
 
-    #[inline(never)]
     fn pulse_fifo_bit(&mut self, mask: u16) {
         let cur = self.read_reg(REG_FSK_FIFO_CTRL);
         self.write_reg(REG_FSK_FIFO_CTRL, cur | mask);
@@ -262,16 +323,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
 
     pub fn set_audio_profile(&mut self, _profile: u8) {}
 
-    pub fn play_tone(&mut self, freq_hz: u16, duration_ms: u16) {
-        if freq_hz == 0 || duration_ms == 0 {
-            return;
-        }
-        self.play_tone_sequence(&[kernel::service::radio::af::ToneNote::new(
-            freq_hz,
-            duration_ms,
-        )]);
-    }
-
     /// Current hardware tone generator gain (`0` = muted).
     #[inline(always)]
     pub fn tone_gain(&self) -> u8 {
@@ -279,7 +330,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     }
 
     /// Capture the active RX power register word before isolating `REG_SYS_POWER` for tone playback.
-    #[inline(never)]
     pub fn capture_rx_pwr(&mut self) -> u16 {
         let cur_pwr = self.read_reg(REG_SYS_POWER);
         if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
@@ -290,8 +340,8 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     }
 
     /// Begin tone teardown: mute tone frequency and restore FSK/tone gain prior to the 5 ms settle window.
-    #[inline(never)]
     pub fn prepare_tone_teardown(&mut self) {
+        self.write_reg(REG_TX_MUTE, 0xBB18);
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         // Preserve Tone2 / FSK subcarrier gain (bits [7:0]) if hardware FSK modem is active
         let fsk_active = {
@@ -300,10 +350,10 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         };
         let restored_tone_gain = if fsk_active { 0x00E0 } else { 0x0000 };
         self.write_reg(REG_TONE_GAIN, restored_tone_gain);
+        self.restore_tone_mod_dev();
     }
 
     /// Complete tone teardown after the 5 ms settle delay, restoring RX power and AF demod routing.
-    #[inline(never)]
     pub fn finish_tone_teardown(&mut self, rx_pwr: u16) {
         self.write_reg(REG_SYS_POWER, rx_pwr);
         let unmuted = self.rx_demod_active && self.is_squelch_open();
@@ -311,44 +361,9 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         crate::audio::AudioAmplifier::<B>::notify_tone_played();
     }
 
-    pub fn play_tone_sequence(&mut self, notes: &[kernel::service::radio::af::ToneNote]) {
-        if notes.is_empty() || self.tone_gain == 0 {
-            return;
-        }
-
-        let rx_pwr = self.capture_rx_pwr();
-
-        // Wait ~50ms when waking LN4898 PA8 from cold shutdown for pop-free playback.
-        if !self.begin_tone_sequence() {
-            self.bus.delay_ms(50);
-        }
-
-        // 4. Play note sequence
-        for note in notes {
-            if note.freq_hz == 0 || note.duration_ms == 0 {
-                self.mute_tone_note();
-                self.write_reg(REG_TONE1_FREQ, 0x0000);
-                self.bus.delay_ms(note.duration_ms as u32);
-            } else {
-                self.step_tone_note(note.freq_hz);
-                self.bus.delay_ms(note.duration_ms as u32);
-                self.mute_tone_note();
-            }
-        }
-
-        // 5. Restore clean RX / idle state
-        self.restore_post_tone_state(rx_pwr);
-    }
-
-    #[inline(never)]
-    pub fn restore_post_tone_state(&mut self, rx_pwr: u16) {
-        self.prepare_tone_teardown();
-        self.bus.delay_ms(5);
-        self.finish_tone_teardown(rx_pwr);
-    }
-
     pub fn begin_tone_sequence(&mut self) -> bool {
         self.write_reg(REG_TX_MUTE, 0xBB18);
+        self.clamp_tone_mod_dev();
         self.set_af(AfType::Beep);
         let tone_cfg = 0x8000 | ((self.tone_gain as u16 & 0x7F) << 8);
         self.write_reg(REG_TONE_GAIN, tone_cfg);
@@ -374,21 +389,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
 
     pub fn mute_tone_note(&mut self) {
         self.write_reg(REG_TX_MUTE, 0xBB18);
-    }
-
-    pub fn end_tone_sequence(&mut self, _was_amp_active: bool) {
-        self.restore_post_tone_state(0xBFF1);
-    }
-
-    pub fn play_tone_sequence_with_gain(
-        &mut self,
-        notes: &[kernel::service::radio::af::ToneNote],
-        gain: u8,
-    ) {
-        let prev_gain = self.tone_gain;
-        self.set_tone_gain(gain);
-        self.play_tone_sequence(notes);
-        self.set_tone_gain(prev_gain);
     }
 
     pub fn set_xtal_freq_trim(&mut self, trim: i16) {
@@ -439,7 +439,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         self.write_reg(0x36, 0x0022);
     }
 
-    #[inline(never)]
     pub fn write_pll_words(&mut self, low: u16, high: u16) {
         self.write_reg(REG_PLL_LOW, low);
         self.write_reg(REG_PLL_HIGH, high);
@@ -447,14 +446,16 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
 
     pub fn set_squelch_profile(&mut self, th: &kernel::service::radio::squelch::SquelchThresholds) {
         let r4d = 0xA000 | (th.close_glitch & 0x00FF);
-        let r4e =
-            (1u16 << 14) | (5u16 << 11) | (3u16 << 9) | (1u16 << 8) | (th.open_glitch & 0x00FF);
+        // BK4829 REG_4E layout (DRT01-230605-C01 p.27): [15:12] = open_delay (3), [11:8] = close_delay (8).
+        let r4e = 0x3800 | (th.open_glitch & 0x00FF);
         let r4f = ((th.close_noise & 0x007F) << 8) | (th.open_noise & 0x007F);
         let r78 = ((th.open_rssi & 0x00FF) << 8) | (th.close_rssi & 0x00FF);
-        self.write_reg(REG_SQL_GLITCH_CLOSE, r4d);
-        self.write_reg(REG_SQL_GLITCH_OPEN, r4e);
-        self.write_reg(REG_SQL_NOISE, r4f);
-        self.write_reg(REG_SQL_RSSI, r78);
+        self.apply_reg_vals(&[
+            (REG_SQL_GLITCH_CLOSE, r4d),
+            (REG_SQL_GLITCH_OPEN, r4e),
+            (REG_SQL_NOISE, r4f),
+            (REG_SQL_RSSI, r78),
+        ]);
     }
 
     /// Acknowledge and clear pending hardware interrupts.
@@ -475,15 +476,19 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
             }
             if (irq & INT_SQUELCH_FOUND) != 0 {
                 self.squelch_open = false;
+                self.subaudible_matched = false;
+                self.tone_hold_polls = 0;
             }
             if (irq & (INT_CTCSS_FOUND | INT_CDCSS_FOUND)) != 0 {
                 self.subaudible_matched = true;
+                self.tone_hold_polls = 10;
             }
             if (irq & INT_CXCSS_TAIL) != 0 {
                 self.tail_burst_latched = true;
                 self.subaudible_matched = false;
+                self.tone_hold_polls = 0;
             }
-            if (irq & (INT_CTCSS_LOST | INT_CDCSS_LOST)) != 0 {
+            if (irq & (INT_CTCSS_LOST | INT_CDCSS_LOST)) != 0 && self.tone_hold_polls == 0 {
                 self.subaudible_matched = false;
             }
             irq
@@ -507,9 +512,21 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     pub fn is_subaudible_matched(&mut self) -> bool {
         self.poll_interrupts();
         let reg0c = self.read_reg(REG_STATUS);
-        let ctc1 = (reg0c >> 10) & 0x01;
-        let dcs = (reg0c >> 14) & 0x03;
-        self.subaudible_matched || ctc1 != 0 || dcs != 0
+        let hw_match = ((reg0c >> 10) & 0x01) != 0 || ((reg0c >> 14) & 0x03) != 0;
+        if hw_match {
+            self.subaudible_matched = true;
+            self.tone_hold_polls = 10;
+            return true;
+        }
+        let hw_open = self.squelch_level == 0 || ((reg0c >> 1) & 0x0001) != 0;
+        if hw_open && !self.tail_burst_latched && self.tone_hold_polls > 0 {
+            self.tone_hold_polls -= 1;
+            self.subaudible_matched = self.tone_hold_polls > 0;
+            return true;
+        }
+        self.tone_hold_polls = 0;
+        self.subaudible_matched = false;
+        false
     }
 
     /// Check if hardware detected a 55 Hz CTC2 tail burst (bit 11 of `REG_0C`)
@@ -684,10 +701,9 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn update_gpio_reg(&mut self, clear_mask: u16, set_mask: u16) {
-        self.gpio_shadow = (self.gpio_shadow & !clear_mask) | set_mask;
-        self.write_reg(REG_GPIO, self.gpio_shadow);
+        self.update_reg_bits(REG_GPIO, clear_mask, set_mask);
     }
 
     pub fn set_status_led(&mut self, led: StatusLed) {
@@ -697,7 +713,7 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     /// Returns the shadowed BK4829 GPIO output register (`REG_GPIO`).
     #[inline(always)]
     pub fn read_gpio_reg(&mut self) -> u16 {
-        self.gpio_shadow
+        self.read_reg(REG_GPIO)
     }
 
     pub fn set_gpio_pin(&mut self, pin: u8, high: bool) {
@@ -718,6 +734,10 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     }
 
     pub fn new(bus: B) -> Self {
+        let mut shadow = [0u16; 128];
+        shadow[REG_GPIO as usize] = 0x9000;
+        let mut shadow_valid = [0u32; 4];
+        shadow_valid[(REG_GPIO >> 5) as usize] = 1u32 << (REG_GPIO & 31);
         Self {
             bus,
             tone_gain: 96,
@@ -729,9 +749,12 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
             squelch_level: 4,
             squelch_open: false,
             subaudible_matched: false,
+            tone_hold_polls: 0,
             tail_burst_latched: false,
             loopback_active: false,
-            gpio_shadow: 0x9000,
+            saved_mod_dev: 0,
+            shadow_valid,
+            shadow,
             baseline_xtal_trim: 0,
             cur_xtal_trim: 0,
             rx_subaudible: kernel::service::radio::SubaudibleTone::None,
@@ -746,10 +769,11 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
             return Err(());
         }
 
-        // 1. Soft reset pulse
+        // 1. Soft reset pulse + shadow cache invalidation
         self.write_reg(0x00, 0x8000);
         self.bus.delay_ms(2);
         self.write_reg(0x00, 0x0000);
+        self.invalidate_shadow();
 
         // 2. Crystal oscillator, bandgap, RX LDO, AGC, filter, routing, CXCSS, RX power & IRQ mask
         static INIT_REG_PATCHES: [(u8, u16); 18] = [
@@ -786,7 +810,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
                     | INT_FSK_TX_FINISHED,
             ),
         ];
-        self.gpio_shadow = 0x9000;
         self.apply_reg_vals(&INIT_REG_PATCHES);
 
         // 3. Default volume level 5 (Reg 0x48)
@@ -918,7 +941,6 @@ static MOD_AF_MAP: [AfType; 5] = [
 ];
 
 impl<'a, B: Bk4829Bus> kernel::service::radio::RfModulation for Bk4829<'a, B> {
-    #[inline(never)]
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
         use kernel::service::radio::ModulationMode::*;
         let idx = match mode {
@@ -992,7 +1014,6 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfModulation for Bk4829<'a, B> {
 }
 
 impl<'a, B: Bk4829Bus> kernel::service::radio::RfSquelch for Bk4829<'a, B> {
-    #[inline(never)]
     fn set_squelch_level(&mut self, level: u8) {
         self.squelch_level = level;
         let th = if let Some(calib) = self.calib {
@@ -1232,7 +1253,6 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfFskPhy for Bk4829<'a, B> {
 }
 
 impl<'a, B: Bk4829Bus> kernel::service::radio::RfAudioPath for Bk4829<'a, B> {
-    #[inline(never)]
     fn set_af_response(&mut self, response: &kernel::service::radio::af::AfResponse) {
         static TBL_3K: [u16; 9] = [
             0xDA00, 0xE800, 0xF200, 0xFA02, 0xF50B, 0xE61C, 0xDF22, 0xD42D, 0xCC35,
@@ -1248,14 +1268,17 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfAudioPath for Bk4829<'a, B> {
         let tx_3k = (response.tx_3k + 4).clamp(0, 8) as usize;
         let rx_300 = (response.rx_300 + 4).clamp(0, 8) as usize;
         let tx_300 = (response.tx_300 + 4).clamp(0, 8) as usize;
-        unsafe {
-            self.write_reg(0x75, *TBL_3K.get_unchecked(rx_3k));
-            self.write_reg(0x74, *TBL_3K.get_unchecked(tx_3k));
-            self.write_reg(0x54, *TBL_300_D1.get_unchecked(rx_300));
-            self.write_reg(0x55, *TBL_300_D2.get_unchecked(rx_300));
-            self.write_reg(0x44, *TBL_300_D1.get_unchecked(tx_300));
-            self.write_reg(0x45, *TBL_300_D2.get_unchecked(tx_300));
-        }
+        let pairs = unsafe {
+            [
+                (0x75, *TBL_3K.get_unchecked(rx_3k)),
+                (0x74, *TBL_3K.get_unchecked(tx_3k)),
+                (0x54, *TBL_300_D1.get_unchecked(rx_300)),
+                (0x55, *TBL_300_D2.get_unchecked(rx_300)),
+                (0x44, *TBL_300_D1.get_unchecked(tx_300)),
+                (0x45, *TBL_300_D2.get_unchecked(tx_300)),
+            ]
+        };
+        self.apply_reg_vals(&pairs);
     }
 
     fn set_mic_gain(&mut self, gain_db: u8) {
@@ -1268,22 +1291,6 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfAudioPath for Bk4829<'a, B> {
 
     fn set_tone_gain(&mut self, gain: u8) {
         self.set_tone_gain(gain);
-    }
-
-    fn play_tone(&mut self, freq_hz: u16, duration_ms: u16) {
-        self.play_tone(freq_hz, duration_ms);
-    }
-
-    fn play_tone_sequence(&mut self, notes: &[kernel::service::radio::af::ToneNote]) {
-        self.play_tone_sequence(notes);
-    }
-
-    fn play_tone_sequence_with_gain(
-        &mut self,
-        notes: &[kernel::service::radio::af::ToneNote],
-        gain: u8,
-    ) {
-        self.play_tone_sequence_with_gain(notes, gain);
     }
 
     fn mute_audio(&mut self, mute: bool) {
@@ -1377,7 +1384,6 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfFineTuning for Bk4829<'a, B> {
         self.cur_xtal_trim
     }
 
-    #[inline(never)]
     fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16) {
         let (nominal_10hz, _) = utils::div10_u32(carrier_hz);
         let (trim, adjusted_10hz) = if offset_dhz == 0 {
@@ -1408,10 +1414,32 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfFineTuning for Bk4829<'a, B> {
 }
 
 impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
-    #[inline(never)]
+    /// Clamp `REG_MODULATION` (`0x40`) deviation bits `[11:0]` to `0x043C` while the internal
+    /// tone DDS is active so `1750 Hz` / DTMF / roger bursts never over-deviate narrowband repeaters.
+    fn clamp_tone_mod_dev(&mut self) {
+        if self.saved_mod_dev == 0 {
+            let cur = self.read_reg(REG_MODULATION);
+            if cur != 0xFFFF {
+                self.saved_mod_dev = 0x8000 | (cur & 0x0FFF);
+                self.write_reg(REG_MODULATION, (cur & 0xF000) | 0x043C);
+            }
+        }
+    }
+
+    fn restore_tone_mod_dev(&mut self) {
+        if self.saved_mod_dev != 0 {
+            let dev = self.saved_mod_dev & 0x0FFF;
+            self.saved_mod_dev = 0;
+            self.update_reg_bits(REG_MODULATION, 0x0FFF, dev);
+        }
+    }
+
     fn set_tone_raw(&mut self, tone2_and_enabled: u8, freq_word: u16, gain: u8) {
         let is_tone2 = (tone2_and_enabled & 2) != 0;
         let enabled = (tone2_and_enabled & 1) != 0;
+        if enabled && freq_word != 0 {
+            self.clamp_tone_mod_dev();
+        }
         self.write_reg(
             if is_tone2 {
                 REG_TONE2_FREQ
@@ -1425,7 +1453,6 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
         self.update_reg_bits(REG_TONE_GAIN, 0x00FFu16 << shift, field);
     }
 
-    #[inline(never)]
     fn set_tone_gain_field(&mut self, shift: u8, gain: u8) {
         self.update_reg_bits(
             REG_TONE_GAIN,
@@ -1463,15 +1490,22 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfToneGenerator for Bk4829<'a, B>
     }
 
     fn enable_tone1(&mut self, enable: bool) {
+        if enable {
+            self.clamp_tone_mod_dev();
+        }
         self.rmw_reg_bit(REG_TONE_GAIN, 1 << 15, enable);
     }
 
     fn enable_tone2(&mut self, enable: bool) {
+        if enable {
+            self.clamp_tone_mod_dev();
+        }
         self.rmw_reg_bit(REG_TONE_GAIN, 1 << 7, enable);
     }
 
     fn mute_tones(&mut self) {
         self.write_reg(REG_TONE_GAIN, 0x0000);
+        self.restore_tone_mod_dev();
     }
 }
 
@@ -1540,6 +1574,15 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RadioService for Bk4829<'a, B> {
 
     fn set_xtal_freq_trim(&mut self, trim: i16) {
         self.set_xtal_freq_trim(trim);
+    }
+
+    fn set_rf_led(&mut self, led: kernel::service::radio::RfLedState) {
+        let hw = match led {
+            kernel::service::radio::RfLedState::Off => StatusLed::Off,
+            kernel::service::radio::RfLedState::RxGreen => StatusLed::Green,
+            kernel::service::radio::RfLedState::TxRed => StatusLed::Red,
+        };
+        self.set_status_led(hw);
     }
 
     fn set_internal_loopback(&mut self, enabled: bool) {

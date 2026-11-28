@@ -78,7 +78,6 @@ impl CdcEngine {
     }
 
     /// Zero-copy drain directly from hardware USBD endpoint FIFO into the RX ring buffer.
-    #[inline(never)]
     pub fn push_rx_from_fifo(&mut self, ep: u8, count: usize) {
         let fifo = fifo_ep_u8(ep);
         let mut head = self.rx_head;

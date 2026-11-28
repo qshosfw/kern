@@ -22,6 +22,11 @@ pub trait DisplayBackend {
 pub trait PagedFramebuffer {
     /// Bitmask of modified 8-pixel-tall pages (`bit 0` = page 0 .. `bit 7` = page 7).
     fn dirty_mask(&self) -> u8;
+    /// Inclusive column span `(x0, x1)` (`0..=127`) modified in `page` (`0..8`).
+    #[inline(always)]
+    fn dirty_span(&self, _page: usize) -> (u8, u8) {
+        (0, 127)
+    }
     /// Clear all pending dirty flags after flushing to the panel.
     fn clear_dirty(&mut self);
     /// Raw 128-byte page slice for `page` (`0..8`).

@@ -30,7 +30,7 @@ u32 leaf2_entry(u32 op, const KrxApiTable* api, void* param) {
     if (st->golden_ok) st->ui.fmt_hex32(v_gcrc, st->golden_crc);
     else { v_gcrc[0] = '-'; v_gcrc[1] = 0; }
 
-    u16 mv = st->ui.pwr_get(api, SUB_IO_POWER_BATT_MV);
+    u16 mv = st->ui.prop_get(api, KRX_PROP_BATT_MV);
     u32 bi = 0u, rem = mv, v = 0u, c = 0u;
     while (rem >= 1000u) { rem -= 1000u; v++; }
     while (rem >= 10u)   { rem -= 10u;   c++; }

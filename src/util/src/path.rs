@@ -13,7 +13,6 @@ const ROOTS: [(&[u8], u8); 4] = [
 ];
 
 /// Validates that `b` is non-empty, starts with `'/'`, and contains no `".."` or `"//"`.
-#[inline(never)]
 pub fn is_clean_path(b: &[u8]) -> bool {
     if b.is_empty() || b[0] != b'/' {
         return false;
@@ -31,7 +30,6 @@ pub fn is_clean_path(b: &[u8]) -> bool {
 }
 
 /// Returns the root directory bit (`ROOT_*`) matching `b`, or `0` if unrecognized.
-#[inline(never)]
 pub fn root_bit(b: &[u8]) -> u8 {
     for &(prefix, bit) in &ROOTS {
         if b.starts_with(prefix) {

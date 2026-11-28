@@ -189,6 +189,8 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     builder.set_lifecycle(TYPES[m.get("type", "app")], flags)
     if "caps" in m:
         builder.caps = pack_krx.resolve_mask("KRX_CAP", m["caps"])
+    if m.get("sign", False) or rel_name.startswith("sys/"):
+        builder.sign = True
 
     leaf_max = m.get("leaf_max", LEAF_MAX)
     if profile == pack_krx.PROFILE_P0_PAGED:

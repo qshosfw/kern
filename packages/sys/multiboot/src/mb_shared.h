@@ -79,7 +79,7 @@ typedef struct {
     const char* (*nth_s)(const char* tbl, u8 idx);
     void        (*fmt_hex32)(char* dst, u32 val);
     u16         (*rd_at)(const KrxApiTable* api, const char* path, u8 plen, u32 off, u8* buf, u16 len);
-    u16         (*pwr_get)(const KrxApiTable* api, u8 sub);
+    u16         (*prop_get)(const KrxApiTable* api, u8 prop);
     u32         (*crc32_step)(u32 crc, const u8* data, u32 len);
     void        (*probe)(const KrxApiTable* api, struct MbState* st);
     /* SRAM-safe bare-metal helpers (live in resident root SRAM, zero internal-flash fetches) */

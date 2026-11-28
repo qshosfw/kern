@@ -5,7 +5,7 @@
 //! packs. Switching language in Settings reloads immediately with zero reboot required.
 
 #[cfg(not(test))]
-use gfx::media::draw_cached_glyph;
+use gfx::media::{CachedGlyphSlot, draw_cached_glyph};
 use gfx::media::{
     FontGlyphCache, FontPackHeader, LANG_FONT_CJK_JA, LANG_FONT_CJK_ZH, LangPackHeader, fnv1a_32,
     fnv1a_32_short, lookup_lang_hash_streaming,
@@ -32,6 +32,7 @@ struct LangStrCache<const N: usize> {
 }
 
 impl<const N: usize> LangStrCache<N> {
+    #[cfg(test)]
     const fn new() -> Self {
         assert!(N.is_power_of_two() && N <= 256);
         Self {
@@ -44,7 +45,6 @@ impl<const N: usize> LangStrCache<N> {
         }
     }
 
-    #[inline(never)]
     fn clear(&mut self) {
         for s in &mut self.slots {
             s.len = 0;
@@ -52,7 +52,6 @@ impl<const N: usize> LangStrCache<N> {
         self.next_evict = 0;
     }
 
-    #[inline(never)]
     fn lookup<'a>(&self, h: u32, out: &'a mut [u8]) -> Option<Option<&'a str>> {
         for s in &self.slots {
             if s.len != 0 && s.key_hash == h {
@@ -71,7 +70,6 @@ impl<const N: usize> LangStrCache<N> {
         None
     }
 
-    #[inline(never)]
     fn insert(&mut self, h: u32, val: Option<&str>) {
         let idx = (self.next_evict as usize) & (N - 1);
         self.next_evict = self.next_evict.wrapping_add(1) & ((N - 1) as u8);
@@ -94,7 +92,6 @@ impl<const N: usize> LangStrCache<N> {
     }
 }
 
-#[inline(never)]
 fn open_hdr_16(
     storage: &mut crate::services::SystemStorage,
     path: &str,
@@ -110,7 +107,6 @@ fn open_hdr_16(
     0
 }
 
-#[inline(never)]
 fn load_lang_hdr(
     storage: &mut crate::services::SystemStorage,
     path: &str,
@@ -129,7 +125,6 @@ fn load_lang_hdr(
     0
 }
 
-#[inline(never)]
 fn build_lang_path(is_app: bool, stem: &[u8], code: &[u8], out: &mut [u8]) -> usize {
     let clen = gfx::text::find_byte(code, 0).unwrap_or(code.len());
     if clen == 0 {
@@ -161,7 +156,6 @@ fn build_lang_path(is_app: bool, stem: &[u8], code: &[u8], out: &mut [u8]) -> us
     total
 }
 
-#[inline(never)]
 fn load_font_stem(
     storage: &mut crate::services::SystemStorage,
     stem: &[u8],
@@ -186,6 +180,24 @@ fn load_font_stem(
     0
 }
 
+const CACHE_UNALLOCATED: u16 = 0xFFFF;
+
+#[repr(C, align(4))]
+struct LangArenaCache {
+    glyph_cache: FontGlyphCache<8>,
+    str_cache: LangStrCache<8>,
+}
+
+const LANG_CACHE_BYTES: usize = (core::mem::size_of::<LangArenaCache>() + 7) & !7;
+const _: () = assert!(LANG_CACHE_BYTES <= 528);
+
+impl LangArenaCache {
+    fn clear(&mut self) {
+        self.glyph_cache.clear();
+        self.str_cache.clear();
+    }
+}
+
 struct ActiveLang {
     os_hdr: Option<LangPackHeader>,
     app_hdr: Option<LangPackHeader>,
@@ -195,8 +207,7 @@ struct ActiveLang {
     app_ino: u16,
     base_font_ino: u16,
     extra_font_ino: u16,
-    glyph_cache: FontGlyphCache<24>,
-    str_cache: LangStrCache<16>,
+    cache_off: u16,
     app_stem: utils::format::InlineStr<12>,
 }
 
@@ -211,18 +222,71 @@ impl ActiveLang {
             app_ino: 0,
             base_font_ino: 0,
             extra_font_ino: 0,
-            glyph_cache: FontGlyphCache::new(),
-            str_cache: LangStrCache::new(),
+            cache_off: CACHE_UNALLOCATED,
             app_stem: utils::format::InlineStr::new(),
+        }
+    }
+
+    #[inline(always)]
+    fn cache_mut(&mut self) -> Option<&'static mut LangArenaCache> {
+        if self.cache_off == CACHE_UNALLOCATED {
+            None
+        } else {
+            Some(unsafe {
+                &mut *(crate::data::arena::arena_base_ptr().add(self.cache_off as usize)
+                    as *mut LangArenaCache)
+            })
         }
     }
 }
 
 static mut ACTIVE_LANG: ActiveLang = ActiveLang::new();
 
-#[inline(never)]
 fn state_mut() -> &'static mut ActiveLang {
     unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_LANG) }
+}
+
+/// Active Zone A watermark owned by the dynamic localization glyph/string cache (`0` when English is active).
+#[inline(always)]
+pub fn zone_a_end_bytes() -> usize {
+    let off = state_mut().cache_off;
+    if off == CACHE_UNALLOCATED {
+        0
+    } else {
+        (off as usize) + LANG_CACHE_BYTES
+    }
+}
+
+pub fn reset_arena_cache() {
+    state_mut().cache_off = CACHE_UNALLOCATED;
+}
+
+fn sync_arena_cache(st: &mut ActiveLang) {
+    #[cfg(feature = "krx_native")]
+    let fg_loaded = crate::runtime::native_runner::slot_ref().is_loaded;
+    #[cfg(not(feature = "krx_native"))]
+    let fg_loaded = false;
+
+    let want = st.os_hdr.is_some() || st.app_hdr.is_some();
+    if !want {
+        if !fg_loaded {
+            st.cache_off = CACHE_UNALLOCATED;
+        } else if let Some(c) = st.cache_mut() {
+            c.clear();
+        }
+    } else if st.cache_off == CACHE_UNALLOCATED && !fg_loaded {
+        let off = crate::data::arena::zone_a_used_bytes();
+        if off + LANG_CACHE_BYTES <= crate::data::arena::ZONE_A_MAX_BYTES {
+            unsafe {
+                core::ptr::write_bytes(
+                    crate::data::arena::arena_base_ptr().add(off),
+                    0,
+                    LANG_CACHE_BYTES,
+                );
+            }
+            st.cache_off = off as u16;
+        }
+    }
 }
 
 #[inline(always)]
@@ -246,28 +310,44 @@ pub fn build_app_lang_path(stem: &str, lang_code: &[u8; 4], out: &mut [u8; 32]) 
     build_lang_path(true, stem.as_bytes(), lang_code, out)
 }
 
+fn clear_os_state(st: &mut ActiveLang) {
+    st.os_hdr = None;
+    st.app_hdr = None;
+    st.base_font = None;
+    st.extra_font_hdr = None;
+    st.os_ino = 0;
+    st.app_ino = 0;
+    st.base_font_ino = 0;
+    st.extra_font_ino = 0;
+    sync_arena_cache(st);
+    gfx::text::set_ext_font_hooks(None, None);
+    gfx::text::set_localize_hook(None);
+}
+
 /// Reload the active OS language pack immediately (zero reboot), mount companion external `.fnt`
 /// packs (`/user/fonts/tiny5.fnt` + data-driven script pack), and re-bind any active app pack.
-#[inline(never)]
 pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::config::SystemConfig) {
     let st = state_mut();
-    st.glyph_cache.clear();
-    st.os_ino = if sys.lang_active != 0 {
-        load_lang_hdr(storage, sys.lang_path_str(), &mut st.os_hdr)
-    } else {
-        st.os_hdr = None;
-        0
-    };
+    if sys.lang_active == 0 {
+        if st.os_hdr.is_some()
+            || st.app_hdr.is_some()
+            || st.base_font.is_some()
+            || st.extra_font_hdr.is_some()
+            || st.cache_off != CACHE_UNALLOCATED
+        {
+            clear_os_state(st);
+        }
+        return;
+    }
+    if let Some(c) = st.cache_mut() {
+        c.glyph_cache.clear();
+    }
+    st.os_ino = load_lang_hdr(storage, sys.lang_path_str(), &mut st.os_hdr);
     let Some(os_hdr) = st.os_hdr else {
-        st.str_cache.clear();
-        st.app_hdr = None;
-        st.app_ino = 0;
-        st.base_font = None;
-        st.extra_font_hdr = None;
-        gfx::text::set_ext_font_hooks(None, None);
-        gfx::text::set_localize_hook(None);
+        clear_os_state(st);
         return;
     };
+    sync_arena_cache(st);
     st.base_font_ino = load_font_stem(storage, b"tiny5", &mut st.base_font);
     st.extra_font_ino = load_font_stem(storage, &os_hdr.lang_code, &mut st.extra_font_hdr);
     if st.extra_font_hdr.is_none() {
@@ -302,34 +382,43 @@ fn os_localize_hook<'a>(key: &str, prefer_short: bool, out: &'a mut [u8]) -> Opt
 }
 
 #[cfg(not(test))]
-#[inline(never)]
-fn fetch_ext_glyph(cp: u16) -> Option<&'static gfx::media::CachedGlyphSlot> {
+fn fetch_ext_glyph(cp: u16) -> Option<&'static CachedGlyphSlot> {
     let st = state_mut();
-    if let Some(hit) = st.glyph_cache.peek(0, cp) {
+    let (bh, bi, eh, ei) = (
+        st.base_font,
+        st.base_font_ino,
+        st.extra_font_hdr,
+        st.extra_font_ino,
+    );
+    let gc = &mut st.cache_mut()?.glyph_cache;
+    if let Some(hit) = gc.peek(0, cp) {
+        return hit;
+    }
+    if let Some(hit) = gc.peek(1, cp) {
         return hit;
     }
     let fs = crate::kern_fs();
-    let base = (st.base_font.as_ref(), st.base_font_ino);
-    let extra = (st.extra_font_hdr.as_ref(), st.extra_font_ino);
+    let base = (0u8, bh, bi);
+    let extra = (1u8, eh, ei);
     let sources = if cp >= 0x1100 {
         [extra, base]
     } else {
         [base, extra]
     };
-    for (hdr_opt, ino) in sources {
+    for (pack_id, hdr_opt, ino) in sources {
         if let Some(hdr) = hdr_opt
             && ino >= 2
-            && let Some(slot) = st.glyph_cache.fetch(
-                0,
-                hdr,
+            && let Some(slot) = gc.fetch(
+                pack_id,
+                &hdr,
                 |off, dst| fs.read_ino_at(ino, off, dst).unwrap_or(0),
                 cp,
             )
         {
-            return Some(slot);
+            return Some(unsafe { &*(slot as *const CachedGlyphSlot) });
         }
     }
-    st.glyph_cache.put_miss(0, cp);
+    gc.put_miss(0, cp);
     None
 }
 
@@ -344,16 +433,8 @@ fn ext_glyph_draw_hook(
 ) -> Option<i16> {
     #[cfg(not(test))]
     {
-        let slot = fetch_ext_glyph(cp)?;
-        return Some(draw_cached_glyph(
-            canvas,
-            x,
-            y + 1,
-            slot,
-            min_x,
-            max_x,
-            color,
-        ));
+        return fetch_ext_glyph(cp)
+            .map(|slot| draw_cached_glyph(canvas, x, y + 1, slot, min_x, max_x, color));
     }
     #[cfg(test)]
     {
@@ -374,12 +455,13 @@ fn ext_glyph_width_hook(cp: u16) -> Option<i16> {
     }
 }
 
-#[inline(never)]
 fn reload_bound_app(storage: &mut crate::services::SystemStorage) {
     let st = state_mut();
     st.app_hdr = None;
     st.app_ino = 0;
-    st.str_cache.clear();
+    if let Some(c) = st.cache_mut() {
+        c.str_cache.clear();
+    }
     if let Some(os_hdr) = st.os_hdr
         && !st.app_stem.is_empty()
     {
@@ -391,26 +473,27 @@ fn reload_bound_app(storage: &mut crate::services::SystemStorage) {
             st.app_ino = load_lang_hdr(storage, p, &mut st.app_hdr);
         }
     }
+    sync_arena_cache(st);
 }
 
 /// Bind an optional per-app localized pack (`/user/lang/<stem>_<cc>.lng`) on KRX app launch.
-#[inline(never)]
 pub fn bind_app(storage: &mut crate::services::SystemStorage, app_path: &str) {
     state_mut().app_stem.set(extract_stem(app_path));
     reload_bound_app(storage);
 }
 
 /// Clear any active per-app localization binding on KRX app exit.
-#[inline(never)]
 pub fn unbind_app() {
     let st = state_mut();
     st.app_stem.clear();
     st.app_hdr = None;
     st.app_ino = 0;
-    st.str_cache.clear();
+    if let Some(c) = st.cache_mut() {
+        c.str_cache.clear();
+    }
+    sync_arena_cache(st);
 }
 
-#[inline(never)]
 fn lookup_lang_slot<'a>(
     storage: &mut crate::services::SystemStorage,
     hdr: &LangPackHeader,
@@ -430,7 +513,6 @@ fn lookup_lang_slot<'a>(
 }
 
 /// Look up `key` via `RAM cache -> app pack -> OS pack`, returning `None` on miss or when inactive.
-#[inline(never)]
 pub fn translate_opt<'a>(
     storage: &mut crate::services::SystemStorage,
     key: &str,
@@ -447,7 +529,9 @@ pub fn translate_opt<'a>(
     } else {
         (full_hash, None)
     };
-    if let Some(hit) = st.str_cache.lookup(primary_hash, out) {
+    if let Some(c) = st.cache_mut()
+        && let Some(hit) = c.str_cache.lookup(primary_hash, out)
+    {
         return hit;
     }
     let mut found = None;
@@ -461,7 +545,9 @@ pub fn translate_opt<'a>(
             }
         }
     }
-    st.str_cache.insert(primary_hash, found);
+    if let Some(c) = st.cache_mut() {
+        c.str_cache.insert(primary_hash, found);
+    }
     found
 }
 
@@ -478,10 +564,9 @@ pub fn translate<'a>(
 
 /// Populate `km` from the active OS `.lng` pack's optional `[keymap]` entries (`__KM_LABEL__`, `__KM_0__..__KM_9__`).
 #[cfg(feature = "text_input")]
-#[inline(never)]
 pub fn load_locale_keymap(
     storage: &mut crate::services::SystemStorage,
-    km: &mut gfx::gui::modules::text_input::LocaleKeymap,
+    km: &mut gfx::views::LocaleKeymap,
 ) {
     unsafe { core::ptr::write_bytes(km as *mut _ as *mut u8, 0, core::mem::size_of_val(km)) };
     let st = state_mut();

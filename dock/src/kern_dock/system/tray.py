@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable
 
-from .. import APP_ID, APP_NAME
+from .. import APP_ID, APP_NAME, ASSETS_DIR
 from .icons import make_tray_argb_pixmap
 
 _SNI_XML = """
@@ -122,6 +122,7 @@ class SystemTrayService:
         self._tooltip_title: str = APP_NAME
         self._tooltip_body: str = "No radio connected"
         self._handlers: dict[int, Callable[[], None]] = {}
+        self._props: dict[int, dict[str, Any]] = {}
         self._pixmap_cache: dict[str, list[tuple[int, int, bytes]]] = {}
         self.active: bool = False
         self.watcher_present: bool = False
@@ -267,7 +268,7 @@ class SystemTrayService:
         if cached is not None:
             return cached
         try:
-            pix = [make_tray_argb_pixmap(24, state=self._state), make_tray_argb_pixmap(32, state=self._state)]
+            pix = [make_tray_argb_pixmap(sz, state=self._state) for sz in (16, 22, 24, 32, 48)]
         except Exception:
             pix = []
         self._pixmap_cache[self._state] = pix
@@ -309,28 +310,47 @@ class SystemTrayService:
         inv.return_value(None)
 
     def _build_layout_tuple(self) -> tuple[int, dict[str, Any], list[Any]]:
+        """
+        Menu entry schema (all keys optional):
+          label, icon (symbolic icon name), enabled, checked (checkmark toggle),
+          radio (radio toggle state), separator, children (nested submenu entries), handler.
+        """
         from gi.repository import GLib
 
         self._handlers.clear()
-        children: list[Any] = []
-        next_id = 1
-        for entry in self._menu_provider():
-            item_id = next_id
-            next_id += 1
+        self._props.clear()
+        counter = [0]
+
+        def build(entry: dict[str, Any]) -> Any:
+            counter[0] += 1
+            item_id = counter[0]
             props: dict[str, Any] = {}
+            kids = [build(c) for c in entry.get("children") or ()]
             if entry.get("separator"):
                 props["type"] = GLib.Variant("s", "separator")
             else:
-                props["label"] = GLib.Variant("s", str(entry.get("label", "")))
+                # dbusmenu labels treat '_' as a mnemonic marker: escape literal underscores
+                props["label"] = GLib.Variant("s", str(entry.get("label", "")).replace("_", "__"))
                 props["enabled"] = GLib.Variant("b", bool(entry.get("enabled", True)))
                 props["visible"] = GLib.Variant("b", True)
-                if "checked" in entry and entry["checked"] is not None:
+                if entry.get("icon"):
+                    props["icon-name"] = GLib.Variant("s", str(entry["icon"]))
+                if entry.get("checked") is not None:
                     props["toggle-type"] = GLib.Variant("s", "checkmark")
                     props["toggle-state"] = GLib.Variant("i", 1 if entry["checked"] else 0)
+                elif entry.get("radio") is not None:
+                    props["toggle-type"] = GLib.Variant("s", "radio")
+                    props["toggle-state"] = GLib.Variant("i", 1 if entry["radio"] else 0)
+                if kids:
+                    props["children-display"] = GLib.Variant("s", "submenu")
                 if callable(entry.get("handler")):
                     self._handlers[item_id] = entry["handler"]
-            children.append(GLib.Variant("(ia{sv}av)", (item_id, props, [])))
+            self._props[item_id] = props
+            return GLib.Variant("(ia{sv}av)", (item_id, props, kids))
+
+        children = [build(e) for e in self._menu_provider()]
         root_props = {"children-display": GLib.Variant("s", "submenu")}
+        self._props[0] = root_props
         return (0, root_props, children)
 
     def _build_get_layout_variant(self) -> Any:
@@ -348,7 +368,7 @@ class SystemTrayService:
         if prop == "Status":
             return GLib.Variant("s", "normal")
         if prop == "IconThemePath":
-            return GLib.Variant("as", [])
+            return GLib.Variant("as", [str(ASSETS_DIR / "icons")])
         return None
 
     def _on_menu_call(
@@ -360,10 +380,22 @@ class SystemTrayService:
             inv.return_value(self._build_get_layout_variant())
             return
         if method == "GetGroupProperties":
-            inv.return_value(GLib.Variant("(a(ia{sv}))", ([],)))
+            ids, names = params.unpack()
+            if not self._props:
+                self._build_layout_tuple()
+            wanted = ids or list(self._props.keys())
+            out = []
+            for i in wanted:
+                props = self._props.get(i)
+                if props is None:
+                    continue
+                out.append((i, {k: v for k, v in props.items() if not names or k in names}))
+            inv.return_value(GLib.Variant("(a(ia{sv}))", (out,)))
             return
         if method == "GetProperty":
-            inv.return_value(GLib.Variant("(v)", (GLib.Variant("s", ""),)))
+            item_id, name = params.unpack()
+            val = self._props.get(item_id, {}).get(name)
+            inv.return_value(GLib.Variant("(v)", (val if val is not None else GLib.Variant("s", ""),)))
             return
         if method == "AboutToShow":
             inv.return_value(GLib.Variant("(b)", (True,)))

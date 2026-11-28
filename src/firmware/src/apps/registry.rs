@@ -6,10 +6,9 @@
 
 use crate::apps::LauncherApp;
 use crate::orchestrator::{proc_book_mut, proc_book_ref};
-use crate::services::SysContext;
 
 use ::abi::CapabilitySet;
-use kernel::app::{App, AppMetadata, EventResult, ModalResult, StatusBarConfig};
+use kernel::app::{AppMetadata, EventResult, ModalResult, StatusBarConfig};
 use kernel::event::Event;
 
 /// Dynamic application slot record for installable `.krx` bundles.
@@ -25,8 +24,7 @@ pub const APP_ID_SETTINGS: usize = 2;
 const RESERVED_APP_SLOTS: usize = 3;
 
 #[unsafe(link_section = ".uninit")]
-static mut LAUNCHER_STORAGE: core::mem::MaybeUninit<LauncherApp> =
-    core::mem::MaybeUninit::uninit();
+static mut LAUNCHER_STORAGE: core::mem::MaybeUninit<LauncherApp> = core::mem::MaybeUninit::uninit();
 
 #[inline(always)]
 fn launcher_ptr() -> *mut LauncherApp {
@@ -55,7 +53,16 @@ impl AppRegistry {
         proc_book_ref().dynamic_app.is_some()
     }
 
-    #[inline(never)]
+    #[inline(always)]
+    pub fn launcher_ref() -> &'static LauncherApp {
+        unsafe { &*launcher_ptr() }
+    }
+
+    #[inline(always)]
+    pub fn launcher_mut() -> &'static mut LauncherApp {
+        unsafe { &mut *launcher_ptr() }
+    }
+
     pub fn init_app(app_id: usize) {
         if app_id == APP_ID_LAUNCHER {
             unsafe {
@@ -63,20 +70,6 @@ impl AppRegistry {
                 core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<LauncherApp>());
                 LauncherApp::init_at(p);
             }
-        }
-    }
-
-    #[inline(always)]
-    pub fn app_instance(app_id: usize) -> Option<*mut ()> {
-        (app_id == APP_ID_LAUNCHER).then(|| launcher_ptr() as *mut ())
-    }
-
-    #[inline(always)]
-    pub fn app_size(app_id: usize) -> usize {
-        if app_id == APP_ID_LAUNCHER {
-            core::mem::size_of::<LauncherApp>()
-        } else {
-            0
         }
     }
 
@@ -112,25 +105,23 @@ impl AppRegistry {
         proc_book_mut().dynamic_app = None;
     }
 
-    #[inline(never)]
-    pub fn on_start(app_id: usize, ctx: &mut SysContext<'_, '_>) {
+    pub fn on_start(app_id: usize) {
         if app_id == APP_ID_LAUNCHER {
-            unsafe { (*launcher_ptr()).on_start(ctx) };
+            unsafe { (*launcher_ptr()).on_start() };
         } else if Self::is_dynamic_loaded() {
             #[cfg(feature = "krx_native")]
             unsafe {
-                crate::runtime::native_runner::native_on_start(ctx);
+                crate::runtime::native_runner::native_on_start();
             }
         }
     }
 
-    #[inline(never)]
-    pub fn on_event(app_id: usize, ctx: &mut SysContext<'_, '_>, event: &Event) -> EventResult {
+    pub fn on_event(app_id: usize, event: &Event) -> EventResult {
         if app_id == APP_ID_LAUNCHER {
-            unsafe { (*launcher_ptr()).on_event(ctx, event) }
+            unsafe { (*launcher_ptr()).on_event(event) }
         } else if Self::is_dynamic_loaded() {
             #[cfg(feature = "krx_native")]
-            return unsafe { crate::runtime::native_runner::native_on_event(ctx, event) };
+            return unsafe { crate::runtime::native_runner::native_on_event(event) };
             #[cfg(not(feature = "krx_native"))]
             EventResult::Ignored
         } else {
@@ -138,17 +129,12 @@ impl AppRegistry {
         }
     }
 
-    #[inline(never)]
-    pub fn on_modal_result(
-        app_id: usize,
-        ctx: &mut SysContext<'_, '_>,
-        result: &ModalResult<'_>,
-    ) -> EventResult {
+    pub fn on_modal_result(app_id: usize, result: &ModalResult<'_>) -> EventResult {
         if app_id == APP_ID_LAUNCHER {
-            unsafe { (*launcher_ptr()).on_modal_result(ctx, result) }
+            EventResult::Ignored
         } else if Self::is_dynamic_loaded() {
             #[cfg(feature = "krx_native")]
-            return unsafe { crate::runtime::native_runner::native_on_modal_result(ctx, result) };
+            return unsafe { crate::runtime::native_runner::native_on_modal_result(result) };
             #[cfg(not(feature = "krx_native"))]
             EventResult::Ignored
         } else {
@@ -156,35 +142,26 @@ impl AppRegistry {
         }
     }
 
-    #[inline(never)]
-    pub fn render<'a>(
-        app_id: usize,
-        canvas: &mut gfx::Canvas,
-        ctx: &'a SysContext<'a, '_>,
-        sb_cfg: &mut StatusBarConfig<'_>,
-    ) {
+    pub fn render(app_id: usize, canvas: &mut gfx::Canvas, sb_cfg: &mut StatusBarConfig<'_>) {
         if app_id == APP_ID_LAUNCHER {
-            unsafe { (*launcher_ptr()).render(canvas, ctx) };
+            unsafe { (*launcher_ptr()).render(canvas) };
             sb_cfg.visible = true;
             sb_cfg.title = Some("Home");
         } else {
             #[cfg(feature = "krx_native")]
             if Self::is_dynamic_loaded() {
                 unsafe {
-                    crate::runtime::native_runner::native_on_render(canvas, ctx, sb_cfg);
+                    crate::runtime::native_runner::native_on_render(canvas, sb_cfg);
                 }
             }
         }
     }
 
-    #[inline(never)]
-    pub fn on_exit(app_id: usize, ctx: &mut SysContext<'_, '_>) {
-        if app_id == APP_ID_LAUNCHER {
-            unsafe { (*launcher_ptr()).on_exit(ctx) };
-        } else if Self::is_dynamic_loaded() {
+    pub fn on_exit(app_id: usize) {
+        if app_id != APP_ID_LAUNCHER && Self::is_dynamic_loaded() {
             #[cfg(feature = "krx_native")]
             unsafe {
-                crate::runtime::native_runner::native_on_exit(ctx);
+                crate::runtime::native_runner::native_on_exit();
             }
         }
     }

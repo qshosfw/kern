@@ -62,4 +62,52 @@ impl FskStreamService {
 
         result
     }
+
+    #[cfg(feature = "rf_fsk")]
+    pub fn arm_rx_baud<R: RfFskPhy>(radio: &mut R, baud: u16) {
+        use kernel::service::radio::FskBaudRate;
+        let baud_rate = match baud {
+            2400 => FskBaudRate::Baud2400,
+            4800 => FskBaudRate::Baud4800,
+            9600 => FskBaudRate::Baud9600,
+            _ => FskBaudRate::Baud1200,
+        };
+        let mut config = FskPhyConfig::default();
+        config.baud_rate = baud_rate;
+        config.raw_length_bytes = 64;
+        let _ = Self::arm_rx(radio, &config);
+    }
+
+    #[cfg(feature = "rf_fsk")]
+    pub fn transmit_bytes<R: RfFskPhy + RfPowerSequencer>(
+        radio: &mut R,
+        data: &[u8],
+    ) -> Result<(), ()> {
+        let mut words = [0u16; 64];
+        let limit = data.len().div_ceil(2).min(words.len());
+        for i in 0..limit {
+            let b0 = data[i * 2] as u16;
+            let b1 = data.get(i * 2 + 1).copied().unwrap_or(0) as u16;
+            words[i] = (b0 << 8) | b1;
+        }
+        Self::transmit_words(radio, &words[..limit], 3, 500)
+    }
+
+    #[cfg(feature = "rf_fsk")]
+    pub fn receive_bytes<R: RfFskPhy>(radio: &mut R, buf: &mut [u8]) -> usize {
+        let mut words = [0u16; 32];
+        let count = Self::poll_and_read(radio, &mut words);
+        let mut out_len = 0;
+        for &w in &words[..count] {
+            if out_len < buf.len() {
+                buf[out_len] = (w >> 8) as u8;
+                out_len += 1;
+            }
+            if out_len < buf.len() {
+                buf[out_len] = (w & 0xFF) as u8;
+                out_len += 1;
+            }
+        }
+        out_len
+    }
 }

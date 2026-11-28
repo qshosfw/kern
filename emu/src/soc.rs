@@ -107,6 +107,16 @@ impl GpioPort {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct DmaChRegs {
+    pub ccr: u32,
+    pub cndtr: u32,
+    pub cpar: u32,
+    pub cmar: u32,
+    pub init_ndtr: u32,
+    pub init_mar: u32,
+}
+
 pub struct Py32Soc {
     pub flash: Vec<u8>,
     pub sram: [u8; SRAM_LEN],
@@ -152,15 +162,27 @@ pub struct Py32Soc {
     pub tim2_cnt_base_us: u64,
     pub tim2_cnt_offset: u32,
 
-    // CRC32 (MPEG-2 0x04C11DB7)
+    // CRC32 (MPEG-2 0x04C11DB7) & Hardware 32-bit Divider (`DIV` @ 0x4002_3800)
     pub crc_dr: u32,
     pub crc_idr: u8,
+    pub div_dend: u32,
+    pub div_sor: u32,
+    pub div_quot: u32,
+    pub div_rema: u32,
+    pub div_sign: u32,
+    pub div_stat: u32,
+
+    // DMA1 (7 channels @ 0x4002_0000)
+    pub dma_isr: u32,
+    pub dma: [DmaChRegs; 7],
 
     // ADC1 & Battery simulation
     pub adc_sr: u32,
     pub adc_cr1: u32,
     pub adc_cr2: u32,
     pub adc_sqr3: u32,
+    pub adc_jsqr: u32,
+    pub adc_jdr: [u32; 4],
     pub adc_dr: u32,
     pub adc_ltr: u32,
     pub adc_htr: u32,
@@ -176,14 +198,17 @@ pub struct Py32Soc {
 
     // SPI1 / SPI2
     pub spi1_cr1: u32,
+    pub spi1_cr2: u32,
     pub spi1_rx: u8,
     pub spi1_rxne: bool,
     pub spi2_cr1: u32,
+    pub spi2_cr2: u32,
     pub spi2_rx: u8,
     pub spi2_rxne: bool,
 
     // USART1 (RigWire + boot serial log)
     pub usart1_cr1: u32,
+    pub usart1_cr3: u32,
     pub usart1_brr: u32,
     pub usart1_rx_dr: Option<u8>,
     pub uart_rx_fifo: VecDeque<u8>,
@@ -274,10 +299,20 @@ impl Py32Soc {
             tim2_cnt_offset: 0,
             crc_dr: 0xFFFF_FFFF,
             crc_idr: 0,
+            div_dend: 0,
+            div_sor: 1,
+            div_quot: 0,
+            div_rema: 0,
+            div_sign: 0,
+            div_stat: 1,
+            dma_isr: 0,
+            dma: [DmaChRegs::default(); 7],
             adc_sr: 0,
             adc_cr1: 0,
             adc_cr2: 0,
             adc_sqr3: 8,
+            adc_jsqr: 0,
+            adc_jdr: [0; 4],
             adc_dr: 2227,
             adc_ltr: 0,
             adc_htr: 0x0FFF,
@@ -289,12 +324,15 @@ impl Py32Soc {
             exti_pr: 0,
             syscfg_regs: [0; 16],
             spi1_cr1: 0,
+            spi1_cr2: 0,
             spi1_rx: 0,
             spi1_rxne: false,
             spi2_cr1: 0,
+            spi2_cr2: 0,
             spi2_rx: 0,
             spi2_rxne: false,
             usart1_cr1: 0,
+            usart1_cr3: 0,
             usart1_brr: 417,
             usart1_rx_dr: None,
             uart_rx_fifo: VecDeque::with_capacity(4096),
@@ -380,15 +418,40 @@ impl Py32Soc {
             }
         }
 
-        // Pump next incoming RigWire UART byte into USART1 RX DR once previous byte is read
-        if self.usart1_rx_dr.is_none()
-            && (self.usart1_cr1 & (1 << 2)) != 0 // RE enabled
-            && let Some(b) = self.uart_rx_fifo.pop_front()
-        {
-            self.usart1_rx_dr = Some(b);
-            if (self.usart1_cr1 & (1 << 5)) != 0 {
-                // RXNEIE -> IRQ 27 (USART1)
-                self.nvic_ispr |= 1 << 27;
+        // Pump incoming RigWire UART bytes either into circular `DMA1_Ch6` (`CR3_DMAR`) or `USART1_DR`
+        if (self.usart1_cr1 & (1 << 2)) != 0 {
+            if (self.usart1_cr3 & (1 << 6)) != 0
+                && (self.dma[5].ccr & 1) != 0
+                && self.dma[5].init_ndtr > 0
+            {
+                while let Some(b) = self.uart_rx_fifo.pop_front() {
+                    let dst = self.dma[5].cmar;
+                    if (SRAM_BASE..SRAM_BASE + SRAM_LEN as u32).contains(&dst) {
+                        self.sram[(dst - SRAM_BASE) as usize] = b;
+                    }
+                    if (self.dma[5].ccr & (1 << 7)) != 0 {
+                        self.dma[5].cmar = self.dma[5].cmar.wrapping_add(1);
+                    }
+                    self.dma[5].cndtr = self.dma[5].cndtr.saturating_sub(1);
+                    if self.dma[5].cndtr == 0 {
+                        self.dma_isr |= 0x7 << 20;
+                        if (self.dma[5].ccr & (1 << 5)) != 0 {
+                            self.dma[5].cmar = self.dma[5].init_mar;
+                            self.dma[5].cndtr = self.dma[5].init_ndtr;
+                        } else {
+                            self.dma[5].ccr &= !1;
+                            break;
+                        }
+                    }
+                }
+            } else if self.usart1_rx_dr.is_none()
+                && let Some(b) = self.uart_rx_fifo.pop_front()
+            {
+                self.usart1_rx_dr = Some(b);
+                if (self.usart1_cr1 & (1 << 5)) != 0 {
+                    // RXNEIE -> IRQ 27 (USART1)
+                    self.nvic_ispr |= 1 << 27;
+                }
             }
         }
     }
@@ -450,6 +513,85 @@ impl Py32Soc {
         let scl = self.gpio[1].pin_out_high(8);
         let sda = self.gpio[1].pin_out_high(9);
         self.bk4829.on_pins(csn, scl, sda);
+    }
+
+    fn peek_mem_byte(&self, addr: u32) -> u8 {
+        match addr {
+            0x0000_0000..=0x0001_FFFF => self.flash[addr as usize],
+            0x0800_0000..=0x0801_FFFF => self.flash[(addr - FLASH_BASE) as usize],
+            0x2000_0000..=0x2000_3FFF => self.sram[(addr - SRAM_BASE) as usize],
+            _ => 0xFF,
+        }
+    }
+
+    fn adc_sample_channel(&self, ch: u32) -> u32 {
+        match ch {
+            8 => self.battery_adc_raw as u32,
+            16 => 900,  // ~28°C
+            17 => 1489, // 1.20V @ 3.30V VDDA
+            _ => 2048,
+        }
+    }
+
+    fn run_dma_bursts(&mut self) {
+        // Channel 2: SPI1_TX -> ST7565 LCD
+        if (self.spi1_cr2 & 2) != 0 && (self.dma[1].ccr & 1) != 0 && self.dma[1].cndtr > 0 {
+            let count = self.dma[1].cndtr;
+            let minc = (self.dma[1].ccr & (1 << 7)) != 0;
+            let cs_active = !self.gpio[1].pin_out_high(2);
+            let dc_high = self.gpio[0].pin_out_high(6);
+            for i in 0..count {
+                let src = if minc {
+                    self.dma[1].cmar.wrapping_add(i)
+                } else {
+                    self.dma[1].cmar
+                };
+                let b = self.peek_mem_byte(src);
+                if cs_active {
+                    self.lcd.spi_byte(dc_high, b);
+                }
+            }
+            self.spi1_rx = 0xFF;
+            self.spi1_rxne = true;
+            self.dma[1].cndtr = 0;
+            self.dma_isr |= 0x7 << 4;
+        }
+
+        // Channel 3 (SPI2_RX) & Channel 4 (SPI2_TX) -> PY25Q16 NOR Flash
+        if (self.spi2_cr2 & 2) != 0 && (self.dma[3].ccr & 1) != 0 && self.dma[3].cndtr > 0 {
+            let count = self.dma[3].cndtr;
+            let tx_minc = (self.dma[3].ccr & (1 << 7)) != 0;
+            let rx_en =
+                (self.spi2_cr2 & 1) != 0 && (self.dma[2].ccr & 1) != 0 && self.dma[2].cndtr > 0;
+            let rx_minc = (self.dma[2].ccr & (1 << 7)) != 0;
+            for i in 0..count {
+                let tx_addr = if tx_minc {
+                    self.dma[3].cmar.wrapping_add(i)
+                } else {
+                    self.dma[3].cmar
+                };
+                let tx_b = self.peek_mem_byte(tx_addr);
+                let rx_b = self.spiflash.transfer(tx_b);
+                self.spi2_rx = rx_b;
+                self.spi2_rxne = true;
+                if rx_en && i < self.dma[2].cndtr {
+                    let rx_addr = if rx_minc {
+                        self.dma[2].cmar.wrapping_add(i)
+                    } else {
+                        self.dma[2].cmar
+                    };
+                    if (SRAM_BASE..SRAM_BASE + SRAM_LEN as u32).contains(&rx_addr) {
+                        self.sram[(rx_addr - SRAM_BASE) as usize] = rx_b;
+                    }
+                }
+            }
+            self.dma[3].cndtr = 0;
+            self.dma_isr |= 0x7 << 12;
+            if rx_en {
+                self.dma[2].cndtr = 0;
+                self.dma_isr |= 0x7 << 8;
+            }
+        }
     }
 
     fn read_tim2_cnt(&self) -> u32 {
@@ -544,6 +686,7 @@ impl Py32Soc {
             0x4000_3000..=0x4000_3010 => 0,
             // SPI2
             0x4000_3800 => self.spi2_cr1,
+            0x4000_3804 => self.spi2_cr2,
             0x4000_3808 => (1 << 1) | u32::from(self.spi2_rxne), // SR_TXE | SR_RXNE
             0x4000_380C => {
                 self.spi2_rxne = false;
@@ -563,16 +706,18 @@ impl Py32Soc {
             0x4001_2400 => self.adc_sr,
             0x4001_2404 => self.adc_cr1,
             0x4001_2408 => self.adc_cr2,
-            0x4001_2424 => self.adc_htr,
-            0x4001_2428 => self.adc_ltr,
+            0x4001_2428 => self.adc_htr,
+            0x4001_242C => self.adc_ltr,
             0x4001_2438 => self.adc_sqr3,
-            0x4001_2440 => self.adc_dr,
+            0x4001_243C => self.adc_jsqr,
+            0x4001_2440..=0x4001_244C => self.adc_jdr[((addr - 0x4001_2440) >> 2) as usize],
             0x4001_2450 => {
                 self.adc_sr &= !(1 << 1); // reading DR clears EOC
                 self.adc_dr
             }
             // SPI1
             0x4001_3000 => self.spi1_cr1,
+            0x4001_3004 => self.spi1_cr2,
             0x4001_3008 => (1 << 1) | u32::from(self.spi1_rxne),
             0x4001_300C => {
                 self.spi1_rxne = false;
@@ -589,8 +734,27 @@ impl Py32Soc {
             0x4001_3804 => self.usart1_rx_dr.take().unwrap_or(0) as u32,
             0x4001_3808 => self.usart1_brr,
             0x4001_380C => self.usart1_cr1,
+            0x4001_3814 => self.usart1_cr3,
             // USART3 (K10Pro stub)
             0x4000_4800 => (1 << 7) | (1 << 6),
+            // DMA1 (0x4002_0000 ..= 0x4002_0093)
+            0x4002_0000 => self.dma_isr,
+            0x4002_0008..=0x4002_0093 => {
+                let off = addr - 0x4002_0008;
+                let ch = (off / 0x14) as usize;
+                let reg = off % 0x14;
+                if ch < 7 {
+                    match reg {
+                        0x00 => self.dma[ch].ccr,
+                        0x04 => self.dma[ch].cndtr,
+                        0x08 => self.dma[ch].cpar,
+                        0x0C => self.dma[ch].cmar,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                }
+            }
             // RCC
             0x4002_1000 => self.rcc_cr,
             0x4002_1004 => self.rcc_icscr,
@@ -614,6 +778,13 @@ impl Py32Soc {
             // CRC32
             0x4002_3000 => self.crc_dr,
             0x4002_3004 => self.crc_idr as u32,
+            // DIV (Hardware 32-bit Divider @ 0x4002_3800)
+            0x4002_3800 => self.div_dend,
+            0x4002_3804 => self.div_sor,
+            0x4002_3808 => self.div_quot,
+            0x4002_380C => self.div_rema,
+            0x4002_3810 => self.div_sign,
+            0x4002_3814 => self.div_stat,
             // GPIO Ports (0x5000_0000 .. 0x5000_17FF)
             0x5000_0000..=0x5000_17FF => {
                 let port_idx = ((addr - 0x5000_0000) >> 10) as usize;
@@ -762,6 +933,10 @@ impl Py32Soc {
             }
             // SPI2
             0x4000_3800 => self.spi2_cr1 = val,
+            0x4000_3804 => {
+                self.spi2_cr2 = val;
+                self.run_dma_bursts();
+            }
             0x4000_380C => {
                 self.spi2_rx = self.spiflash.transfer((val & 0xFF) as u8);
                 self.spi2_rxne = true;
@@ -781,25 +956,33 @@ impl Py32Soc {
             0x4001_2400 => self.adc_sr &= val, // rc_w0
             0x4001_2404 => self.adc_cr1 = val,
             0x4001_2408 => {
-                // Clear CAL (bit 31) & SWSTART (bit 22) immediately and latch sample into DR + EOC
-                self.adc_cr2 = val & !((1 << 31) | (1 << 22));
+                // Clear CAL (bit 31), SWSTART (bit 22), & JSWSTART (bit 21) immediately
+                self.adc_cr2 = val & !((1 << 31) | (1 << 22) | (1 << 21));
                 if (val & (1 << 22)) != 0 {
                     let ch = self.adc_sqr3 & 0x1F;
-                    self.adc_dr = match ch {
-                        8 => self.battery_adc_raw as u32,
-                        16 => 900,  // ~28°C
-                        17 => 1489, // 1.20V @ 3.30V VDDA
-                        4 => 2048,  // mid-scale audio
-                        _ => 2048,
-                    };
+                    self.adc_dr = self.adc_sample_channel(ch);
                     self.adc_sr |= 1 << 1; // SR_EOC
                 }
+                if (val & (1 << 21)) != 0 {
+                    let jl = (self.adc_jsqr >> 20) & 0x03;
+                    for i in 0..=jl {
+                        let shift = (3 - jl + i) * 5;
+                        let ch = (self.adc_jsqr >> shift) & 0x1F;
+                        self.adc_jdr[i as usize] = self.adc_sample_channel(ch);
+                    }
+                    self.adc_sr |= 1 << 2; // SR_JEOC
+                }
             }
-            0x4001_2424 => self.adc_htr = val & 0x0FFF,
-            0x4001_2428 => self.adc_ltr = val & 0x0FFF,
+            0x4001_2428 => self.adc_htr = val & 0x0FFF,
+            0x4001_242C => self.adc_ltr = val & 0x0FFF,
             0x4001_2438 => self.adc_sqr3 = val & 0x1F,
+            0x4001_243C => self.adc_jsqr = val & 0x003F_FFFF,
             // SPI1
             0x4001_3000 => self.spi1_cr1 = val,
+            0x4001_3004 => {
+                self.spi1_cr2 = val;
+                self.run_dma_bursts();
+            }
             0x4001_300C => {
                 let b = (val & 0xFF) as u8;
                 if !self.gpio[1].pin_out_high(2) {
@@ -833,6 +1016,43 @@ impl Py32Soc {
             }
             0x4001_3808 => self.usart1_brr = val,
             0x4001_380C => self.usart1_cr1 = val,
+            0x4001_3814 => self.usart1_cr3 = val,
+            // DMA1 (0x4002_0000 ..= 0x4002_0093)
+            0x4002_0004 => {
+                // DMA_IFCR: GIFx clears GIFx | TCIFx | HTIFx | TEIFx for channel x
+                let mut clr = val;
+                for ch in 0..7 {
+                    if (val & (1 << (ch * 4))) != 0 {
+                        clr |= 0xF << (ch * 4);
+                    }
+                }
+                self.dma_isr &= !clr;
+            }
+            0x4002_0008..=0x4002_0093 => {
+                let off = addr - 0x4002_0008;
+                let ch = (off / 0x14) as usize;
+                let reg = off % 0x14;
+                if ch < 7 {
+                    match reg {
+                        0x00 => {
+                            self.dma[ch].ccr = val;
+                            if (val & 1) != 0 {
+                                self.run_dma_bursts();
+                            }
+                        }
+                        0x04 => {
+                            self.dma[ch].cndtr = val & 0xFFFF;
+                            self.dma[ch].init_ndtr = val & 0xFFFF;
+                        }
+                        0x08 => self.dma[ch].cpar = val,
+                        0x0C => {
+                            self.dma[ch].cmar = val;
+                            self.dma[ch].init_mar = val;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             // RCC
             0x4002_1000 => {
                 let mut cr = val | (1 << 8) | (1 << 10); // HSION + HSIRDY
@@ -897,6 +1117,32 @@ impl Py32Soc {
                     self.crc_dr = 0xFFFF_FFFF;
                 }
             }
+            // DIV (Hardware 32-bit Divider @ 0x4002_3800)
+            0x4002_3800 => self.div_dend = val,
+            0x4002_3804 => {
+                self.div_sor = val;
+                if val == 0 {
+                    self.div_quot = 0;
+                    self.div_rema = self.div_dend;
+                    self.div_stat = 3; // STAT_DIV_END | STAT_DIV_ZERO
+                } else if (self.div_sign & 1) != 0 {
+                    let n = self.div_dend as i32;
+                    let d = val as i32;
+                    let (q, r) = if n == i32::MIN && d == -1 {
+                        (i32::MIN, 0)
+                    } else {
+                        (n / d, n % d)
+                    };
+                    self.div_quot = q as u32;
+                    self.div_rema = r as u32;
+                    self.div_stat = 1; // STAT_DIV_END
+                } else {
+                    self.div_quot = self.div_dend / val;
+                    self.div_rema = self.div_dend % val;
+                    self.div_stat = 1; // STAT_DIV_END
+                }
+            }
+            0x4002_3810 => self.div_sign = val & 1,
             // GPIO
             0x5000_0000..=0x5000_17FF => {
                 let port_idx = ((addr - 0x5000_0000) >> 10) as usize;

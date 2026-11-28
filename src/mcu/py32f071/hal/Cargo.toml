@@ -11,8 +11,3 @@ target_k10pro = []
 pac = { path = "../pac", package = "py32f071-pac" }
 cortex-m = { workspace = true }
 embedded-hal = { workspace = true }
-[target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
-portable-atomic = { workspace = true, features = ["unsafe-assume-single-core"] }
-
-[target.'cfg(not(all(target_arch = "arm", target_os = "none")))'.dependencies]
-portable-atomic = { workspace = true }

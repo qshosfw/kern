@@ -58,7 +58,6 @@ impl<const N: usize> ServiceRegistry<N> {
     }
 
     /// Publish or update a service interface vtable in the registry.
-    #[inline(never)]
     pub fn register(
         &mut self,
         interface_id: u16,
@@ -102,7 +101,6 @@ impl<const N: usize> ServiceRegistry<N> {
 
     /// Resolve an interface by `interface_id` and minimum ABI level `min_abi`.
     /// Returns the raw vtable pointer (`usize`) if found and compatible.
-    #[inline(never)]
     pub fn resolve(&mut self, interface_id: u16, min_abi: u16) -> Option<usize> {
         let mut fallback_idx: Option<usize> = None;
         for (idx, slot) in self.entries.iter_mut().enumerate() {
@@ -123,7 +121,6 @@ impl<const N: usize> ServiceRegistry<N> {
     }
 
     /// Unregister a service interface by `interface_id`.
-    #[inline(never)]
     pub fn release(&mut self, interface_id: u16) -> bool {
         for slot in self.entries.iter_mut() {
             if slot.is_active() && slot.interface_id == interface_id {
@@ -136,7 +133,6 @@ impl<const N: usize> ServiceRegistry<N> {
 
     /// Unbind all services owned by a terminated/quarantined actor (`provider_pid`).
     /// Returns the number of unbound interfaces so the kernel can emit `SERVICE_DIED`.
-    #[inline(never)]
     pub fn unbind_provider(&mut self, provider_pid: Pid) -> usize {
         let mut removed = 0;
         for slot in self.entries.iter_mut() {

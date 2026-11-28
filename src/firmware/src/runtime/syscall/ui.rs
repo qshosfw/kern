@@ -1,7 +1,6 @@
-//! UI & OS Compositor System Call Dispatcher (`Op::Ui*`, domain `0x7`).
+//! UI & OS Compositor System Call Handlers (`Op::UiModal`, `Op::UiWidget`, domain `0x7`).
 
-use super::{active_canvas_mut, parse_str, slice_or_empty, str_or_default};
-use crate::services::primitives::color_from_u8;
+use super::{active_canvas_mut, parse_str, ptr_ref, str_or_default};
 use kernel::proc::abi::*;
 
 #[inline(always)]
@@ -34,9 +33,6 @@ pub fn set_tray_icon(icon_id: u8) -> u8 {
     }
 }
 
-/// Ensure a guest pointer kept alive across frames (e.g. `OptionSheet`) never points
-/// into a volatile P0 paged leaf overlay window (`>= overlay_vma`).
-#[inline(never)]
 fn is_persistent_guest_ptr(ptr: *const u8, len: usize) -> bool {
     if ptr.is_null() {
         return true;
@@ -53,12 +49,10 @@ fn is_persistent_guest_ptr(ptr: *const u8, len: usize) -> bool {
     !(addr < overlay_end && end > overlay_start)
 }
 
-#[inline(never)]
 unsafe fn show_modal_req(req: *const KrxModalReq) {
-    if req.is_null() {
+    let Some(r) = (unsafe { ptr_ref(req) }) else {
         return;
-    }
-    let r = unsafe { &*req };
+    };
     if r.kind == 2 {
         let t_str = unsafe { str_or_default(r.title, r.t_len as usize, "Input") };
         let init_str = unsafe { str_or_default(r.msg, r.m_len as usize, "") };
@@ -74,7 +68,7 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
                     digits_only,
                     (flags & ::abi::TEXT_FLAG_EXPOSE_LEN) != 0,
                 );
-                m.is_k1 = crate::master_config_ref().is_k1();
+                m.is_k1 = crate::services::config().is_k1();
             } else {
                 modal_mut().prompt_text(r.tag, t_str, init_str, r.max_len as usize, digits_only);
             }
@@ -91,24 +85,23 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
             return;
         }
         let t_str = unsafe { str_or_default(r.title, r.t_len as usize, "Select") };
-        if let Some(raw) = unsafe { super::ptr_slice(r.msg, opts_len) } {
-            if raw.iter().all(|&b| b == 0 || (0x20..=0x7E).contains(&b)) {
-                let opts = unsafe { core::str::from_utf8_unchecked(raw) };
-                let sheet = gfx::gui::modules::menu::OptionSheet::new(
-                    t_str,
-                    gfx::gui::modules::menu::SheetOptions::Packed(opts),
-                    r.max_len as usize,
-                )
-                .with_radio(r.c_len != 0);
-                modal_mut().show_sheet(r.tag, sheet);
-            }
+        if let Some(raw) = unsafe { super::ptr_slice(r.msg, opts_len) }
+            && raw.iter().all(|&b| b == 0 || (0x20..=0x7E).contains(&b))
+        {
+            let opts = unsafe { core::str::from_utf8_unchecked(raw) };
+            let sheet = gfx::views::OptionSheet::new(
+                t_str,
+                gfx::views::SheetOptions::Packed(opts),
+                r.max_len as usize,
+            )
+            .with_radio(r.c_len != 0);
+            modal_mut().show_sheet(r.tag, sheet);
         }
         return;
     }
     utils::static_bytes!(
         static DEFS = b"Notice\0\0\0\0Confirm\0\0OK\0CANCEL\0";
     );
-    #[inline(never)]
     unsafe fn pick_str(p: *const u8, len: u8, idx: u8) -> &'static str {
         unsafe { str_or_default(p, len as usize, utils::format::nth_cstr(&DEFS, idx)) }
     }
@@ -124,14 +117,12 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
     }
 }
 
-#[inline(never)]
 unsafe fn widget_str(p: *const u8, len: u16) -> &'static str {
     unsafe { parse_str(p, len as usize) }.unwrap_or("")
 }
 
-#[inline(never)]
 unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget) {
-    use gfx::widgets::*;
+    use gfx::elements::*;
     let row_h = if d.h >= 12 { 13 } else { 10 };
     let s0 = unsafe { widget_str(d.p0, d.len0) };
     let s1 = unsafe { widget_str(d.p1, d.len1) };
@@ -153,162 +144,72 @@ unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget) {
     draw_list_row(canvas, &spec);
 }
 
-#[inline(never)]
-unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
-    let d = unsafe { &*desc };
-    let canvas = active_canvas_mut();
-    let ux = d.x.max(0) as u8;
-    let uy = d.y.max(0) as u8;
-    let badge = |filled: bool| {
-        if filled {
-            gfx::widgets::BadgeStyle::Filled
-        } else {
-            gfx::widgets::BadgeStyle::Empty
-        }
-    };
-    let s0 = unsafe { widget_str(d.p0, d.len0) };
-    match kind {
-        KRX_WIDGET_ROUNDED_BOX => gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h),
-        KRX_WIDGET_NEGATED_HEADER => gfx::widgets::draw_negated_header(canvas, d.y, s0),
-        KRX_WIDGET_SHEET_FRAME => {
-            gfx::widgets::draw_sheet_frame(canvas, s0, d.y, d.h);
-        }
-        KRX_WIDGET_PROGRESS_BAR => {
-            gfx::widgets::draw_progress_bar(canvas, d.x, d.y, d.w, d.h, d.a, d.b != 0);
-        }
-        KRX_WIDGET_TAG_BADGE => {
-            if !s0.is_empty() {
-                gfx::widgets::draw_tag_badge(canvas, d.x, d.y, s0, badge(d.a == 1));
-            }
-        }
-        KRX_WIDGET_KEY_BADGE => {
-            let s1 = unsafe { widget_str(d.p1, d.len1) };
-            gfx::widgets::draw_key_badge(canvas, d.x, d.y, s0, s1);
-        }
-        KRX_WIDGET_CAPSULE_BUTTON => {
-            gfx::widgets::draw_capsule_button(canvas, d.x, d.y, d.w, d.h, s0, badge(d.a != 0));
-        }
-        KRX_WIDGET_SCROLLBAR => {
-            gfx::widgets::draw_scrollbar(
-                canvas,
-                ux,
-                uy,
-                d.h,
-                d.len0 as usize,
-                d.extra as usize,
-                d.len1 as usize,
-            );
-        }
-        KRX_WIDGET_MENU_ITEM => unsafe { draw_menu_item_widget(canvas, d) },
-        KRX_WIDGET_BATTERY => gfx::widgets::draw_battery(canvas, d.x, d.y, d.a, d.b != 0),
-        KRX_WIDGET_SIGNAL => {
-            gfx::widgets::draw_signal(canvas, d.x, d.y, d.a, color_from_u8(d.b));
-        }
-        KRX_WIDGET_MODAL_BOX => {
-            let (ox, oy) = gfx::widgets::draw_modal_box(canvas, d.w, d.h);
-            let out = d.p0 as *mut u8;
-            if !out.is_null() {
-                unsafe {
-                    *out = ox;
-                    *out.add(1) = oy;
-                }
-            }
-        }
-        KRX_WIDGET_DETAIL_ROW => {
-            let raw0 = unsafe { slice_or_empty(d.p0, d.len0 as usize) };
-            let title = utils::format::nth_cstr(raw0, 0);
-            let badge_s = utils::format::nth_cstr(raw0, 1);
-            let right_s = utils::format::nth_cstr(raw0, 2);
-            let sub_s = unsafe { widget_str(d.p1, d.len1) };
-            gfx::widgets::draw_detail_row(
-                canvas,
-                d.y,
-                (d.a & 1) != 0,
-                badge_s,
-                title,
-                right_s,
-                sub_s,
-            );
-        }
-        _ => return ::abi::Status::Unsupported.to_raw(),
+pub unsafe fn op_ui_widget(a0: usize, a1: usize, _a2: usize) -> usize {
+    if a0 as u8 != KRX_WIDGET_MENU_ITEM {
+        return ::abi::Status::Unsupported.to_raw();
     }
+    let Some(d) = (unsafe { ptr_ref(a1 as *const KrxWidget) }) else {
+        return ::abi::Status::InvalidArg.to_raw();
+    };
+    unsafe { draw_menu_item_widget(active_canvas_mut(), d) };
     0
 }
 
-#[inline(never)]
-pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::{
-        idx as op,
-        sub::{ui_modal, ui_status},
-    };
-    match idx {
-        op::UiModal => match a0 as u8 {
-            ui_modal::CLOSE => {
-                crate::orchestrator::sink_enter_keys();
-                modal_mut().close();
+pub unsafe fn op_ui_modal(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::ui_modal;
+    match a0 as u8 {
+        ui_modal::SHOW => {
+            unsafe { show_modal_req(a1 as *const KrxModalReq) };
+            0
+        }
+        ui_modal::TOAST => {
+            let msg_str = unsafe { str_or_default(a1 as *const u8, (a2 as u8) as usize, "") };
+            if !msg_str.is_empty() {
+                modal_mut().show_toast(msg_str, (a2 >> 16) as u16);
+            }
+            0
+        }
+        ui_modal::PROMPT_NUM => {
+            let Some(r) = (unsafe { ptr_ref(a1 as *const ::abi::KrxNumReq) }) else {
+                return ::abi::Status::InvalidArg.to_raw();
+            };
+            let title = unsafe { str_or_default(r.title, r.title_len as usize, "Value") };
+            let unit = unsafe { str_or_default(r.unit, r.unit_len as usize, "") };
+            modal_mut().prompt_number(r.tag, title, unit, r);
+            0
+        }
+        ui_modal::GET_TEXT => {
+            #[cfg(feature = "text_input")]
+            {
+                let max_len = a2 as u8 as usize;
+                let Some(dst) = (unsafe { super::ptr_slice_mut(a1 as *mut u8, max_len) }) else {
+                    return 0;
+                };
+                let m = unsafe { &*core::ptr::addr_of!(MODAL_TEXT) };
+                let copy_len = m.len().min(max_len);
+                dst[..copy_len].copy_from_slice(&m.buf[..copy_len]);
+                copy_len
+            }
+            #[cfg(not(feature = "text_input"))]
+            {
+                let _ = (a1, a2);
                 0
             }
-            ui_modal::ACTIVE => modal_mut().is_active() as usize,
-            ui_modal::ANIMATING => modal_mut().is_animating() as usize,
-            ui_modal::SET_HOLD => {
-                modal_mut().set_hold_ms(a1 as u16);
-                0
-            }
-            ui_modal::GET_TEXT => {
-                #[cfg(feature = "text_input")]
-                {
-                    let buf = a1 as *mut u8;
-                    let max_len = a2 as u8;
-                    if buf.is_null() || max_len == 0 {
-                        return 0;
-                    }
-                    unsafe {
-                        let m = &*core::ptr::addr_of!(MODAL_TEXT);
-                        let copy_len = m.len().min(max_len as usize);
-                        core::ptr::copy_nonoverlapping(m.buf.as_ptr(), buf, copy_len);
-                        copy_len
-                    }
-                }
-                #[cfg(not(feature = "text_input"))]
-                0
-            }
-            ui_modal::SHOW => {
-                unsafe { show_modal_req(a1 as *const KrxModalReq) };
-                0
-            }
-            ui_modal::TOAST => {
-                let msg_str = unsafe { str_or_default(a1 as *const u8, (a2 as u8) as usize, "") };
-                if !msg_str.is_empty() {
-                    modal_mut().show_toast(msg_str, (a2 >> 16) as u16);
-                }
-                0
-            }
-            ui_modal::PROMPT_NUM => {
-                let req = a1 as *const ::abi::KrxNumReq;
-                if req.is_null() {
-                    return ::abi::Status::InvalidArg.to_raw();
-                }
-                let r = unsafe { &*req };
-                let title = unsafe { str_or_default(r.title, r.title_len as usize, "Value") };
-                let unit = unsafe { str_or_default(r.unit, r.unit_len as usize, "") };
-                modal_mut().prompt_number(r.tag, title, unit, r);
-                0
-            }
-            _ => ::abi::Status::Unsupported.to_raw(),
-        },
-        op::UiStatus => match a0 as u8 {
-            ui_status::SET_BAR => {
+        }
+        ui_modal::SET_BAR => {
+            if a1 == 0 || super::guest_range_valid(a1, 64, false) {
                 crate::runtime::native_runner::set_slot_status_bar(a1 as *const KrxStatusBar);
                 1
-            }
-            ui_status::GET_BAR => {
-                crate::runtime::native_runner::get_slot_status_bar(a1 as *mut KrxStatusBar);
+            } else {
                 0
             }
-            ui_status::TRAY_ICON => set_tray_icon(a1 as u8) as usize,
-            _ => 0,
-        },
-        op::UiWidget => unsafe { draw_widget(a0 as u8, a1 as *const KrxWidget) },
-        _ => 0,
+        }
+        ui_modal::GET_BAR => {
+            if super::guest_range_valid(a1, 64, true) {
+                crate::runtime::native_runner::get_slot_status_bar(a1 as *mut KrxStatusBar);
+            }
+            0
+        }
+        _ => ::abi::Status::Unsupported.to_raw(),
     }
 }

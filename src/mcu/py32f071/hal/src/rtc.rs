@@ -37,7 +37,6 @@ impl RealTimeClock {
         }
     }
 
-    #[inline(never)]
     fn write_pair(reg_hi: *mut u32, reg_lo: *mut u32, val: u32) {
         crate::rcc::enable_rtc_lsi();
         Self::wait_rtoff();

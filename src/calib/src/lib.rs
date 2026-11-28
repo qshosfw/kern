@@ -129,7 +129,6 @@ pub fn get_band_index(freq_hz: u32) -> usize {
     band
 }
 
-#[inline(never)]
 fn lerp_u8(v0: u8, v1: u8, off: u32, span: u32) -> u8 {
     if span == 0 {
         return v0;

@@ -520,7 +520,7 @@ pub fn format_u32_into<'a>(api: &KrxApiTable, mut val: u32, out: &'a mut [u8]) -
     let max = out.len().min(10);
     while n < max {
         let mut rem = 0u32;
-        val = api.call_op(kern_sdk::Op::SysDiv, val as usize, 10, &raw mut rem as usize) as u32;
+        val = api.udivmod_rem(val, 10, &mut rem);
         set_byte(out, n, b'0' + (rem as u8));
         n += 1;
         if val == 0 {

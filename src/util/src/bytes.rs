@@ -44,7 +44,6 @@ impl<'a> ByteWriter<'a> {
     }
 
     /// Core non-inlined byte slice write to minimize code size.
-    #[inline(never)]
     pub fn write_bytes(&mut self, src: &[u8]) -> bool {
         let len = src.len();
         if self.remaining() >= len {
@@ -56,12 +55,10 @@ impl<'a> ByteWriter<'a> {
         }
     }
 
-    #[inline(never)]
     pub fn write_u8(&mut self, val: u8) -> bool {
         self.write_le32(val as u32, 1)
     }
 
-    #[inline(never)]
     fn write_le32(&mut self, mut val: u32, n: usize) -> bool {
         if self.remaining() >= n {
             for i in 0..n {
@@ -75,17 +72,14 @@ impl<'a> ByteWriter<'a> {
         }
     }
 
-    #[inline(never)]
     pub fn write_u16_le(&mut self, val: u16) -> bool {
         self.write_le32(val as u32, 2)
     }
 
-    #[inline(never)]
     pub fn write_u32_le(&mut self, val: u32) -> bool {
         self.write_le32(val, 4)
     }
 
-    #[inline(never)]
     pub fn write_u64_le(&mut self, val: u64) -> bool {
         self.write_bytes(&val.to_le_bytes())
     }
@@ -100,7 +94,6 @@ impl<'a> ByteWriter<'a> {
         self.write_u32_le(val as u32)
     }
 
-    #[inline(never)]
     pub fn write_zeroes(&mut self, count: usize) -> bool {
         if self.remaining() >= count {
             self.buf[self.pos..self.pos + count].fill(0);
@@ -145,7 +138,6 @@ impl<'a> ByteReader<'a> {
         &self.buf[self.pos..]
     }
 
-    #[inline(never)]
     pub fn read_bytes(&mut self, len: usize) -> Option<&'a [u8]> {
         if self.remaining() >= len {
             let slice = &self.buf[self.pos..self.pos + len];
@@ -156,7 +148,6 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    #[inline(never)]
     pub fn read_u8(&mut self) -> Option<u8> {
         if self.pos < self.buf.len() {
             let val = self.buf[self.pos];
@@ -167,19 +158,16 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    #[inline(never)]
     pub fn read_u16_le(&mut self) -> Option<u16> {
         let bytes = self.read_bytes(2)?;
         Some(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    #[inline(never)]
     pub fn read_u32_le(&mut self) -> Option<u32> {
         let bytes = self.read_bytes(4)?;
         Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    #[inline(never)]
     pub fn read_u64_le(&mut self) -> Option<u64> {
         let bytes = self.read_bytes(8)?;
         Some(u64::from_le_bytes([

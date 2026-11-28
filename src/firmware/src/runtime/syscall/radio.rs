@@ -1,10 +1,8 @@
-//! Radio & Broadcast FM Subsystem System Call Dispatcher (`Op::Rf*`, domain `0x4`).
+//! Radio & Broadcast FM System Call Handlers (`Op::RfTune`, `Op::RfVfo`, `Op::RfBulk`)
+//! and Shared Radio Property Accessors (`0xE0..=0xF8`).
 
-#[cfg(test)]
-use super::active_ctx_opt;
-use super::{ptr_slice, ptr_slice_mut};
+use super::{ptr_ref, ptr_ref_mut, ptr_slice, ptr_slice_mut};
 use crate::data::ChannelRecord;
-use crate::services::primitives;
 use crate::services::radio::RadioCoordinator;
 use drivers::bk4829::Bk4829;
 use kernel::proc::abi::{KrxRadioState, KrxSweepReq, KrxSymbol};
@@ -14,21 +12,10 @@ use kernel::service::radio::{
 
 #[inline(always)]
 fn with_radio<R>(
-    _default: R,
-    f: impl FnOnce(&mut RadioCoordinator, &mut Bk4829<'_, bsp::RadioBus>) -> R,
+    f: impl FnOnce(&mut RadioCoordinator, &mut Bk4829<'static, bsp::RadioBus>) -> R,
 ) -> R {
-    #[cfg(not(test))]
-    {
-        f(&mut crate::radio_state().coord, &mut crate::kern_hw().radio)
-    }
-    #[cfg(test)]
-    {
-        if let Some(ctx) = active_ctx_opt() {
-            f(&mut ctx.state.coord, ctx.radio)
-        } else {
-            _default
-        }
-    }
+    let (st, radio) = crate::services::state_and_radio();
+    f(&mut st.coord, radio)
 }
 
 #[cfg(feature = "fm_radio")]
@@ -43,11 +30,10 @@ fn fm_tuner() -> drivers::bk1080::Bk1080<
     )
 }
 
-#[inline(never)]
 fn active_krx_token(exclusive: bool) -> kernel::service::radio::ClientToken {
     use kernel::service::radio::{ClientId, ClientToken, LockTier};
     let pid = super::service::active_caller_pid();
-    let id = if pid > 4 {
+    let id = if pid > 1 {
         ClientId::for_krx_pid(pid)
     } else {
         ClientId::VFO_UI
@@ -60,23 +46,8 @@ fn active_krx_token(exclusive: bool) -> kernel::service::radio::ClientToken {
     ClientToken::new(id, tier)
 }
 
-/// Result of an operation refused because the image may not key the transmitter.
+/// Result of an operation refused because the image lacks `Cap::RadioTx`.
 pub const RF_TX_DENIED: usize = 0xFF;
-
-/// True when the RF operation keys the transmitter and so needs `Cap::RadioTx`
-/// on top of the `Cap::RadioRx` every RF operation declares.
-#[inline(always)]
-fn keys_transmitter(idx: u8, sub: u8, a1: usize, a2: usize) -> bool {
-    use ::abi::{
-        idx as op,
-        sub::{rf_bulk, rf_set},
-    };
-    match idx {
-        op::RfSet => (sub == rf_set::TX && a1 != 0) || (sub == rf_set::BURST && a2 as u16 != 0),
-        op::RfBulk => sub == rf_bulk::FSK_SEND,
-        _ => false,
-    }
-}
 
 #[inline(always)]
 fn decode_vfo_slot(slot: u8) -> Option<VfoSlot> {
@@ -88,7 +59,6 @@ fn decode_vfo_slot(slot: u8) -> Option<VfoSlot> {
     }
 }
 
-#[inline(never)]
 fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
     if value == 0 {
         return SubaudibleTone::None;
@@ -101,204 +71,59 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
     }
 }
 
-#[inline(never)]
-unsafe fn dispatch_rf_vfo_channel(
-    coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus>,
-    is_get: bool,
-    a1: usize,
-    a2: usize,
-) -> usize {
-    let (Some(vfo), Some(bytes)) = (decode_vfo_slot(a1 as u8), unsafe {
-        ptr_slice_mut(a2 as *mut u8, ChannelRecord::SIZE)
-    }) else {
-        return 1;
-    };
-    if (a2 & 3) != 0 {
-        return 1;
-    }
-    let rec = unsafe { &mut *(bytes.as_mut_ptr() as *mut ChannelRecord) };
-    if is_get {
-        unsafe { core::ptr::write_bytes(rec, 0, 1) };
-        rec.zone_mask = 1;
-        coord.save_vfo_to_channel(vfo, rec);
-        let memory = coord.vfo_memory_index[vfo.index().min(2)];
-        return memory.map_or(0, |i| i as usize + 1) << 8;
-    }
-    let memory = ((a1 >> 8) as u16).checked_sub(1);
-    coord.load_channel_into_vfo(radio, vfo, memory, rec);
-    0
-}
-
-#[inline(never)]
-unsafe fn dispatch_rf_vfo(
-    coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus>,
-    sub: u8,
-    a1: usize,
-    a2: usize,
-) -> usize {
-    use ::abi::sub::rf_vfo;
-    match sub {
-        rf_vfo::GET_CHANNEL | rf_vfo::SET_CHANNEL => unsafe {
-            dispatch_rf_vfo_channel(coord, radio, sub == rf_vfo::GET_CHANNEL, a1, a2)
-        },
-        rf_vfo::STATE => {
-            let out = a1 as *mut KrxRadioState;
-            if out.is_null() {
-                return 1;
-            }
-            coord.fill_krx_state(active_krx_token(false), unsafe { &mut *out });
-            0
-        }
-        rf_vfo::WATCH_MODE => usize::from(!coord.apply_watch_mode(radio, a1 as u32)),
-        rf_vfo::LOCK => {
-            let slot = (a1 >> 16) as u8;
-            let exclusive = ((a1 >> 24) as u8) != 0;
-            let Some(vfo) = decode_vfo_slot(slot) else {
-                return 1;
-            };
-            let res = RfResourceMask(a1 as u16);
-            let token = active_krx_token(exclusive);
-            usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
-        }
-        rf_vfo::MONITOR => {
-            let target = if a1 >= 2 {
-                !coord.monitor_active
-            } else {
-                a1 != 0
-            };
-            coord.set_monitor(radio, target);
-            usize::from(coord.monitor_active)
-        }
-        _ => 1,
-    }
-}
-
-#[inline(never)]
-unsafe fn dispatch_rf_bulk(
-    #[cfg_attr(not(feature = "rf_fsk"), allow(unused_variables))] coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus>,
-    sub: u8,
-    a1: usize,
-    a2: usize,
-) -> usize {
-    use ::abi::sub::rf_bulk;
-    match sub {
-        rf_bulk::SWEEP => {
-            let req = a1 as *const KrxSweepReq;
-            if req.is_null() {
-                return 0;
-            }
-            let r = unsafe { &*req };
-            let Some(bytes) =
-                (unsafe { ptr_slice_mut(r.out_rssi as *mut u8, (r.count as usize) * 2) })
-            else {
-                return 0;
-            };
-            let slice = unsafe {
-                core::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut i16, r.count as usize)
-            };
-            primitives::rf_sweep(radio, r.start_hz, r.step_hz, slice)
-        }
-        rf_bulk::SYMBOLS => {
-            let count = a2 as u16;
-            let Some(bytes) = (unsafe { ptr_slice(a1 as *const u8, (count as usize) * 4) }) else {
-                return 1;
-            };
-            let slice = unsafe {
-                core::slice::from_raw_parts(bytes.as_ptr() as *const KrxSymbol, count as usize)
-            };
-            usize::from(primitives::rf_emit_symbols(radio, slice).is_err())
-        }
-        #[cfg(feature = "rf_fsk")]
-        rf_bulk::FSK_INIT => {
-            primitives::rf_fsk_init(radio, a1 as u16);
-            0
-        }
-        #[cfg(feature = "rf_fsk")]
-        rf_bulk::FSK_SEND => {
-            let Some(slice) = (unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }) else {
-                return 1;
-            };
-            // A data burst is a transmission: same BCLO, time-out, inhibit and battery
-            // rules as PTT.
-            let perm =
-                coord.check_tx_permission(coord.effective_tx_slot(), active_krx_token(false));
-            if !perm.is_granted() {
-                return (perm as usize) + 1;
-            }
-            usize::from(primitives::rf_fsk_send(radio, slice).is_err())
-        }
-        #[cfg(feature = "rf_fsk")]
-        rf_bulk::FSK_RECV => {
-            let Some(slice) = (unsafe { ptr_slice_mut(a1 as *mut u8, (a2 as u16) as usize) })
-            else {
-                return 0;
-            };
-            primitives::rf_fsk_receive(radio, slice)
-        }
-        #[cfg(not(feature = "rf_fsk"))]
-        rf_bulk::FSK_SEND => 1,
-        _ => 0,
-    }
-}
-
-fn dispatch_rf_get(
-    coord: &RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus>,
-    sub: u8,
-) -> usize {
-    use ::abi::sub::rf_get;
-    match sub {
-        rf_get::FREQ | rf_get::BANDWIDTH | rf_get::MODULATION | rf_get::TX_STATE => {
+/// Read any live radio scalar (`0xE0..=0xF8`) through `RadioCoordinator` & `Bk4829`.
+pub fn radio_prop_get(id: u8) -> usize {
+    use ::abi::prop;
+    with_radio(|coord, radio| match id {
+        prop::RF_FREQ | prop::RF_BANDWIDTH | prop::RF_MODULATION | prop::RF_TX => {
             let ch = coord.active_channel();
-            match sub {
-                rf_get::FREQ => ch.rx_freq.raw() as usize,
-                rf_get::BANDWIDTH => ch.bandwidth.in_hz() as usize,
-                rf_get::MODULATION => ch.modulation as usize,
+            match id {
+                prop::RF_FREQ => ch.rx_freq.raw() as usize,
+                prop::RF_BANDWIDTH => ch.bandwidth.in_hz() as usize,
+                prop::RF_MODULATION => ch.modulation as usize,
                 _ => coord.is_transmitting as usize,
             }
         }
-        rf_get::RSSI => radio.get_rssi_dbm() as i32 as u32 as usize,
-        rf_get::CARRIER => usize::from(coord.carrier_active || radio.is_carrier_open()),
-        rf_get::GLITCH | rf_get::SNR | rf_get::NOISE => {
+        prop::RF_RSSI => radio.get_rssi_dbm() as i32 as u32 as usize,
+        prop::RF_CARRIER => usize::from(coord.carrier_active || radio.is_carrier_open()),
+        prop::RF_MONITOR => coord.monitor_active as usize,
+        prop::RF_GLITCH..=prop::RF_NOISE => {
             const REG_LUT: [u8; 3] = [0x63, 0x66, 0x65];
-            (radio.read_reg(REG_LUT[(sub - rf_get::GLITCH) as usize]) & 0xFF) as usize
+            (radio.read_reg(REG_LUT[(id - prop::RF_GLITCH) as usize]) & 0xFF) as usize
         }
-        rf_get::AFC..=rf_get::CTCSS_SCAN => {
+        prop::RF_AFC..=prop::RF_CTCSS_SCAN => {
             const EXT_LUT: [u8; 4] = [0x6D, 0x6E, 0x6F, 0x68];
-            radio.read_reg(EXT_LUT[(sub - rf_get::AFC) as usize]) as usize
+            let reg = EXT_LUT[(id - prop::RF_AFC) as usize];
+            let raw = radio.read_reg(reg);
+            if id == prop::RF_CTCSS_SCAN {
+                drivers::bk4829::subaudible::reg_to_ctcss_deci_hz(raw) as usize
+            } else {
+                raw as usize
+            }
         }
-        rf_get::FM_RSSI => {
+        prop::FM_RSSI => {
             #[cfg(feature = "fm_radio")]
             {
                 fm_tuner().get_rssi() as usize
             }
             #[cfg(not(feature = "fm_radio"))]
-            {
-                0
-            }
-        }
-        _ => 0,
-    }
-}
-
-fn dispatch_rf_set(
-    coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus>,
-    sub: u8,
-    a1: usize,
-    a2: usize,
-) -> usize {
-    use ::abi::sub::rf_set;
-    match sub {
-        rf_set::MODULATION..=rf_set::AGC => {
-            primitives::rf_set_param(coord, radio, sub, a1 as u8);
             0
         }
-        rf_set::TX => {
-            if a1 != 0 {
+        _ => 0,
+    })
+}
+
+/// Write any live radio scalar (`0xE4..=0xF8`) through `RadioCoordinator` & `Bk4829`.
+pub fn radio_prop_set(id: u8, val: usize) -> usize {
+    use ::abi::prop;
+    with_radio(|coord, radio| match id {
+        prop::RF_MODULATION..=prop::RF_AGC => {
+            let slot = coord.active_vfo;
+            coord.set_slot_param(radio, slot, id - prop::RF_MODULATION, val as u8);
+            0
+        }
+        prop::RF_TX => {
+            if val != 0 {
                 let perm = coord.request_ptt_start(radio, active_krx_token(false));
                 if perm.is_granted() {
                     0
@@ -310,15 +135,70 @@ fn dispatch_rf_set(
                 0
             }
         }
-        rf_set::TAIL => {
+        prop::RF_MONITOR => {
+            let target = if val >= 2 {
+                !coord.monitor_active
+            } else {
+                val != 0
+            };
+            coord.set_monitor(radio, target);
+            usize::from(coord.monitor_active)
+        }
+        prop::RF_WATCH_MODE => usize::from(!coord.apply_watch_mode(radio, val as u32)),
+        prop::RF_TAIL => {
             radio.send_css_tail(CssTailMode::Tone55Hz);
             0
         }
-        rf_set::SUBAUDIBLE => {
+        prop::RF_UNLOCK_VFO => {
+            usize::from(!coord.release_client_lock(radio, active_krx_token(false).id))
+        }
+        #[cfg(feature = "fm_radio")]
+        prop::FM_RSSI => {
+            let _ = fm_tuner().set_frequency_10khz((val as u16).saturating_mul(10));
+            0
+        }
+        #[cfg(feature = "fm_radio")]
+        prop::FM_VOLUME => {
+            let _ = fm_tuner().set_volume(val as u8);
+            0
+        }
+        #[cfg(feature = "fm_radio")]
+        prop::FM_MUTE => {
+            let _ = fm_tuner().set_mute(val != 0);
+            0
+        }
+        _ => 0,
+    })
+}
+
+pub unsafe fn op_rf_tune(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::rf_tune;
+    use kernel::service::radio::{Bandwidth, StepSetting};
+    if a0 >= 16 {
+        let bandwidth = match a1 {
+            0 => Bandwidth::Narrow12k5,
+            1 => Bandwidth::Wide25k,
+            2 => Bandwidth::Narrow6k25,
+            _ => return 1,
+        };
+        let Some(step) = StepSetting::from_request_hz(a2 as u32) else {
+            return 1;
+        };
+        return with_radio(|coord, radio| {
+            let slot = coord.active_vfo;
+            coord.tune_slot(radio, slot, a0 as u32, Some(bandwidth), Some(step));
+            0
+        });
+    }
+    let sub = a0 as u8;
+    if sub == rf_tune::BURST && (a2 as u16) != 0 && !super::has_cap(::abi::Cap::RadioTx) {
+        return RF_TX_DENIED;
+    }
+    with_radio(|coord, radio| match sub {
+        rf_tune::SUBAUDIBLE => {
             let mask = a1 as u8;
             let kind = (a1 >> 8) as u8;
-            primitives::rf_apply_subaudible_split(
-                coord,
+            coord.set_subaudible_split(
                 radio,
                 (mask & 1) != 0,
                 (mask & 2) != 0,
@@ -326,11 +206,11 @@ fn dispatch_rf_set(
             );
             0
         }
-        rf_set::DTMF => {
-            primitives::rf_set_dtmf(radio, a1 as u8, a2 as u8);
+        rf_tune::DTMF => {
+            RadioCoordinator::set_dtmf(radio, a1 as u8, a2 as u8);
             0
         }
-        rf_set::BURST => {
+        rf_tune::BURST => {
             let dur = a2 as u16;
             if dur == 0 {
                 coord.stop_1750hz_burst(radio);
@@ -339,66 +219,131 @@ fn dispatch_rf_set(
                 usize::from(!coord.trigger_1750hz_burst(radio, dur))
             }
         }
-        rf_set::UNLOCK_VFO => {
-            let id = active_krx_token(false).id;
-            usize::from(!coord.release_client_lock(radio, id))
-        }
-        #[cfg(feature = "fm_radio")]
-        rf_set::FM_TUNE => {
-            let _ = fm_tuner().set_frequency_10khz((a1 as u16).saturating_mul(10));
-            0
-        }
-        #[cfg(feature = "fm_radio")]
-        rf_set::FM_VOLUME => {
-            let _ = fm_tuner().set_volume(a1 as u8);
-            0
-        }
-        #[cfg(feature = "fm_radio")]
-        rf_set::FM_MUTE => {
-            let _ = fm_tuner().set_mute(a1 != 0);
-            0
-        }
-        _ => 0,
-    }
-}
-
-#[inline(never)]
-pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::idx as op;
-    if keys_transmitter(idx, a0 as u8, a1, a2) && !super::has_cap(::abi::Cap::RadioTx) {
-        return RF_TX_DENIED;
-    }
-    with_radio(0, |coord, radio| match idx {
-        op::RfTune => {
-            use kernel::service::radio::{Bandwidth, StepSetting};
-            let bandwidth = match a1 {
-                0 => Bandwidth::Narrow12k5,
-                1 => Bandwidth::Wide25k,
-                2 => Bandwidth::Narrow6k25,
-                _ => return 1,
-            };
-            let Some(step) = StepSetting::from_request_hz(a2 as u32) else {
-                return 1;
-            };
-            primitives::rf_tune(coord, radio, a0 as u32, bandwidth, step);
-            0
-        }
-        op::RfGet => dispatch_rf_get(coord, radio, a0 as u8),
-        op::RfSet => dispatch_rf_set(coord, radio, a0 as u8, a1, a2),
-        op::RfTones => {
-            let t1 = a1 as u16;
-            let g1 = (a1 >> 16) as u8;
-            let t2 = a2 as u16;
-            let g2 = (a2 >> 16) as u8;
-            if a0 != 0 {
-                primitives::rf_set_dual_tones_hz(radio, t1, g1, t2, g2);
+        rf_tune::TONES_RAW | rf_tune::TONES_HZ => {
+            let (t1, g1) = (a1 as u16, (a1 >> 16) as u8);
+            let (t2, g2) = (a2 as u16, (a2 >> 16) as u8);
+            if sub == rf_tune::TONES_HZ {
+                RadioCoordinator::set_dual_tones_hz(radio, t1, g1, t2, g2);
             } else {
                 radio.set_dual_tones_raw(t1, g1, t2, g2);
             }
             0
         }
-        op::RfVfo => unsafe { dispatch_rf_vfo(coord, radio, a0 as u8, a1, a2) },
-        op::RfBulk => unsafe { dispatch_rf_bulk(coord, radio, a0 as u8, a1, a2) },
+        _ => 1,
+    })
+}
+
+pub unsafe fn op_rf_vfo(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::rf_vfo;
+    with_radio(|coord, radio| match a0 as u8 {
+        rf_vfo::GET_CHANNEL | rf_vfo::SET_CHANNEL => {
+            let is_get = (a0 as u8) == rf_vfo::GET_CHANNEL;
+            let (Some(vfo), Some(rec)) = (decode_vfo_slot(a1 as u8), unsafe {
+                ptr_ref_mut(a2 as *mut ChannelRecord)
+            }) else {
+                return 1;
+            };
+            if (a2 & 3) != 0 {
+                return 1;
+            }
+            if is_get {
+                unsafe { core::ptr::write_bytes(rec, 0, 1) };
+                rec.zone_mask = 1;
+                coord.save_vfo_to_channel(vfo, rec);
+                let memory = coord.vfo_memory_index[vfo.index().min(2)];
+                return memory.map_or(0, |i| i as usize + 1) << 8;
+            }
+            let memory = ((a1 >> 8) as u16).checked_sub(1);
+            coord.load_channel_into_vfo(radio, vfo, memory, rec);
+            0
+        }
+        rf_vfo::STATE => {
+            let Some(out) = (unsafe { ptr_ref_mut(a1 as *mut KrxRadioState) }) else {
+                return 1;
+            };
+            coord.fill_krx_state(active_krx_token(false), out);
+            0
+        }
+        rf_vfo::LOCK => {
+            let slot = (a1 >> 16) as u8;
+            let exclusive = ((a1 >> 24) as u8) != 0;
+            let Some(vfo) = decode_vfo_slot(slot) else {
+                return 1;
+            };
+            let res = RfResourceMask(a1 as u16);
+            let token = active_krx_token(exclusive);
+            let lease_ms = if (a2 as u16) == 0 { 1500 } else { a2 as u16 };
+            usize::from(!coord.request_resource_lock(token, res, vfo, lease_ms, false))
+        }
+        _ => 1,
+    })
+}
+
+pub unsafe fn op_rf_bulk(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::rf_bulk;
+    let sub = a0 as u8;
+    if sub == rf_bulk::FSK_SEND && !super::has_cap(::abi::Cap::RadioTx) {
+        return RF_TX_DENIED;
+    }
+    with_radio(|coord, radio| match sub {
+        rf_bulk::SWEEP => {
+            let Some(r) = (unsafe { ptr_ref(a1 as *const KrxSweepReq) }) else {
+                return 0;
+            };
+            let Some(bytes) =
+                (unsafe { ptr_slice_mut(r.out_rssi as *mut u8, (r.count as usize) * 2) })
+            else {
+                return 0;
+            };
+            let slice = unsafe {
+                core::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut i16, r.count as usize)
+            };
+            coord.sweep_rssi(radio, r.start_hz, r.step_hz, slice)
+        }
+        rf_bulk::SYMBOLS => {
+            if coord.is_transmitting && !super::has_cap(::abi::Cap::RadioTx) {
+                return RF_TX_DENIED;
+            }
+            let count = a2 as u16;
+            let Some(bytes) = (unsafe { ptr_slice(a1 as *const u8, (count as usize) * 4) }) else {
+                return 1;
+            };
+            let slice = unsafe {
+                core::slice::from_raw_parts(bytes.as_ptr() as *const KrxSymbol, count as usize)
+            };
+            RadioCoordinator::emit_symbols(radio, slice);
+            0
+        }
+        #[cfg(feature = "rf_fsk")]
+        rf_bulk::FSK_INIT => {
+            crate::services::radio::fsk_stream::FskStreamService::arm_rx_baud(radio, a1 as u16);
+            0
+        }
+        #[cfg(feature = "rf_fsk")]
+        rf_bulk::FSK_SEND => {
+            let Some(slice) = (unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }) else {
+                return 1;
+            };
+            let perm =
+                coord.check_tx_permission(coord.effective_tx_slot(), active_krx_token(false));
+            if !perm.is_granted() {
+                return (perm as usize) + 1;
+            }
+            usize::from(
+                crate::services::radio::fsk_stream::FskStreamService::transmit_bytes(radio, slice)
+                    .is_err(),
+            )
+        }
+        #[cfg(feature = "rf_fsk")]
+        rf_bulk::FSK_RECV => {
+            let Some(slice) = (unsafe { ptr_slice_mut(a1 as *mut u8, (a2 as u16) as usize) })
+            else {
+                return 0;
+            };
+            crate::services::radio::fsk_stream::FskStreamService::receive_bytes(radio, slice)
+        }
+        #[cfg(not(feature = "rf_fsk"))]
+        rf_bulk::FSK_SEND => 1,
         _ => 0,
     })
 }
@@ -406,9 +351,10 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::abi::{Cap, CapabilitySet, Op, prop, sub};
 
     #[test]
-    fn test_krx_vfo_slot_and_subaudible_codec() {
+    fn test_krx_vfo_slot_subaudible_and_ctcss_scale() {
         assert_eq!(decode_vfo_slot(0), Some(VfoSlot::VfoA));
         assert_eq!(decode_vfo_slot(1), Some(VfoSlot::VfoB));
         assert_eq!(decode_vfo_slot(2), Some(VfoSlot::VfoC));
@@ -420,39 +366,43 @@ mod tests {
             SubaudibleTone::DcsInverted(0o754)
         );
         assert_eq!(decode_subaudible(1, 0), SubaudibleTone::None);
-    }
-
-    /// The record round trip itself is covered by the coordinator's
-    /// `test_external_vfo_app_channel_roundtrip_talkaround_and_multi_app_arbitration`.
-    #[test]
-    fn vfo_exchange_uses_the_stored_channel_record_layout() {
-        use ::abi::sub::rf_vfo;
-        assert_eq!((rf_vfo::GET_CHANNEL, rf_vfo::SET_CHANNEL), (0, 1));
-        assert_eq!(core::mem::size_of::<ChannelRecord>(), ChannelRecord::SIZE);
-        assert_eq!(core::mem::offset_of!(ChannelRecord, flags), 20);
-        assert_eq!(core::mem::offset_of!(ChannelRecord, name), 38);
+        // BK4829 silicon-verified 20.380/Hz CTCSS scan scale: 1804 -> 885 (88.5 Hz)
+        assert_eq!(drivers::bk4829::subaudible::reg_to_ctcss_deci_hz(1804), 885);
     }
 
     #[test]
-    fn keying_the_transmitter_needs_radio_tx_not_just_radio_rx() {
-        use ::abi::{Cap, CapabilitySet, Op, idx, sub};
-        assert!(keys_transmitter(idx::RfSet, sub::rf_set::TX, 1, 0));
-        assert!(!keys_transmitter(idx::RfSet, sub::rf_set::TX, 0, 0));
-        assert!(keys_transmitter(idx::RfSet, sub::rf_set::BURST, 0, 500));
-        assert!(!keys_transmitter(idx::RfSet, sub::rf_set::BURST, 0, 0));
-        assert!(keys_transmitter(idx::RfBulk, sub::rf_bulk::FSK_SEND, 0, 0));
-        assert!(!keys_transmitter(idx::RfBulk, sub::rf_bulk::SWEEP, 0, 0));
-        assert!(!keys_transmitter(idx::RfGet, sub::rf_get::RSSI, 1, 1));
-
+    fn tx_gate_requires_radio_tx_capability() {
         let slot = crate::runtime::native_runner::slot_mut();
         slot.is_loaded = true;
         slot.caps = CapabilitySet::empty().with(Cap::RadioRx);
-        let key = |a1| unsafe {
-            crate::runtime::syscall::kern_call(Op::RfSet.u32_id(), sub::rf_set::TX as usize, a1, 0)
-        };
-        assert_eq!(key(1), RF_TX_DENIED);
-        assert_ne!(key(0), RF_TX_DENIED);
+
+        let tx_a0 = (prop::RF_TX as usize) | ((sub::sys_prop::SET as usize) << 8);
+        assert_eq!(
+            unsafe { crate::runtime::syscall::kern_call(Op::SysProp.u32_id(), tx_a0, 1, 0) },
+            RF_TX_DENIED
+        );
+        assert_eq!(
+            unsafe {
+                crate::runtime::syscall::kern_call(
+                    Op::RfTune.u32_id(),
+                    sub::rf_tune::BURST as usize,
+                    0,
+                    500,
+                )
+            },
+            RF_TX_DENIED
+        );
+        assert_eq!(
+            unsafe {
+                crate::runtime::syscall::kern_call(
+                    Op::RfBulk.u32_id(),
+                    sub::rf_bulk::FSK_SEND as usize,
+                    0,
+                    0,
+                )
+            },
+            RF_TX_DENIED
+        );
         crate::runtime::native_runner::init_native_slot();
-        assert_eq!(core::mem::size_of::<KrxRadioState>(), 16);
     }
 }

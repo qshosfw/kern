@@ -5,90 +5,68 @@
 #define KRX_ABI_VERSION    5u
 
 /* Domain 0x0: SYS */
-#define OP_SYS_INFO        0x00u
+#define OP_SYS_PROP        0x00u
 #define OP_SYS_QUERY       0x01u
-#define OP_SYS_DIV         0x02u
-#define OP_SYS_REBOOT      0x03u /* [PowerManage] */
-#define OP_SYS_EVENT       0x04u
-#define OP_SYS_FLUSH       0x05u
-#define OP_PROP_GET        0x06u
-#define OP_PROP_SET        0x07u
-#define OP_PREF_SET        0x08u /* [Preferences] */
-#define OP_SYS_SEC         0x09u /* [Preferences] */
+#define OP_SYS_CTL         0x02u
+#define OP_SYS_DIV         0x03u
+#define OP_SYS_SEC         0x04u /* [Preferences] */
 
 /* Domain 0x1: PROC */
-#define OP_PROC_SELF       0x10u
-#define OP_PROC_FIND       0x11u
-#define OP_PROC_COUNT      0x12u
-#define OP_PROC_INFO       0x13u
-#define OP_PROC_CTL        0x14u
-#define OP_PROC_LEAF       0x15u
-#define OP_PROC_PAGED      0x16u
-#define OP_PROC_LEASE      0x17u
-#define OP_PROC_MEM        0x18u
-#define OP_PROC_SVC        0x19u
+#define OP_PROC_CTL        0x10u
+#define OP_PROC_EXEC       0x11u
 
 /* Domain 0x2: IPC */
-#define OP_IPC_SEND        0x20u
-#define OP_IPC_RECV        0x21u
-#define OP_IPC_REPLY       0x22u
-#define OP_IPC_POLL        0x23u
-#define OP_IPC_SEND_STR    0x24u
+#define OP_IPC             0x20u
 
 /* Domain 0x3: FS */
 #define OP_FS_READ         0x30u /* [StorageRead] */
 #define OP_FS_WRITE        0x31u /* [StorageWrite] */
 #define OP_FS_META         0x32u /* [StorageRead] */
-#define OP_FS_RENAME       0x33u /* [StorageWrite] */
 
 /* Domain 0x4: RF */
 #define OP_RF_TUNE         0x40u /* [RadioRx] */
-#define OP_RF_GET          0x41u /* [RadioRx] */
-#define OP_RF_SET          0x42u /* [RadioRx] */
-#define OP_RF_TONES        0x43u /* [RadioRx] */
-#define OP_RF_VFO          0x44u /* [RadioRx] */
-#define OP_RF_BULK         0x45u /* [RadioRx] */
+#define OP_RF_VFO          0x41u /* [RadioRx] */
+#define OP_RF_BULK         0x42u /* [RadioRx] */
 
 /* Domain 0x5: AUD */
-#define OP_AUD_TONE        0x50u /* [AudioOutput] */
-#define OP_AUD_CTL         0x51u /* [AudioOutput] */
+#define OP_AUD             0x50u /* [AudioOutput] */
 
 /* Domain 0x6: GFX */
-#define OP_GFX_CLEAR       0x60u /* [DisplayDirect] */
-#define OP_GFX_DRAW        0x61u /* [DisplayDirect] */
-#define OP_GFX_TEXT        0x62u /* [DisplayDirect] */
-#define OP_GFX_COMMIT      0x63u /* [DisplayDirect] */
-#define OP_GFX_FB          0x64u /* [DisplayDirect] */
-#define OP_GFX_CTL         0x65u /* [DisplayDirect] */
+#define OP_GFX_DRAW        0x60u /* [DisplayDirect] */
+#define OP_GFX_TEXT        0x61u /* [DisplayDirect] */
 
 /* Domain 0x7: UI */
 #define OP_UI_MODAL        0x70u /* [DisplayDirect] */
-#define OP_UI_STATUS       0x71u /* [DisplayDirect] */
-#define OP_UI_WIDGET       0x72u /* [DisplayDirect] */
+#define OP_UI_WIDGET       0x71u /* [DisplayDirect] */
 
 /* Domain 0x8: IO */
 #define OP_IO_KEY          0x80u /* [Keypad] */
-#define OP_IO_POWER        0x81u
-#define OP_IO_SERIAL       0x82u /* [SerialComm] */
-#define OP_IO_TIME         0x83u
-#define OP_IO_BUS          0x84u /* [RawPeripheral] */
+#define OP_IO_SERIAL       0x81u /* [SerialComm] */
+#define OP_IO_BUS          0x82u /* [RawPeripheral] */
 
-#define KRX_OP_COUNT       51u
+#define KRX_OP_COUNT       22u
 
 /* Sub-opcodes (mirrored from abi::sub) */
-/* sys_query */
-#define SUB_SYS_QUERY_OS_VERSION   0u
-#define SUB_SYS_QUERY_STACK_FREE   1u
-#define SUB_SYS_QUERY_CPU_HZ       2u
-#define SUB_SYS_QUERY_DEVICE_UID   3u
-#define SUB_SYS_QUERY_RAND32       4u
-#define SUB_SYS_QUERY_CRC32        5u
-#define SUB_SYS_QUERY_CRC16        6u
+/* sys_prop */
+#define SUB_SYS_PROP_GET           0u
+#define SUB_SYS_PROP_SET           1u
+#define SUB_SYS_PROP_PREF          2u
 
-/* sys_flush */
-#define SUB_SYS_FLUSH_FLUSH        0u
-#define SUB_SYS_FLUSH_RELOAD       1u
-#define SUB_SYS_FLUSH_RESET        2u
+/* sys_query */
+#define SUB_SYS_QUERY_INFO         0u
+#define SUB_SYS_QUERY_DEVICE_UID   1u
+#define SUB_SYS_QUERY_CRC32        2u
+#define SUB_SYS_QUERY_CRC16        3u
+#define SUB_SYS_QUERY_RTC_GET      4u
+#define SUB_SYS_QUERY_FLUSH        5u
+#define SUB_SYS_QUERY_RELOAD       6u
+#define SUB_SYS_QUERY_RESET        7u
+
+/* sys_ctl */
+#define SUB_SYS_CTL_DELAY_MS       0u
+#define SUB_SYS_CTL_DELAY_US       1u
+#define SUB_SYS_CTL_EVENT          2u
+#define SUB_SYS_CTL_REBOOT         3u
 
 /* sys_sec */
 #define SUB_SYS_SEC_STATUS         0u
@@ -96,15 +74,27 @@
 #define SUB_SYS_SEC_VERIFY         2u
 #define SUB_SYS_SEC_SET            3u
 
-/* proc_paged */
-#define SUB_PROC_PAGED_CALL        0u
-#define SUB_PROC_PAGED_RETURN      1u
-#define SUB_PROC_PAGED_FAULT       2u
+/* proc_ctl */
+#define SUB_PROC_CTL_INFO          0u
+#define SUB_PROC_CTL_MEM           1u
+#define SUB_PROC_CTL_LEASE         2u
+#define SUB_PROC_CTL_KILL          3u
+#define SUB_PROC_CTL_LAUNCH_PKG    4u
+#define SUB_PROC_CTL_FIND          5u
+#define SUB_PROC_CTL_SVC_REG       6u
+#define SUB_PROC_CTL_SVC_RES       7u
+#define SUB_PROC_CTL_SVC_REL       8u
 
-/* proc_svc */
-#define SUB_PROC_SVC_REGISTER      0u
-#define SUB_PROC_SVC_RESOLVE       1u
-#define SUB_PROC_SVC_RELEASE       2u
+/* proc_exec */
+#define SUB_PROC_EXEC_LEAF         0u
+#define SUB_PROC_EXEC_PAGED_CALL   1u
+#define SUB_PROC_EXEC_PAGED_RET    2u
+#define SUB_PROC_EXEC_PAGED_FAULT  3u
+#define SUB_PROC_EXEC_CALL_VFP     4u
+
+/* ipc */
+#define SUB_IPC_SEND               0u
+#define SUB_IPC_RECV               1u
 
 /* fs_read */
 #define SUB_FS_READ_FILE_AT        0u
@@ -125,47 +115,20 @@
 #define SUB_FS_META_REMOVE         2u
 #define SUB_FS_META_MKDIR          3u
 #define SUB_FS_META_FORMAT         4u
+#define SUB_FS_META_RENAME         5u
 
-/* rf_get */
-#define SUB_RF_GET_FREQ            0u
-#define SUB_RF_GET_RSSI            1u
-#define SUB_RF_GET_CARRIER         2u
-#define SUB_RF_GET_BANDWIDTH       3u
-#define SUB_RF_GET_MODULATION      4u
-#define SUB_RF_GET_TX_STATE        5u
-#define SUB_RF_GET_GLITCH          6u
-#define SUB_RF_GET_SNR             7u
-#define SUB_RF_GET_NOISE           8u
-#define SUB_RF_GET_FM_RSSI         9u
-#define SUB_RF_GET_AFC             10u
-#define SUB_RF_GET_AF_FREQ         11u
-#define SUB_RF_GET_AF_AMP          12u
-#define SUB_RF_GET_CTCSS_SCAN      13u
-
-/* rf_set */
-#define SUB_RF_SET_MODULATION      0u
-#define SUB_RF_SET_SQUELCH         1u
-#define SUB_RF_SET_TX_POWER        2u
-#define SUB_RF_SET_AF_MODE         3u
-#define SUB_RF_SET_MIC_MUTE        4u
-#define SUB_RF_SET_AGC             5u
-#define SUB_RF_SET_TX              6u
-#define SUB_RF_SET_TAIL            7u
-#define SUB_RF_SET_SUBAUDIBLE      8u
-#define SUB_RF_SET_DTMF            9u
-#define SUB_RF_SET_BURST           10u
-#define SUB_RF_SET_UNLOCK_VFO      11u
-#define SUB_RF_SET_FM_TUNE         12u
-#define SUB_RF_SET_FM_VOLUME       13u
-#define SUB_RF_SET_FM_MUTE         14u
+/* rf_tune */
+#define SUB_RF_TUNE_SUBAUDIBLE     1u
+#define SUB_RF_TUNE_DTMF           2u
+#define SUB_RF_TUNE_BURST          3u
+#define SUB_RF_TUNE_TONES_RAW      4u
+#define SUB_RF_TUNE_TONES_HZ       5u
 
 /* rf_vfo */
 #define SUB_RF_VFO_GET_CHANNEL     0u
 #define SUB_RF_VFO_SET_CHANNEL     1u
 #define SUB_RF_VFO_STATE           2u
-#define SUB_RF_VFO_WATCH_MODE      3u
-#define SUB_RF_VFO_LOCK            4u
-#define SUB_RF_VFO_MONITOR         5u
+#define SUB_RF_VFO_LOCK            3u
 
 /* rf_bulk */
 #define SUB_RF_BULK_SWEEP          0u
@@ -174,14 +137,11 @@
 #define SUB_RF_BULK_FSK_SEND       3u
 #define SUB_RF_BULK_FSK_RECV       4u
 
-/* aud_ctl */
-#define SUB_AUD_CTL_PATH           0u
-#define SUB_AUD_CTL_IS_PLAYING     1u
-#define SUB_AUD_CTL_MIC_SAMPLE     2u
-#define SUB_AUD_CTL_CAP_START      3u
-#define SUB_AUD_CTL_CAP_READ       4u
-#define SUB_AUD_CTL_CAP_STOP       5u
-#define SUB_AUD_CTL_IS_CAP         6u
+/* aud */
+#define SUB_AUD_TONE               0u
+#define SUB_AUD_CAP_START          1u
+#define SUB_AUD_CAP_READ           2u
+#define SUB_AUD_CAP_STOP           3u
 
 /* gfx_draw */
 #define SUB_GFX_DRAW_LINE          0u
@@ -193,56 +153,28 @@
 #define SUB_GFX_DRAW_ICON          6u
 #define SUB_GFX_DRAW_SCROLL        7u
 #define SUB_GFX_DRAW_DOTTED_H      8u
-
-/* gfx_ctl */
-#define SUB_GFX_CTL_BITMAP         0u
+#define SUB_GFX_DRAW_CLEAR         9u
+#define SUB_GFX_DRAW_FB            10u
+#define SUB_GFX_DRAW_BITMAP        11u
+#define SUB_GFX_DRAW_COMMIT        12u
 
 /* ui_modal */
-#define SUB_UI_MODAL_CLOSE         0u
-#define SUB_UI_MODAL_ACTIVE        1u
-#define SUB_UI_MODAL_ANIMATING     2u
-#define SUB_UI_MODAL_SET_HOLD      3u
-#define SUB_UI_MODAL_GET_TEXT      4u
-#define SUB_UI_MODAL_SHOW          5u
-#define SUB_UI_MODAL_TOAST         6u
-#define SUB_UI_MODAL_PROMPT_NUM    7u
-
-/* ui_status */
-#define SUB_UI_STATUS_SET_BAR      0u
-#define SUB_UI_STATUS_GET_BAR      1u
-#define SUB_UI_STATUS_TRAY_ICON    2u
+#define SUB_UI_MODAL_SHOW          0u
+#define SUB_UI_MODAL_TOAST         1u
+#define SUB_UI_MODAL_PROMPT_NUM    2u
+#define SUB_UI_MODAL_GET_TEXT      3u
+#define SUB_UI_MODAL_SET_BAR       4u
+#define SUB_UI_MODAL_GET_BAR       5u
 
 /* io_key */
 #define SUB_IO_KEY_POLL            0u
 #define SUB_IO_KEY_MATRIX          1u
 #define SUB_IO_KEY_IS_PRESSED      2u
-#define SUB_IO_KEY_IS_F            3u
-#define SUB_IO_KEY_IS_LOCKED       4u
-
-/* io_power */
-#define SUB_IO_POWER_BATT_MV       0u
-#define SUB_IO_POWER_BATT_PCT      1u
-#define SUB_IO_POWER_BATT_MA       2u
-#define SUB_IO_POWER_BATT_TYPE     3u
-#define SUB_IO_POWER_BATT_ADC      4u
-#define SUB_IO_POWER_MCU_TEMP      5u
-#define SUB_IO_POWER_CHARGING      6u
-#define SUB_IO_POWER_LOW           7u
-#define SUB_IO_POWER_CRITICAL      8u
-#define SUB_IO_POWER_BL_WAKE       9u
-#define SUB_IO_POWER_FLASHLIGHT    10u
 
 /* io_serial */
 #define SUB_IO_SERIAL_WRITE        0u
 #define SUB_IO_SERIAL_READ         1u
-#define SUB_IO_SERIAL_CONNECTED    2u
-#define SUB_IO_SERIAL_FLUSH        3u
-
-/* io_time */
-#define SUB_IO_TIME_TICKS_MS       0u
-#define SUB_IO_TIME_DELAY_MS       1u
-#define SUB_IO_TIME_DELAY_US       2u
-#define SUB_IO_TIME_RTC_GET        3u
+#define SUB_IO_SERIAL_FLUSH        2u
 
 /* io_bus */
 #define SUB_IO_BUS_I2C             0u
@@ -475,6 +407,59 @@
 #define KRX_PROP_HOOK_BUDGET_MS    173u
 #define KRX_PROP_MAX_STRIKES       174u
 #define KRX_PROP_ZONE_B_CACHE_KB   175u
+#define KRX_PROP_OS_VERSION        192u
+#define KRX_PROP_TICKS_MS          193u
+#define KRX_PROP_CPU_HZ            194u
+#define KRX_PROP_STACK_FREE        195u
+#define KRX_PROP_RAND32            196u
+#define KRX_PROP_BATT_MV           197u
+#define KRX_PROP_BATT_PCT          198u
+#define KRX_PROP_BATT_MA           199u
+#define KRX_PROP_BATT_TYPE         200u
+#define KRX_PROP_BATT_ADC          201u
+#define KRX_PROP_MCU_TEMP          202u
+#define KRX_PROP_CHARGING          203u
+#define KRX_PROP_BATT_LOW          204u
+#define KRX_PROP_BATT_CRIT         205u
+#define KRX_PROP_BL_WAKE           206u
+#define KRX_PROP_FLASHLIGHT        207u
+#define KRX_PROP_KEY_F_ACTIVE      208u
+#define KRX_PROP_KEY_LOCKED        209u
+#define KRX_PROP_USB_CONNECTED     210u
+#define KRX_PROP_AUD_PATH          211u
+#define KRX_PROP_AUD_PLAYING       212u
+#define KRX_PROP_AUD_MIC_LEVEL     213u
+#define KRX_PROP_AUD_CAPTURING     214u
+#define KRX_PROP_MODAL_STATE       215u
+#define KRX_PROP_MODAL_HOLD_MS     216u
+#define KRX_PROP_TRAY_ICON         217u
+#define KRX_PROP_SELF_PID          218u
+#define KRX_PROP_PROC_COUNT        219u
+#define KRX_PROP_RF_FREQ           224u
+#define KRX_PROP_RF_RSSI           225u
+#define KRX_PROP_RF_CARRIER        226u
+#define KRX_PROP_RF_BANDWIDTH      227u
+#define KRX_PROP_RF_MODULATION     228u
+#define KRX_PROP_RF_SQUELCH        229u
+#define KRX_PROP_RF_TX_POWER       230u
+#define KRX_PROP_RF_AF_MODE        231u
+#define KRX_PROP_RF_MIC_MUTE       232u
+#define KRX_PROP_RF_AGC            233u
+#define KRX_PROP_RF_TX             234u
+#define KRX_PROP_RF_MONITOR        235u
+#define KRX_PROP_RF_WATCH_MODE     236u
+#define KRX_PROP_RF_TAIL           237u
+#define KRX_PROP_RF_UNLOCK_VFO     238u
+#define KRX_PROP_RF_GLITCH         239u
+#define KRX_PROP_RF_SNR            240u
+#define KRX_PROP_RF_NOISE          241u
+#define KRX_PROP_RF_AFC            242u
+#define KRX_PROP_RF_AF_FREQ        243u
+#define KRX_PROP_RF_AF_AMP         244u
+#define KRX_PROP_RF_CTCSS_SCAN     245u
+#define KRX_PROP_FM_RSSI           246u
+#define KRX_PROP_FM_VOLUME         247u
+#define KRX_PROP_FM_MUTE           248u
 
 /* Declared-action scopes (abi::scope) */
 #define KRX_SCOPE_SHORTCUT         1u

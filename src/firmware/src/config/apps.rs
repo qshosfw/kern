@@ -23,7 +23,7 @@ pub const AUTOSTART_STATE_LAST_FAULT_MASK: u8 = 0b0000_0011;
 #[derive(Debug, Clone, Copy)]
 pub struct AppsConfig {
     // Bytes 0..8: Core Launcher & Runtime Policies
-    pub version: u8,        // 2
+    pub version: u8,        // 3
     pub launcher_style: u8, // 0 = Grid, 1 = List
     pub show_numbers: u8,   // 0 = Off, 1 = On (1..6 badges)
     pub show_labels: u8,    // 0 = Off, 1 = On
@@ -48,14 +48,14 @@ pub struct AppsConfig {
     pub crc32: u32,
 }
 
-config_block!(AppsConfig, "/pref/apps.cfg", 2);
+config_block!(AppsConfig, "/pref/apps.cfg", 3);
 
 impl AppsConfig {
     pub const DEFAULT: Self = Self::new();
 
     pub const fn new() -> Self {
         Self {
-            version: 2,
+            version: 3,
             launcher_style: 0, // Grid by default
             show_numbers: 1,   // On by default
             show_labels: 1,    // On by default

@@ -4,9 +4,20 @@
 //! wait state to 1WS before jumping to user firmware at 0x0800_2800.
 //! We confirm the clock state and provide functions to enable peripheral clocks.
 
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use pac::rcc;
 
 static mut BOOT_ICSCR: u32 = 0;
+static SYSCLK_HZ: AtomicU32 = AtomicU32::new(48_000_000);
+static RADIO_HALF_BIT_CYCLES: AtomicU32 = AtomicU32::new(11);
+
+#[inline(always)]
+fn refresh_cached_clocks() -> u32 {
+    let hz = probe_sysclk_hz();
+    SYSCLK_HZ.store(hz, Ordering::Relaxed);
+    RADIO_HALF_BIT_CYCLES.store((hz >> 22).max(2), Ordering::Relaxed);
+    hz
+}
 
 /// Confirm the bootloader's clock configuration and enable GPIO port clocks.
 /// Must be called before any GPIO, SPI, UART, or timer initialization.
@@ -16,8 +27,18 @@ pub fn init() {
             BOOT_ICSCR = rcc::RCC_ICSCR.read_volatile();
         }
     }
-    // Enable all GPIO port clocks (A, B, C, F) — required before any pin config
+    refresh_cached_clocks();
+    // Enable all GPIO port clocks (A, B, C, F) and AHB hardware 32-bit divider (`DIV`)
     enable_gpio_clocks();
+    enable_div();
+}
+
+/// Enable the AHB hardware 32÷32 divider (`DIV` @ `0x4002_3800`).
+pub fn enable_div() {
+    unsafe {
+        let val = rcc::RCC_AHBENR.read_volatile();
+        rcc::RCC_AHBENR.write_volatile(val | rcc::AHBENR_DIV);
+    }
 }
 
 /// Enable clocks for all GPIO ports used on the K1 board.
@@ -122,7 +143,6 @@ pub fn enable_pwr() {
 }
 
 /// Ensure the internal 32.768 kHz LSI oscillator is enabled and ready.
-#[inline(never)]
 pub fn enable_lsi() {
     unsafe {
         let csr = rcc::RCC_CSR.read_volatile();
@@ -166,7 +186,6 @@ pub fn enable_rtc_lsi() {
 }
 
 /// Enable or disable hardware CTC auto-trim of 16 MHz HSI (PLL x3 = 48 MHz) locked to `USBD_SOF`.
-#[inline(never)]
 pub fn set_ctc_usb_sof(enable: bool) {
     unsafe {
         let rcc_b = rcc::RCC_BASE as *mut u32;
@@ -194,7 +213,6 @@ pub fn set_ctc_usb_sof(enable: bool) {
 }
 
 /// Enable or truly detach the PY32F071 USBD Full-Speed PHY + CTC SOF clock lock.
-#[inline(never)]
 pub fn set_usbd_enabled(enable: bool) {
     unsafe {
         let rcc_b = rcc::RCC_BASE as *mut u32;
@@ -239,9 +257,21 @@ pub fn disable_usbd() {
     set_usbd_enabled(false);
 }
 
-/// Query active system core clock frequency in Hz dynamically from RCC registers.
-/// Correctly distinguishes 48 MHz vs 72 MHz (PLL x2 vs x3) or HSI/HSE modes.
+/// Return cached active system core clock frequency in Hz (`O(1)` single-load fast path).
+#[inline(always)]
 pub fn sysclk_hz() -> u32 {
+    SYSCLK_HZ.load(Ordering::Relaxed)
+}
+
+/// Return cached `cortex_m::asm::delay` cycle count for BK4829 half-bit setup/hold (`~0.45 µs`).
+#[inline(always)]
+pub fn radio_half_bit_cycles() -> u32 {
+    RADIO_HALF_BIT_CYCLES.load(Ordering::Relaxed)
+}
+
+/// Probe active system core clock frequency in Hz directly from RCC hardware registers.
+/// Correctly distinguishes 48 MHz vs 72 MHz (PLL x2 vs x3) or HSI/HSE modes.
+pub fn probe_sysclk_hz() -> u32 {
     static HSI_KHZ: [u16; 5] = [4_000, 8_000, 16_000, 22_120, 24_000];
     unsafe {
         let cfgr = rcc::RCC_CFGR.read_volatile();
@@ -276,7 +306,6 @@ pub fn sysclk_hz() -> u32 {
     }
 }
 
-#[inline(never)]
 unsafe fn switch_to_hsi_disable_pll() {
     unsafe {
         let cfgr = rcc::RCC_CFGR.read_volatile();
@@ -289,7 +318,6 @@ unsafe fn switch_to_hsi_disable_pll() {
     }
 }
 
-#[inline(never)]
 unsafe fn enable_pll_and_switch(pll_mul: u32, ws: u32) {
     unsafe {
         let acr = pac::flash::FLASH_ACR.read_volatile();
@@ -310,7 +338,6 @@ unsafe fn enable_pll_and_switch(pll_mul: u32, ws: u32) {
     }
 }
 
-#[inline(never)]
 unsafe fn set_hsi_fs(is_24mhz: bool) {
     let target_fs = if is_24mhz { 4 } else { 2 };
     unsafe {
@@ -352,12 +379,11 @@ unsafe fn set_hsi_fs(is_24mhz: bool) {
 /// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
 /// 3: 48 MHz (HSI 16 MHz * PLL 3X, 1WS) - Default / USB Full-Speed (CTC SOF-lockable)
 /// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
-static CURRENT_SYSCLK_IDX: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0xFF);
+static CURRENT_SYSCLK_IDX: AtomicU8 = AtomicU8::new(0xFF);
 
-#[inline(never)]
 pub fn set_sysclk_index(idx: u8) {
     let idx = if idx > 4 { 3 } else { idx };
-    if CURRENT_SYSCLK_IDX.load(core::sync::atomic::Ordering::Relaxed) == idx {
+    if CURRENT_SYSCLK_IDX.load(Ordering::Relaxed) == idx {
         unsafe {
             if idx == 3 && (rcc::RCC_APB1ENR.read_volatile() & rcc::APB1ENR_USBD) != 0 {
                 set_ctc_usb_sof(true);
@@ -365,7 +391,7 @@ pub fn set_sysclk_index(idx: u8) {
         }
         return;
     }
-    CURRENT_SYSCLK_IDX.store(idx, core::sync::atomic::Ordering::Relaxed);
+    CURRENT_SYSCLK_IDX.store(idx, Ordering::Relaxed);
     let hsi_24 = idx == 1 || idx == 4;
     let wait_states = if idx < 2 {
         pac::flash::ACR_LATENCY_0WS
@@ -396,7 +422,7 @@ pub fn set_sysclk_index(idx: u8) {
             }
         }
     });
-    let hz = sysclk_hz();
+    let hz = refresh_cached_clocks();
     resync_adc_prescaler(hz);
     crate::delay::update_systick_freq(hz);
     crate::time::update_tim2_freq(hz);

@@ -16,12 +16,6 @@ pub mod py25q16;
 #[cfg(feature = "filesystem")]
 pub mod filesystem;
 
-#[cfg(feature = "uart")]
-pub mod uart;
-
-#[cfg(any(feature = "uart", feature = "usb_cdc"))]
-pub mod wire;
-
 pub mod keyboard;
 pub mod registry;
 

@@ -3,9 +3,7 @@
 use py32_hal::adc::Adc;
 
 pub fn sample_battery_and_system(adc: &Adc, audio_active: bool) {
-    let raw_adc = adc.read_channel_averaged(8, 8);
-    let vdda_mv = adc.read_vref_mv();
-    let mcu_temp = adc.read_mcu_temp_deci_c(vdda_mv);
+    let (raw_adc, vdda_mv, mcu_temp) = adc.sample_injected_telemetry();
 
     let coord = &crate::radio_state_ref().coord;
     let power_service = crate::power_service();

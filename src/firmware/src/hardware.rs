@@ -1,8 +1,6 @@
-//! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
+//! System Hardware Abstraction & Dirty Config Synchronization.
 
-#[cfg(test)]
-use crate::services::DisplayHardware;
-use crate::services::{PowerServiceConfigExt, SysContext, SystemStorage};
+use crate::services::{PowerServiceConfigExt, SystemStorage};
 use drivers::audio::AudioAmplifier;
 use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
@@ -11,8 +9,6 @@ use drivers::st7565::St7565;
 use kernel::event::Event;
 #[cfg(feature = "usb")]
 use kernel::service::PowerService;
-#[cfg(feature = "radio")]
-use kernel::service::radio::RfSquelch;
 
 #[derive(Clone, Copy, Default)]
 pub struct SystemSerialPort {
@@ -39,17 +35,29 @@ pub fn serial_router_mut() -> &'static mut kernel::service::SerialRouter<2> {
 impl kernel::service::SerialPort for SystemSerialPort {
     fn write(&mut self, _data: &[u8]) {
         #[cfg(feature = "usb_cdc")]
-        if drivers::usb::is_active_usb_configured() && self.active_interface != 2 {
-            let _ = drivers::usb::active_usb_write(_data);
-            return;
+        if self.active_interface == 1
+            || (self.active_interface == 0 && drivers::usb::is_active_usb_configured())
+        {
+            if drivers::usb::is_active_usb_configured() {
+                let _ = drivers::usb::active_usb_write(_data);
+                return;
+            }
         }
 
         #[cfg(feature = "uart")]
-        bsp::Board::uart_write_bytes(_data);
+        if serial_router_mut().ports[kernel::service::PortId::Uart0 as usize].mode
+            == kernel::service::PortMode::RigWire
+        {
+            bsp::Board::uart_write_bytes(_data);
+        }
     }
 
     fn read(&mut self, _buf: &mut [u8]) -> usize {
+        let router = serial_router_mut();
+
         #[cfg(feature = "usb_cdc")]
+        if router.ports[kernel::service::PortId::UsbCdc as usize].mode
+            == kernel::service::PortMode::RigWire
         {
             if drivers::usb::is_active_usb_configured() || drivers::usb::is_active_usb_connected() {
                 let count = drivers::usb::active_usb_read(_buf);
@@ -63,6 +71,8 @@ impl kernel::service::SerialPort for SystemSerialPort {
         }
 
         #[cfg(feature = "uart")]
+        if router.ports[kernel::service::PortId::Uart0 as usize].mode
+            == kernel::service::PortMode::RigWire
         {
             let mut count = 0;
             for byte in _buf.iter_mut() {
@@ -93,20 +103,16 @@ pub struct SystemHardware<'a> {
     pub backlight: BacklightController<bsp::BspBacklight>,
     pub audio: AudioAmplifier<bsp::BspAudioPa>,
     pub filesystem: &'a mut SystemStorage<'a>,
-    #[cfg(feature = "uart")]
-    pub uart: drivers::uart::HardwareUart<bsp::Uart1Serial>,
     pub key_scanner: KeypadScanner,
-    pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 4>,
     #[cfg(feature = "usb")]
     pub usb: drivers::usb::UsbDriver,
     pub orchestrator: crate::orchestrator::Orchestrator,
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-    pub wire: drivers::wire::WireDriver<SystemSerialPort, bsp::BspTime>,
+    pub wire: kernel::wire::WireEngine<SystemSerialPort>,
     pub radio: Bk4829<'a, bsp::RadioBus>,
     pub lcd: St7565<bsp::LcdBus>,
 }
 
-#[inline(never)]
 pub fn apply_audio_hardware(
     audio_cfg: &crate::config::AudioConfig,
     audio: &mut AudioAmplifier<bsp::BspAudioPa>,
@@ -133,15 +139,6 @@ pub fn apply_display_hardware(
 ) {
     apply_lcd_hardware(disp_cfg, lcd);
     disp_cfg.apply_to_backlight(backlight);
-}
-
-#[derive(Clone, Copy)]
-enum CtxOp<'e> {
-    Start,
-    Render,
-    Dispatch(&'e Event),
-    #[cfg(feature = "krx_native")]
-    ContainFault,
 }
 
 impl<'a> SystemHardware<'a> {
@@ -206,62 +203,14 @@ impl<'a> SystemHardware<'a> {
         );
     }
 
-    #[inline(never)]
-    fn exec_with_ctx(&mut self, op: CtxOp<'_>) -> bool {
-        let is_locked = self.orchestrator.is_keypad_locked();
-        let is_f = self.orchestrator.is_f_active();
-        #[cfg(test)]
-        let with_display = !matches!(op, CtxOp::Render);
-        #[cfg(test)]
-        let mut display_hw = DisplayHardware {
-            lcd: &mut self.lcd,
-            canvas: crate::system_canvas(),
-            backlight: &mut self.backlight,
-        };
-        let mut ctx = SysContext {
-            is_keypad_locked: is_locked,
-            is_f_active: is_f,
-            state: crate::radio_state(),
-            radio: &mut self.radio,
-            power: crate::power_service(),
-            config: crate::master_config(),
-            storage: self.filesystem,
-            audio: &mut self.audio,
-            ipc: &mut self.ipc_queue,
-            #[cfg(test)]
-            display: with_display.then_some(&mut display_hw),
-            #[cfg(all(test, feature = "uart"))]
-            uart: &mut self.uart,
-            #[cfg(all(test, feature = "usb"))]
-            usb: Some(&mut self.usb),
-            #[cfg(all(test, not(feature = "usb")))]
-            usb: None,
-        };
-        match op {
-            CtxOp::Start => {
-                crate::AppRegistry::on_start(self.orchestrator.active_app_id(), &mut ctx);
-                false
-            }
-            CtxOp::Render => {
-                self.orchestrator.render(crate::system_canvas(), &ctx);
-                false
-            }
-            CtxOp::Dispatch(ev) => self.orchestrator.dispatch_event(&mut ctx, *ev),
-            #[cfg(feature = "krx_native")]
-            CtxOp::ContainFault => {
-                crate::runtime::fault::finish_fault_cleanup(&mut ctx);
-                false
-            }
-        }
-    }
-
     #[cfg(feature = "krx_native")]
     pub fn contain_app_fault(&mut self) {
-        self.exec_with_ctx(CtxOp::ContainFault);
+        crate::runtime::fault::finish_fault_cleanup();
     }
 
+    #[inline(never)]
     pub fn dispatch_event_and_actions(&mut self, ev: &Event) -> bool {
-        let consumed = self.exec_with_ctx(CtxOp::Dispatch(ev));
+        let consumed = self.orchestrator.dispatch_event(*ev);
         self.apply_dirty_configs();
         consumed
     }
@@ -270,17 +219,6 @@ impl<'a> SystemHardware<'a> {
     pub fn tick_radio_services(&mut self) {
         #[cfg(feature = "radio")]
         {
-            if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF1) {
-                pcb.ledger.record_activation();
-                let is_busy = crate::radio_state().coord.is_transmitting
-                    || crate::radio_state().coord.carrier_active
-                    || self.radio.is_carrier_open();
-                pcb.set_state(if is_busy {
-                    kernel::proc::ProcState::Running
-                } else {
-                    kernel::proc::ProcState::ServiceIdle
-                });
-            }
             let state = crate::radio_state();
             if crate::PVD_TX_QUENCHED.load(core::sync::atomic::Ordering::Acquire) {
                 crate::PVD_TX_QUENCHED.store(false, core::sync::atomic::Ordering::Release);
@@ -297,17 +235,16 @@ impl<'a> SystemHardware<'a> {
     }
 
     pub fn init_startup_app(&mut self) {
-        self.exec_with_ctx(CtxOp::Start);
+        crate::AppRegistry::on_start(self.orchestrator.active_app_id());
     }
 
+    #[inline(never)]
     pub fn render_frame(&mut self) {
-        self.exec_with_ctx(CtxOp::Render);
+        self.orchestrator.render(crate::system_canvas());
         if crate::system::is_headless() {
             return;
         }
-        let canvas = crate::system_canvas();
-        canvas.mark_all_dirty();
-        self.lcd.blit(canvas);
+        self.lcd.blit(crate::system_canvas());
     }
 
     #[inline(always)]

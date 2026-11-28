@@ -17,15 +17,12 @@ fn init_system_services(
 ) {
     super::storage::ensure_default_files(hw.filesystem);
     #[cfg(feature = "passcode")]
-    let already_authenticated =
-        !passcode_state.is_locked && passcode_state.master_key.as_slice().iter().any(|&b| b != 0);
-    #[cfg(not(feature = "passcode"))]
-    let already_authenticated = false;
-
-    if !passcode_state.is_locked && !already_authenticated {
+    if !passcode_state.is_locked && !passcode_state.master_key.as_slice().iter().any(|&b| b != 0) {
         let ps = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
         crate::security::passcode::init_passcode_state(hw.filesystem, ps);
     }
+    #[cfg(not(feature = "passcode"))]
+    let _ = passcode_state;
     let mcu_uid = bsp::uid::read_mcu_uid();
     let calibration = unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) };
     calibration.load_into(hw.filesystem, &mcu_uid);
@@ -60,23 +57,17 @@ pub fn run_boot_splash(
         .copied()
         .unwrap_or(1000) as u32;
     let show_splash = target_splash_ms > 0 && disp_cfg.boot_splash_mode != 0;
+
     init_system_services(hw, master_cfg, passcode_state, adc);
 
-    let jingle_buf: &mut [crate::services::melody::ToneNote;
-             crate::services::melody::MAX_MELODY_NOTES] = unsafe {
-        &mut *(crate::data::arena::staging_buf().as_mut_ptr()
-            as *mut [crate::services::melody::ToneNote; crate::services::melody::MAX_MELODY_NOTES])
-    };
-    let jingle_len = crate::services::melody::load_jingle_notes(
+    crate::radio_state().tone_seq.enqueue_jingle(
+        &mut hw.radio,
         hw.filesystem,
         audio_cfg.boot_jingle,
         audio_cfg.jingle_path_str(),
-        jingle_buf,
     );
-    let jingle_notes = &jingle_buf[..jingle_len];
-    let play_jingle = !jingle_notes.is_empty();
 
-    if !show_splash && !play_jingle {
+    if !show_splash {
         return;
     }
 
@@ -103,60 +94,33 @@ pub fn run_boot_splash(
     let canvas = crate::system_canvas();
     let base_vram: &[u8; 1024] = unsafe {
         let slice = &mut crate::runtime::transient_arena_bytes_mut()[..1024];
-        if show_splash {
-            super::splash::render_base_logo(canvas, hw.filesystem, disp_cfg);
-            slice.copy_from_slice(canvas.buffer_flat());
-            let arr = &*(slice.as_ptr() as *const [u8; 1024]);
-            render_splash_frame(
-                canvas,
-                &mut hw.lcd,
-                arr,
-                disp_cfg.boot_splash_anim,
-                first_frame as u8,
-            );
-        }
+        super::splash::render_base_logo(canvas, hw.filesystem, disp_cfg);
+        slice.copy_from_slice(canvas.buffer_flat());
+        let arr = &*(slice.as_ptr() as *const [u8; 1024]);
+        render_splash_frame(
+            canvas,
+            &mut hw.lcd,
+            arr,
+            disp_cfg.boot_splash_anim,
+            first_frame as u8,
+        );
         &*(slice.as_ptr() as *const [u8; 1024])
     };
 
     // Immediately illuminate display and wake backlight when splash is visible — zero black-screen lag!
-    if show_splash {
-        hw.lcd.turn_on();
-        hw.backlight.wake();
-    }
-
-    let mut note_idx = 0usize;
-    let mut note_end_ms = 0u32;
-    let mut was_amp_active = false;
-    if play_jingle {
-        was_amp_active = hw.radio.begin_tone_sequence();
-        if !was_amp_active {
-            py32_hal::delay::delay_ms(35);
-        }
-        let n = jingle_notes[0];
-        hw.radio.step_tone_note(n.freq_hz);
-        note_end_ms = n.duration_ms as u32;
-    }
+    hw.lcd.turn_on();
+    hw.backlight.wake();
 
     let start_ms = py32_hal::delay::millis();
     let mut cur_frame = first_frame;
 
     loop {
         bsp::Board::wdt_feed();
-        let elapsed = py32_hal::delay::millis().wrapping_sub(start_ms);
+        let now_ms = py32_hal::delay::millis();
+        crate::radio_state().tone_seq.tick(&mut hw.radio, now_ms);
+        let elapsed = now_ms.wrapping_sub(start_ms);
 
-        if play_jingle && note_idx < jingle_notes.len() && elapsed >= note_end_ms {
-            hw.radio.mute_tone_note();
-            note_idx += 1;
-            if note_idx < jingle_notes.len() {
-                let n = jingle_notes[note_idx];
-                hw.radio.step_tone_note(n.freq_hz);
-                note_end_ms = note_end_ms.saturating_add(n.duration_ms as u32);
-            } else {
-                hw.radio.end_tone_sequence(was_amp_active);
-            }
-        }
-
-        if show_splash && cur_frame < FRAMES {
+        if cur_frame < FRAMES {
             let next_frame_ms = (target_splash_ms * cur_frame) / FRAMES;
             if elapsed >= next_frame_ms {
                 cur_frame += 1;
@@ -170,22 +134,18 @@ pub fn run_boot_splash(
             }
         }
 
-        let splash_done = !show_splash || elapsed >= target_splash_ms;
-        let jingle_done = !play_jingle || note_idx >= jingle_notes.len();
-        if splash_done && jingle_done {
+        if elapsed >= target_splash_ms {
             break;
         }
 
         #[cfg(feature = "usb")]
         let _ = hw.usb.poll();
-        if let Some((_, kernel::event::KeyState::Pressed)) = hw.key_scanner.scan() {
+        if let Some((code, kernel::event::KeyState::Pressed)) = hw.key_scanner.scan() {
+            crate::orchestrator::sink_key(code);
+            crate::radio_state().tone_seq.abort(&mut hw.radio);
             break;
         }
         py32_hal::delay::delay_ms(1);
-    }
-
-    if play_jingle && note_idx < jingle_notes.len() {
-        hw.radio.end_tone_sequence(was_amp_active);
     }
 }
 
@@ -251,17 +211,49 @@ fn boot_stage_security_check(
     #[cfg(not(feature = "passcode"))]
     {
         let status = crate::security::sync_filesystem_security(hw.filesystem, passcode_state);
-        let msg = unsafe {
-            let ptr = crate::data::arena::scratch_tail_bytes_mut().as_mut_ptr()
-                as *mut heapless::String<168>;
-            ptr.write(heapless::String::new());
-            &mut *ptr
-        };
-        if let Some(title) = crate::security::format_storage_alert_message(status, msg) {
+        let mut msg = utils::format::InlineStr::<88>::new();
+        if let Some(title) = crate::security::format_storage_alert_message(status, &mut msg) {
             crate::orchestrator::compositor::queue_system_alert(title, msg.as_str());
         }
     }
     false
+}
+
+/// Pre-splash check for required core `.krx` packages (IJV-style missing-module guard).
+/// Runs in <1 ms when `/apps/settings.krx` is valid; otherwise pauses on a recovery screen
+/// with USB/keypad active until the user presses MENU to continue anyway.
+#[cfg(all(feature = "filesystem", feature = "krx_native"))]
+#[inline(never)]
+fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
+    let status: &str =
+        match crate::runtime::read_krx_summary_in_scratch(hw.filesystem, "/apps/settings.krx") {
+            Ok((_, s)) if s.abi == ::abi::VERSION => return,
+            Ok(_) => "settings.krx ABI",
+            Err(kernel::runtime::KrxLaunchError::FileNotFound) => "settings.krx missing",
+            Err(_) => "settings.krx corrupt",
+        };
+
+    hw.backlight.wake();
+    let canvas = crate::system_canvas();
+    gfx::views::dialog::draw_dialog(canvas, "Core Modules", status, "M: Continue", false);
+    hw.lcd.turn_on();
+    hw.lcd.blit(canvas);
+
+    hw.key_scanner.clear();
+    let mut dummy = false;
+    loop {
+        bsp::Board::wdt_feed();
+        crate::system::poll_usb_and_wire(hw, py32_hal::delay::millis(), &mut dummy);
+        if let Some((
+            code @ (kernel::event::KeyCode::Menu | kernel::event::KeyCode::Exit),
+            kernel::event::KeyState::Pressed,
+        )) = hw.key_scanner.scan()
+        {
+            crate::orchestrator::sink_key(code);
+            return;
+        }
+        py32_hal::delay::delay_ms(10);
+    }
 }
 
 #[inline(never)]
@@ -297,6 +289,12 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
         );
     }
 
+    // ── STAGE 2.5: Core Modules Verification (IJV-style missing-package guard) ──
+    #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+    if !passcode_state.is_locked {
+        boot_stage_core_modules_check(hw);
+    }
+
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───
     // Skip slow boot splash & jingle when continuing directly from the panic screen.
     if !showed_panic {
@@ -304,7 +302,9 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     }
 
     #[cfg(feature = "usb")]
-    if !(hw.usb.is_connected() || hw.usb.consecutive_sof() > 0) {
+    if hw.usb.is_connected() || hw.usb.consecutive_sof() > 0 {
+        py32_hal::rcc::set_sysclk_48mhz();
+    } else {
         py32_hal::rcc::set_sysclk_index(master_cfg.system.cpu_clock);
     }
     #[cfg(not(feature = "usb"))]

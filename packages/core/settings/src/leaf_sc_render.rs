@@ -18,16 +18,6 @@ const CTX_NAMES: &[u8] = b"Global\0VFO\0Home\0Settings\0Apps\0";
 const BUILTIN_NAMES: &[u8] = b"None\0Flashlight\0Settings\0Lock Keypad\0Home\0Sleep\0";
 const BUILTIN_ICONS: [u8; 6] = [0, icon::DISPLAY, icon::APP_SETTINGS, icon::SYSTEM, icon::DEVICE, icon::BATTERY];
 
-#[inline(always)]
-fn draw_row(api: &KrxApiTable, y: i16, l: &[u8], v: &[u8], fl: u8, ic: u8) {
-    let desc = KrxWidget {
-        p0: l.as_ptr(), p1: v.as_ptr(), x: 2, y,
-        len0: l.len() as u16, len1: v.len() as u16, extra: 0,
-        w: 120, h: 13, a: fl, b: ic, _pad: [0; 2],
-    };
-    let _ = api.call_op(Op::UiWidget, KRX_WIDGET_MENU_ITEM as usize, &raw const desc as usize, 0);
-}
-
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     if arg.is_null() {
         return 1;
@@ -40,8 +30,8 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     let sc = unsafe { &*core::ptr::addr_of!(st.detail_sc.sc) };
     let app_n = (sc.app_n as usize).min(6);
     let mut row = 0u8;
+    let mut y = 9i16 - sy;
     while row < 21 {
-        let y = 9 + (row as i16) * 13 - sy;
         if y > -13 && y < 64 {
             let mut fl = u8::from(row == sc_sel);
             let mut ic = 0u8;
@@ -79,8 +69,28 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 };
                 (nth_packed_slice(SLOT_LABELS, slot), disp)
             };
-            draw_row(api, y, l, v, fl, ic);
+            let desc = KrxWidget {
+                p0: l.as_ptr(),
+                p1: v.as_ptr(),
+                x: 2,
+                y,
+                len0: l.len() as u16,
+                len1: v.len() as u16,
+                extra: 0,
+                w: 120,
+                h: 13,
+                a: fl,
+                b: ic,
+                _pad: [0; 2],
+            };
+            let _ = api.call_op(
+                Op::UiWidget,
+                KRX_WIDGET_MENU_ITEM as usize,
+                &raw const desc as usize,
+                0,
+            );
         }
+        y += 13;
         row += 1;
     }
     api.fill_rect(0, 0, 128, 8, COLOR_CLEAR);

@@ -51,57 +51,69 @@ impl AsconPermutation {
         Self { x: w }
     }
 
-    /// Apply `rounds` rounds of the Ascon permutation in a compact rolled loop.
-    /// - For p^12 (a=12): rounds = 12 (uses constants 0..12)
-    /// - For p^8  (b=8):  rounds = 8  (uses constants 4..12)
-    /// - For p^6  (b=6):  rounds = 6  (uses constants 6..12)
-    #[inline(never)]
+    /// Apply `rounds` rounds of the Ascon permutation in a compact 32-bit Thumb-1 loop.
     pub fn permute(&mut self, rounds: usize) {
-        let start = 12usize.saturating_sub(rounds);
-        for r in start..12 {
-            // NIST SP 800-232 Table 2: round constant r is 0xf0 - r * 0x0f (low byte only).
-            self.round((0xf0usize - r * 0x0f) as u64);
+        fn sbox32(w: &mut [u32; 5]) {
+            w[0] ^= w[4];
+            w[4] ^= w[3];
+            w[2] ^= w[1];
+            let t0 = w[0] ^ (!w[1] & w[2]);
+            let t1 = w[1] ^ (!w[2] & w[3]);
+            let t2 = w[2] ^ (!w[3] & w[4]);
+            let t3 = w[3] ^ (!w[4] & w[0]);
+            let t4 = w[4] ^ (!w[0] & w[1]);
+            w[1] = t1 ^ t0;
+            w[0] = t0 ^ t4;
+            w[3] = t3 ^ t2;
+            w[2] = !t2;
+            w[4] = t4;
         }
-    }
 
-    /// Single round: constant addition, 5-bit bit-sliced S-box, linear diffusion layer.
-    #[inline(always)]
-    fn round(&mut self, cr: u64) {
-        // 1. Constant Addition (p_C)
-        self.x[2] ^= cr;
+        fn rotr_pair(hi: u32, lo: u32, r: u8) -> (u32, u32) {
+            let (a, b, s) = if r >= 32 {
+                (lo, hi, (r - 32) as u32)
+            } else {
+                (hi, lo, r as u32)
+            };
+            let inv = 32 - s;
+            ((a >> s) | (b << inv), (b >> s) | (a << inv))
+        }
 
-        // 2. Non-linear Substitution Layer (p_S: 5-bit S-box across 64 slices)
-        self.x[0] ^= self.x[4];
-        self.x[4] ^= self.x[3];
-        self.x[2] ^= self.x[1];
-
-        let t0 = self.x[0] ^ (!self.x[1] & self.x[2]);
-        let t1 = self.x[1] ^ (!self.x[2] & self.x[3]);
-        let t2 = self.x[2] ^ (!self.x[3] & self.x[4]);
-        let t3 = self.x[3] ^ (!self.x[4] & self.x[0]);
-        let t4 = self.x[4] ^ (!self.x[0] & self.x[1]);
-
-        let s1 = t1 ^ t0;
-        let s0 = t0 ^ t4;
-        let s3 = t3 ^ t2;
-        let s2 = !t2;
-
-        self.x[0] = s0;
-        self.x[1] = s1;
-        self.x[2] = s2;
-        self.x[3] = s3;
-        self.x[4] = t4;
-
-        // 3. Linear Diffusion Layer (p_L: 64-bit right rotations and XORs)
         const ROT: [(u8, u8); 5] = [(19, 28), (61, 39), (1, 6), (10, 17), (7, 41)];
-        #[inline(never)]
-        fn diffuse(v: u64, r0: u8, r1: u8) -> u64 {
-            v ^ v.rotate_right(r0 as u32) ^ v.rotate_right(r1 as u32)
-        }
+
+        let mut h = [0u32; 5];
+        let mut l = [0u32; 5];
         let mut i = 0;
         while i < 5 {
-            self.x[i] = diffuse(self.x[i], ROT[i].0, ROT[i].1);
+            h[i] = (self.x[i] >> 32) as u32;
+            l[i] = self.x[i] as u32;
             i += 1;
+        }
+
+        let start = 12usize.saturating_sub(rounds);
+        for r in start..12 {
+            // 1. Constant Addition (p_C: low byte of x2 only)
+            l[2] ^= (0xf0usize - r * 0x0f) as u32;
+
+            // 2. Bit-sliced 5-bit S-box on upper and lower 32-bit halves independently
+            sbox32(&mut h);
+            sbox32(&mut l);
+
+            // 3. Linear Diffusion Layer (p_L: pure 32-bit shifts, zero 64-bit helpers)
+            let mut w = 0;
+            while w < 5 {
+                let (r0h, r0l) = rotr_pair(h[w], l[w], ROT[w].0);
+                let (r1h, r1l) = rotr_pair(h[w], l[w], ROT[w].1);
+                h[w] ^= r0h ^ r1h;
+                l[w] ^= r0l ^ r1l;
+                w += 1;
+            }
+        }
+
+        let mut j = 0;
+        while j < 5 {
+            self.x[j] = ((h[j] as u64) << 32) | (l[j] as u64);
+            j += 1;
         }
     }
 }
@@ -118,27 +130,43 @@ impl Drop for Ascon128 {
     }
 }
 
-#[inline(never)]
 fn read_be64(b: &[u8]) -> u64 {
     u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
-#[inline(never)]
-fn absorb_padded_be(s: &mut AsconPermutation, bytes: &[u8], permute_last: bool) {
+fn write_be64(v: u64, dst: &mut [u8]) {
+    dst[..8].copy_from_slice(&v.to_be_bytes());
+}
+
+fn absorb_bytes(s: &mut AsconPermutation, bytes: &[u8], rounds: usize, permute_last: bool) {
     let mut off = 0;
     while off + 8 <= bytes.len() {
-        s.x[0] ^= read_be64(&bytes[off..]);
-        s.permute(6);
+        let mut xb = s.x[0].to_be_bytes();
+        for j in 0..8 {
+            xb[j] ^= bytes[off + j];
+        }
+        s.x[0] = u64::from_be_bytes(xb);
+        s.permute(rounds);
         off += 8;
     }
     let rem = &bytes[off..];
-    let mut pad_block = [0u8; 8];
-    pad_block[..rem.len()].copy_from_slice(rem);
-    pad_block[rem.len()] = 0x80;
-    s.x[0] ^= u64::from_be_bytes(pad_block);
-    if permute_last {
-        s.permute(6);
+    let mut xb = s.x[0].to_be_bytes();
+    for j in 0..rem.len() {
+        xb[j] ^= rem[j];
     }
+    xb[rem.len()] ^= 0x80;
+    s.x[0] = u64::from_be_bytes(xb);
+    if permute_last {
+        s.permute(rounds);
+    }
+}
+
+fn ct_tag_eq(a: &[u8; TAG_SIZE], b: &[u8; TAG_SIZE]) -> bool {
+    let mut diff = 0u8;
+    for i in 0..TAG_SIZE {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
 }
 
 impl Ascon128 {
@@ -150,25 +178,63 @@ impl Ascon128 {
         Self { key }
     }
 
-    #[inline(never)]
-    fn init_state_into(&self, nonce: &[u8; NONCE_SIZE], s: &mut AsconPermutation) -> (u64, u64) {
+    /// Core Ascon-128 sponge processor (`mode`: `0 = MacOnly`, `1 = Encrypt`, `2 = Decrypt`).
+    /// Unifies AEAD encryption, AEAD decryption, and detached MAC computation in one code path.
+    fn process_sponge(
+        &self,
+        nonce: &[u8; NONCE_SIZE],
+        associated_data: &[u8],
+        data: &[u8],
+        mut out_buf: Option<&mut [u8]>,
+        decrypt: bool,
+    ) -> [u8; TAG_SIZE] {
         let k0 = read_be64(&self.key[..8]);
         let k1 = read_be64(&self.key[8..]);
-        s.x = [
+        let mut s = AsconPermutation::from_words([
             Self::ASCON128_IV,
             k0,
             k1,
             read_be64(&nonce[..8]),
             read_be64(&nonce[8..]),
-        ];
+        ]);
         s.permute(12);
         s.x[3] ^= k0;
         s.x[4] ^= k1;
-        (k0, k1)
-    }
+        if !associated_data.is_empty() {
+            absorb_bytes(&mut s, associated_data, 6, true);
+        }
+        s.x[4] ^= 1;
 
-    #[inline(never)]
-    fn finalize_tag(s: &mut AsconPermutation, k0: u64, k1: u64) -> [u8; TAG_SIZE] {
+        let mut off = 0;
+        loop {
+            let rem = data.len() - off;
+            let n = rem.min(8);
+            let mut xb = s.x[0].to_be_bytes();
+            for j in 0..n {
+                let b = data[off + j];
+                if let Some(buf) = out_buf.as_deref_mut() {
+                    if decrypt {
+                        buf[off + j] = xb[j] ^ b;
+                        xb[j] = b;
+                    } else {
+                        xb[j] ^= b;
+                        buf[off + j] = xb[j];
+                    }
+                } else {
+                    xb[j] ^= b;
+                }
+            }
+            if rem >= 8 {
+                s.x[0] = u64::from_be_bytes(xb);
+                s.permute(6);
+                off += 8;
+            } else {
+                xb[n] ^= 0x80;
+                s.x[0] = u64::from_be_bytes(xb);
+                break;
+            }
+        }
+
         s.x[1] ^= k0;
         s.x[2] ^= k1;
         s.permute(12);
@@ -176,18 +242,20 @@ impl Ascon128 {
         s.x[4] ^= k1;
 
         let mut tag = [0u8; TAG_SIZE];
-        tag[0..8].copy_from_slice(&s.x[3].to_be_bytes());
-        tag[8..16].copy_from_slice(&s.x[4].to_be_bytes());
+        write_be64(s.x[3], &mut tag[0..8]);
+        write_be64(s.x[4], &mut tag[8..16]);
         tag
     }
 
-    #[inline(always)]
-    fn process_associated_data(s: &mut AsconPermutation, associated_data: &[u8]) {
-        if !associated_data.is_empty() {
-            absorb_padded_be(s, associated_data, true);
-        }
-        // 1-bit domain separation
-        s.x[4] ^= 1;
+    pub fn duplex_crypt(
+        &self,
+        nonce: &[u8; NONCE_SIZE],
+        associated_data: &[u8],
+        buffer: &mut [u8],
+        decrypt: bool,
+    ) -> [u8; TAG_SIZE] {
+        let input = unsafe { core::slice::from_raw_parts(buffer.as_ptr(), buffer.len()) };
+        self.process_sponge(nonce, associated_data, input, Some(buffer), decrypt)
     }
 
     /// Encrypt plaintext in-place and return the 128-bit authentication tag.
@@ -197,35 +265,7 @@ impl Ascon128 {
         associated_data: &[u8],
         buffer: &mut [u8],
     ) -> [u8; TAG_SIZE] {
-        let mut s = AsconPermutation::new();
-        let (k0, k1) = self.init_state_into(nonce, &mut s);
-        Self::process_associated_data(&mut s, associated_data);
-
-        // Process full 8-byte plaintext blocks
-        let full_blocks = buffer.len() / 8;
-        for i in 0..full_blocks {
-            let chunk = &mut buffer[i * 8..(i + 1) * 8];
-            s.x[0] ^= read_be64(chunk);
-            chunk.copy_from_slice(&s.x[0].to_be_bytes());
-            s.permute(6);
-        }
-
-        // Process final partial or empty block
-        let rem_start = full_blocks * 8;
-        let rem = &mut buffer[rem_start..];
-        let rem_len = rem.len();
-        let mut pad_block = [0u8; 8];
-
-        let state_bytes = s.x[0].to_be_bytes();
-        for j in 0..rem_len {
-            let c = rem[j] ^ state_bytes[j];
-            pad_block[j] = rem[j];
-            rem[j] = c;
-        }
-        pad_block[rem_len] = 0x80;
-        s.x[0] ^= u64::from_be_bytes(pad_block);
-
-        Self::finalize_tag(&mut s, k0, k1)
+        self.duplex_crypt(nonce, associated_data, buffer, false)
     }
 
     /// Decrypt ciphertext in-place after verifying the 128-bit authentication tag in constant time.
@@ -237,66 +277,33 @@ impl Ascon128 {
         buffer: &mut [u8],
         tag: &[u8; TAG_SIZE],
     ) -> Result<(), ()> {
-        let mut s = AsconPermutation::new();
-        let (k0, k1) = self.init_state_into(nonce, &mut s);
-        Self::process_associated_data(&mut s, associated_data);
-
-        // Process full 8-byte ciphertext blocks
-        let full_blocks = buffer.len() / 8;
-        for i in 0..full_blocks {
-            let chunk = &mut buffer[i * 8..(i + 1) * 8];
-            let c_word = read_be64(chunk);
-            let p_word = s.x[0] ^ c_word;
-            s.x[0] = c_word;
-            chunk.copy_from_slice(&p_word.to_be_bytes());
-            s.permute(6);
-        }
-
-        // Process final partial or empty block
-        let rem_start = full_blocks * 8;
-        let rem = &mut buffer[rem_start..];
-        let rem_len = rem.len();
-        let mut pad_block = [0u8; 8];
-
-        let state_bytes = s.x[0].to_be_bytes();
-        for j in 0..rem_len {
-            let p = rem[j] ^ state_bytes[j];
-            pad_block[j] = p;
-            rem[j] = p;
-        }
-        pad_block[rem_len] = 0x80;
-        s.x[0] ^= u64::from_be_bytes(pad_block);
-
-        let expected_tag = Self::finalize_tag(&mut s, k0, k1);
-
-        // Constant-time tag verification
-        let mut diff = 0u8;
-        for (a, b) in tag.iter().zip(expected_tag.iter()) {
-            diff |= a ^ b;
-        }
-
-        if diff == 0 {
+        let expected_tag = self.duplex_crypt(nonce, associated_data, buffer, true);
+        if ct_tag_eq(tag, &expected_tag) {
             Ok(())
         } else {
-            // Secure wipe on authentication failure
-            for byte in buffer.iter_mut() {
-                unsafe { core::ptr::write_volatile(byte, 0) };
-            }
+            crate::buffer::zeroize_bytes(buffer);
             Err(())
         }
     }
 
     /// Initialize an Ascon-128 keystream permutation state for chunked streaming (multiples of 8 B).
-    #[inline(never)]
     pub fn keystream_state(&self, nonce: &[u8; NONCE_SIZE]) -> AsconPermutation {
-        let mut s = AsconPermutation::new();
-        let _ = self.init_state_into(nonce, &mut s);
-        s.x[4] ^= 1; // Domain separation
+        let k0 = read_be64(&self.key[..8]);
+        let k1 = read_be64(&self.key[8..]);
+        let mut s = AsconPermutation::from_words([
+            Self::ASCON128_IV,
+            k0,
+            k1,
+            read_be64(&nonce[..8]),
+            read_be64(&nonce[8..]),
+        ]);
+        s.permute(12);
+        s.x[3] ^= k0;
+        s.x[4] ^= k1 ^ 1;
         s
     }
 
     /// XOR the next keystream bytes into `buffer`. All non-final chunks must be multiples of 8 bytes.
-    #[inline(never)]
     pub fn apply_keystream_chunk(s: &mut AsconPermutation, buffer: &mut [u8]) {
         let mut offset = 0;
         while offset < buffer.len() {
@@ -311,25 +318,19 @@ impl Ascon128 {
     }
 
     /// Apply keystream in-place to buffer (stream encryption/decryption).
-    #[inline(never)]
     pub fn apply_keystream(&self, nonce: &[u8; NONCE_SIZE], buffer: &mut [u8]) {
         let mut s = self.keystream_state(nonce);
         Self::apply_keystream_chunk(&mut s, buffer);
     }
 
     /// Compute Ascon-128 MAC tag over associated data and payload.
-    #[inline(never)]
     pub fn compute_mac(
         &self,
         nonce: &[u8; NONCE_SIZE],
         associated_data: &[u8],
         data: &[u8],
     ) -> [u8; TAG_SIZE] {
-        let mut s = AsconPermutation::new();
-        let (k0, k1) = self.init_state_into(nonce, &mut s);
-        Self::process_associated_data(&mut s, associated_data);
-        absorb_padded_be(&mut s, data, false);
-        Self::finalize_tag(&mut s, k0, k1)
+        self.process_sponge(nonce, associated_data, data, None, false)
     }
 
     /// Verify Ascon-128 MAC tag in constant time.
@@ -341,11 +342,11 @@ impl Ascon128 {
         tag: &[u8; TAG_SIZE],
     ) -> Result<(), ()> {
         let expected = self.compute_mac(nonce, associated_data, data);
-        let mut diff = 0u8;
-        for (a, b) in tag.iter().zip(expected.iter()) {
-            diff |= a ^ b;
+        if ct_tag_eq(tag, &expected) {
+            Ok(())
+        } else {
+            Err(())
         }
-        if diff == 0 { Ok(()) } else { Err(()) }
     }
 }
 
@@ -360,35 +361,15 @@ impl AsconHash256 {
     pub fn hash(data: &[u8]) -> [u8; HASH_SIZE] {
         let mut s = AsconPermutation::from_words([Self::HASH_IV, 0, 0, 0, 0]);
         s.permute(12);
+        absorb_bytes(&mut s, data, 12, true);
 
-        // Absorb message in 64-bit blocks
-        let full_blocks = data.len() / 8;
-        for i in 0..full_blocks {
-            let chunk = &data[i * 8..(i + 1) * 8];
-            let word = u64::from_be_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-            ]);
-            s.x[0] ^= word;
-            s.permute(12);
-        }
-
-        // Pad last block with 0x80
-        let rem = &data[full_blocks * 8..];
-        let mut pad_block = [0u8; 8];
-        pad_block[..rem.len()].copy_from_slice(rem);
-        pad_block[rem.len()] = 0x80;
-        s.x[0] ^= u64::from_be_bytes(pad_block);
-        s.permute(12);
-
-        // Squeeze 256 bits (4 x 64-bit words)
         let mut out = [0u8; HASH_SIZE];
-        out[0..8].copy_from_slice(&s.x[0].to_be_bytes());
-        s.permute(12);
-        out[8..16].copy_from_slice(&s.x[0].to_be_bytes());
-        s.permute(12);
-        out[16..24].copy_from_slice(&s.x[0].to_be_bytes());
-        s.permute(12);
-        out[24..32].copy_from_slice(&s.x[0].to_be_bytes());
+        for i in 0..4 {
+            write_be64(s.x[0], &mut out[i * 8..(i + 1) * 8]);
+            if i < 3 {
+                s.permute(12);
+            }
+        }
         out
     }
 }
@@ -411,22 +392,7 @@ impl AsconXof {
 
     /// Absorb arbitrary bytes into the sponge state.
     pub fn absorb(&mut self, data: &[u8]) {
-        let full_blocks = data.len() / 8;
-        for i in 0..full_blocks {
-            let chunk = &data[i * 8..(i + 1) * 8];
-            let word = u64::from_be_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-            ]);
-            self.s.x[0] ^= word;
-            self.s.permute(12);
-        }
-
-        let rem = &data[full_blocks * 8..];
-        let mut pad_block = [0u8; 8];
-        pad_block[..rem.len()].copy_from_slice(rem);
-        pad_block[rem.len()] = 0x80;
-        self.s.x[0] ^= u64::from_be_bytes(pad_block);
-        self.s.permute(12);
+        absorb_bytes(&mut self.s, data, 12, true);
     }
 
     /// Squeeze arbitrary bytes from the sponge state.

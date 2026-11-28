@@ -79,7 +79,6 @@ class CaptureView:
         # Native Adw.SplitButton for Snapshot (primary: Save PNG; menu: Copy PNG / Raw 1 KB FB)
         snap_btn = Adw.SplitButton(
             icon_name="camera-photo-symbolic",
-            label="Snapshot",
             tooltip_text="Save PNG snapshot (Ctrl+S)",
         )
         snap_btn.connect("clicked", lambda _b: self.save_screenshot())
@@ -100,16 +99,6 @@ class CaptureView:
 
         top_bar.append(Gtk.Box(hexpand=True))
 
-        mode_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        mode_grp.add_css_class("linked")
-        b_lcd = Gtk.ToggleButton(label="LCD", active=True)
-        b_body = Gtk.ToggleButton(label="Handset", group=b_lcd)
-        b_lcd.connect("toggled", lambda b: self._set_mode("lcd") if b.get_active() else None)
-        b_body.connect("toggled", lambda b: self._set_mode("body") if b.get_active() else None)
-        mode_grp.append(b_lcd)
-        mode_grp.append(b_body)
-        top_bar.append(mode_grp)
-
         self.export_menu_btn = Gtk.MenuButton(label="Export", tooltip_text="Export GIF or Frame PNG")
         self.export_menu_btn.add_css_class("suggested-action")
         self.export_menu_btn.set_popover(self._build_export_popover())
@@ -126,13 +115,24 @@ class CaptureView:
             spacing=10,
             vexpand=True,
             hexpand=True,
-            margin_top=20,
-            margin_bottom=16,
-            margin_start=24,
-            margin_end=24,
+            margin_top=12,
+            margin_bottom=12,
+            margin_start=12,
+            margin_end=12,
         )
+        # Preview target switch sits with the preview it controls (keeps the toolbar narrow on phones)
+        mode_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, halign=Gtk.Align.CENTER)
+        mode_grp.add_css_class("linked")
+        b_lcd = Gtk.ToggleButton(label="LCD", active=True)
+        b_body = Gtk.ToggleButton(label="Handset", group=b_lcd)
+        b_lcd.connect("toggled", lambda b: self._set_mode("lcd") if b.get_active() else None)
+        b_body.connect("toggled", lambda b: self._set_mode("body") if b.get_active() else None)
+        mode_grp.append(b_lcd)
+        mode_grp.append(b_body)
+        stage_box.append(mode_grp)
+
         self.preview_area = Gtk.DrawingArea(hexpand=True, vexpand=True)
-        self.preview_area.set_size_request(280, 180)
+        self.preview_area.set_size_request(200, 140)
         self.preview_area.set_draw_func(self._draw_stage_preview)
         stage_box.append(self.preview_area)
 
@@ -173,8 +173,10 @@ class CaptureView:
         self.timeline_area.add_controller(tl_d)
         dock.append(self.timeline_area)
 
-        tr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        tr = Adw.WrapBox(child_spacing=6, line_spacing=6, justify=Adw.JustifyMode.SPREAD)
         tr.add_css_class("toolbar")
+        transport = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        edit_tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
         # Native flat media transport buttons
         self.prev_btn = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Previous frame")
@@ -187,9 +189,8 @@ class CaptureView:
         self.next_btn.add_css_class("flat")
         self.next_btn.connect("clicked", lambda _b: self._step_pb(1))
         for w in (self.prev_btn, self.pb_btn, self.next_btn):
-            tr.append(w)
-
-        tr.append(Gtk.Box(hexpand=True))
+            transport.append(w)
+        tr.append(transport)
 
         edit_g = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         edit_g.add_css_class("linked")
@@ -203,17 +204,18 @@ class CaptureView:
         self.undo_btn.connect("clicked", lambda _b: (self.runtime.recorder.undo_cut(), self._refresh_ui()))
         for w in (self.b_in, self.b_out, self.cut_btn, self.undo_btn):
             edit_g.append(w)
-        tr.append(edit_g)
+        edit_tools.append(edit_g)
 
         self.b_reset_trim = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Reset trim")
         self.b_reset_trim.add_css_class("flat")
         self.b_reset_trim.connect("clicked", lambda _b: self._reset_trim())
-        tr.append(self.b_reset_trim)
+        edit_tools.append(self.b_reset_trim)
 
         self.clr_btn = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="Discard clip")
         self.clr_btn.add_css_class("flat")
         self.clr_btn.connect("clicked", lambda _b: self._discard())
-        tr.append(self.clr_btn)
+        edit_tools.append(self.clr_btn)
+        tr.append(edit_tools)
 
         dock.append(tr)
         bot_wrap.append(dock)
@@ -274,14 +276,6 @@ class CaptureView:
     def _on_live_frame(self) -> None:
         if not self.runtime.recorder.frames or self.runtime.recorder.recording:
             self.preview_area.queue_draw()
-
-    def playback_frame_if_active(self, is_capture_page: bool) -> tuple[bytes, frozenset[str], str, bool] | None:
-        rec = self.runtime.recorder
-        if is_capture_page and (not rec.recording) and rec.frames:
-            idx = max(0, min(self._pb_idx, len(rec.frames) - 1))
-            rf = rec.frames[idx]
-            return rf.fb, rf.pressed, rf.led, rf.torch
-        return None
 
     def capture_event(self) -> None:
         rec = self.runtime.recorder
@@ -529,7 +523,6 @@ class CaptureView:
         self._refresh_meta()
         self.preview_area.queue_draw()
         self.timeline_area.queue_draw()
-        self.stage.ensure_anim_loop()
 
     def _discard(self) -> None:
         self.stop_playback()

@@ -10,7 +10,6 @@ use kernel::boot::BackupCrashTag;
 static TEST_BACKUP_TAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Current tag (`BackupCrashTag::empty()` when the register holds no valid ident).
-#[inline(never)]
 pub fn read() -> BackupCrashTag {
     #[cfg(all(target_arch = "arm", not(test)))]
     let raw = py32_hal::rtc::RealTimeClock::read_alarm_raw();
@@ -19,7 +18,6 @@ pub fn read() -> BackupCrashTag {
     BackupCrashTag::decode(raw).unwrap_or(BackupCrashTag::empty())
 }
 
-#[inline(never)]
 pub fn write(tag: BackupCrashTag) {
     #[cfg(all(target_arch = "arm", not(test)))]
     py32_hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
@@ -28,13 +26,11 @@ pub fn write(tag: BackupCrashTag) {
 }
 
 /// `true` when every bit of `mask` is set.
-#[inline(never)]
 pub fn has(mask: u8) -> bool {
     (read().flags & mask) == mask
 }
 
 /// Clear `clear`, then set `set`; the register is only written when the flags change.
-#[inline(never)]
 pub fn update(set: u8, clear: u8) {
     let mut tag = read();
     let flags = (tag.flags & !clear) | set;

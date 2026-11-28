@@ -94,14 +94,6 @@ impl DisplayConfig {
         backlight.set_mode(mode);
         backlight.set_levels(self.backlight_max, self.backlight_min);
     }
-
-    pub fn backlight_mode_service(&self) -> crate::services::BacklightMode {
-        match self.backlight_timeout_code() {
-            0 => crate::services::BacklightMode::Off,
-            u16::MAX => crate::services::BacklightMode::On,
-            ms => crate::services::BacklightMode::Auto(ms),
-        }
-    }
 }
 
 crate::config_block!(DisplayConfig, "/pref/display.cfg", 3);

@@ -1,7 +1,8 @@
-//! Microkernel Process Management & Control Blocks
+//! Microkernel Process Slot Table & Control Blocks (`32 B` Power-of-Two `Pcb`).
 //!
-//! Implements lightweight process accounting, state tracking, and capability-checked
-//! execution structures for static firmware apps and installable application bundles.
+//! Tracks real resident/foreground and Zone A background `.krx` actors using an exact
+//! `32 B` (`2^5`) power-of-two slot layout (`lsls #5` indexing on Cortex-M0+, all fields
+//! within `imm5` single-instruction offsets) and a compact `4 B` [`SlotHealth`] record.
 
 pub mod abi;
 pub mod lease;
@@ -11,48 +12,42 @@ pub mod service_registry;
 pub mod status_tray;
 
 pub use crate::boot::{BOOT_RECORD_IDENT, BootRecord, BootSlot, ResetReason};
-pub use crate::mem::{CellSlab, SlabCell};
 pub use abi::*;
 pub use lease::{LeaseError, LeaseKind, ResourceLease, ResourceLeaseManager};
-pub use ledger::ResourceLedger;
+pub use ledger::SlotHealth;
 pub use memory::{MemoryMapLayout, MemoryRegionDescriptor, RegionKind, region_flags};
 pub use service_registry::{MAX_REGISTERED_SERVICES, ServiceEntry, ServiceRegistry};
 pub use status_tray::StatusTray;
 
 use ::abi::CapabilitySet;
 
-/// Process Identifier
+/// Process Identifier (`0` = transient/unowned).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub struct Pid(pub u8);
 
-/// Process Execution Class
+/// Process Execution Class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ExecType {
-    /// Builtin static firmware app executing in-place from XIP flash
-    StaticFirmware,
-    /// Native relocatable ELF/KRX executable loaded in flash
-    RelocatableNative,
+    /// Built-in static firmware app executing in-place from XIP flash
+    StaticFirmware = 0,
+    /// Native relocatable `.krx`/`.mod` executable loaded into SRAM arena
+    RelocatableNative = 1,
 }
 
-/// Process Lifecycle State (§12.3 / KRX-ABI 2.5.0)
+/// Process Lifecycle State.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ProcState {
-    /// Slot is unallocated / dormant
-    Dormant,
-    /// Ready to run on next scheduler cycle
-    Ready,
-    /// Currently executing on CPU
-    Running,
-    /// Suspended / Waiting for IPC, event, or hardware timer
-    Suspended,
-    /// Resident background service idle waiting for client requests
-    ServiceIdle,
-    /// Hibernated / swapped to flash storage
-    Hibernated,
-    /// Stopped due to faults or budget exhaustion
-    Stopped,
-    /// Terminated, awaiting reap or slot recycle
-    Dead,
+    Dormant = 0,
+    Ready = 1,
+    Running = 2,
+    Suspended = 3,
+    ServiceIdle = 4,
+    Hibernated = 5,
+    Stopped = 6,
+    Dead = 7,
 }
 
 const PROC_STATE_NAMES: &[u8] = b"IDLE\0RDY\0RUN\0SUSP\0IDLE\0SWAP\0STOP\0DEAD\0";
@@ -61,41 +56,6 @@ impl ProcState {
     pub const fn as_short_str(&self) -> &'static str {
         utils::format::nth_cstr(PROC_STATE_NAMES, *self as u8)
     }
-}
-
-/// Process Control Block (PCB)
-///
-/// Designed with fixed geometry and packed fields to fit within minimal SRAM footprint.
-/// Hot `u8`/`u16` scalar fields sit at offsets `0..16` for single-instruction Thumb-1 `imm5` access.
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Pcb {
-    /// Process ID
-    pub pid: Pid,
-    /// Current execution state
-    pub state: ProcState,
-    /// Execution priority band
-    pub priority: crate::sched::Priority,
-    /// Execution classification
-    pub exec_type: ExecType,
-    /// Restart attempts budget remaining before hard quarantine
-    pub restart_budget: u8,
-    /// Ident verification tag (FourCC 'C0DE')
-    pub ident: u16,
-    /// Static or dynamic memory usage watermark
-    pub mem_bytes: u16,
-    /// Size of hibernated compressed swap payload (0 when resident)
-    pub compressed_bytes: u16,
-    /// Measured peak stack cost (in bytes)
-    pub stack_cost: u16,
-    /// Associated App ID in AppRegistry or VTable catalog
-    pub app_id: usize,
-    /// Capability set granted to process
-    pub caps: CapabilitySet,
-    /// Resource telemetry ledger
-    pub ledger: ResourceLedger,
-    /// Human-readable process name (compact 12B POD to minimize PCB static RAM footprint).
-    pub name: PcbName,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,24 +108,41 @@ impl PartialEq<&str> for PcbName {
     }
 }
 
-pub const PCB_IDENT: u16 = 0x06F9;
+/// Exact 32-byte (`2^5`) Process Control Block (`Pcb`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Pcb {
+    pub pid: Pid,
+    pub state: ProcState,
+    pub priority: crate::sched::Priority,
+    pub exec_type: ExecType,
+    pub app_id: u8,
+    pub restart_budget: u8,
+    pub mem_bytes: u16,
+    pub compressed_bytes: u16,
+    pub _pad: u16,
+    pub caps: CapabilitySet,
+    pub health: SlotHealth,
+    pub name: PcbName,
+}
+
+const _: () = assert!(core::mem::size_of::<Pcb>() == 32);
 
 impl Pcb {
     pub const fn empty() -> Self {
         Self {
-            ident: PCB_IDENT,
             pid: Pid(0),
-            name: PcbName::new(),
-            app_id: 0,
             state: ProcState::Dormant,
             priority: crate::sched::Priority::Ui,
             exec_type: ExecType::StaticFirmware,
-            caps: CapabilitySet::empty(),
+            app_id: 0,
+            restart_budget: 3,
             mem_bytes: 0,
             compressed_bytes: 0,
-            restart_budget: 3,
-            stack_cost: 0,
-            ledger: ResourceLedger::new(),
+            _pad: 0,
+            caps: CapabilitySet::empty(),
+            health: SlotHealth::new(),
+            name: PcbName::new(),
         }
     }
 
@@ -180,40 +157,39 @@ impl Pcb {
         let mut s = PcbName::new();
         s.push_str(name);
         Self {
-            ident: PCB_IDENT,
             pid,
-            name: s,
-            app_id,
             state: ProcState::Ready,
             priority,
             exec_type,
-            caps,
+            app_id: app_id as u8,
+            restart_budget: 3,
             mem_bytes: 0,
             compressed_bytes: 0,
-            restart_budget: 3,
-            stack_cost: 0,
-            ledger: ResourceLedger::new(),
+            _pad: 0,
+            caps,
+            health: SlotHealth::new(),
+            name: s,
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn hibernate(&mut self, compressed_size: u16) {
         self.state = ProcState::Hibernated;
         self.compressed_bytes = compressed_size;
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn resume(&mut self) {
         self.state = ProcState::Suspended;
         self.compressed_bytes = 0;
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_hibernated(&self) -> bool {
         self.state == ProcState::Hibernated
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_active(&self) -> bool {
         matches!(
             self.state,
@@ -221,14 +197,14 @@ impl Pcb {
         )
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn set_state(&mut self, state: ProcState) {
         self.state = state;
     }
 }
 
-/// Static, zero-allocation Process Table for up to N concurrent processes.
-pub struct ProcessTable<const N: usize = 8> {
+/// Static, zero-allocation Process Slot Table (`N × 32 B`).
+pub struct ProcessTable<const N: usize = 4> {
     pub slots: [Pcb; N],
     next_pid: u8,
 }
@@ -247,8 +223,6 @@ impl<const N: usize> ProcessTable<N> {
         }
     }
 
-    /// Zero-copy in-place initialization avoiding a ~484 B stack temporary on Cortex-M0+.
-    #[inline(never)]
     pub fn init_in_place(dst: &mut core::mem::MaybeUninit<Self>) {
         let ptr = dst.as_mut_ptr();
         unsafe {
@@ -256,14 +230,12 @@ impl<const N: usize> ProcessTable<N> {
             let tbl = &mut *ptr;
             tbl.next_pid = 1;
             for slot in &mut tbl.slots {
-                slot.ident = PCB_IDENT;
                 slot.priority = crate::sched::Priority::Ui;
                 slot.restart_budget = 3;
             }
         }
     }
 
-    #[inline(never)]
     fn spawn_inner(
         &mut self,
         name: &str,
@@ -273,9 +245,10 @@ impl<const N: usize> ProcessTable<N> {
         caps: CapabilitySet,
         allow_recycle: bool,
     ) -> Result<Pid, ()> {
-        let mut target_idx = if allow_recycle && app_id < 0xF0 {
+        let aid = app_id as u8;
+        let mut target_idx = if allow_recycle && aid < 0xF0 {
             self.slots.iter().position(|s| {
-                s.state != ProcState::Dormant && s.state != ProcState::Dead && s.app_id == app_id
+                s.state != ProcState::Dormant && s.state != ProcState::Dead && s.app_id == aid
             })
         } else {
             None
@@ -289,16 +262,11 @@ impl<const N: usize> ProcessTable<N> {
         }
 
         if target_idx.is_none() && allow_recycle {
-            let mut min_ticks = u32::MAX;
-            for (i, slot) in self.slots.iter().enumerate() {
-                if (slot.state == ProcState::Suspended || slot.state == ProcState::Hibernated)
-                    && slot.app_id < 0xF0
-                    && slot.ledger.cpu_ticks < min_ticks
-                {
-                    min_ticks = slot.ledger.cpu_ticks;
-                    target_idx = Some(i);
-                }
-            }
+            target_idx = self.slots.iter().position(|s| {
+                (s.state == ProcState::Suspended || s.state == ProcState::Hibernated)
+                    && s.app_id < 0xE0
+                    && s.priority != crate::sched::Priority::Safety
+            });
         }
 
         let Some(idx) = target_idx else {
@@ -310,7 +278,6 @@ impl<const N: usize> ProcessTable<N> {
         Ok(pid)
     }
 
-    /// Allocate a PCB slot and assign a new Pid.
     pub fn spawn(
         &mut self,
         name: &str,
@@ -322,9 +289,6 @@ impl<const N: usize> ProcessTable<N> {
         self.spawn_inner(name, app_id, priority, exec_type, caps, false)
     }
 
-    /// Allocate a PCB slot, recycling the least-recently-active suspended process if all slots are full.
-    ///
-    /// Never evicts system-critical daemons (PID <= 4 or Priority::Safety).
     pub fn spawn_or_recycle(
         &mut self,
         name: &str,
@@ -336,13 +300,12 @@ impl<const N: usize> ProcessTable<N> {
         self.spawn_inner(name, app_id, priority, exec_type, caps, true)
     }
 
-    #[inline(never)]
-    fn find_idx(&self, by_app: bool, id: usize) -> Option<usize> {
+    fn find_idx(&self, by_app: bool, id: u8) -> Option<usize> {
         for (i, p) in self.slots.iter().enumerate() {
             let hit = if by_app {
                 p.app_id == id
             } else {
-                p.pid.0 as usize == id
+                p.pid.0 == id
             };
             if hit && p.state != ProcState::Dormant {
                 return Some(i);
@@ -351,7 +314,6 @@ impl<const N: usize> ProcessTable<N> {
         None
     }
 
-    #[inline(never)]
     fn find_idx_name(&self, name: &str) -> Option<usize> {
         for (i, p) in self.slots.iter().enumerate() {
             if p.state != ProcState::Dormant
@@ -363,43 +325,36 @@ impl<const N: usize> ProcessTable<N> {
         None
     }
 
-    /// Locate PCB by Pid.
     pub fn find(&self, pid: Pid) -> Option<&Pcb> {
-        self.find_idx(false, pid.0 as usize)
+        self.find_idx(false, pid.0)
             .map(|i| unsafe { self.slots.get_unchecked(i) })
     }
 
-    /// Locate mutable PCB by Pid.
     pub fn find_mut(&mut self, pid: Pid) -> Option<&mut Pcb> {
-        self.find_idx(false, pid.0 as usize)
+        self.find_idx(false, pid.0)
             .map(|i| unsafe { self.slots.get_unchecked_mut(i) })
     }
 
-    /// Locate PCB by app_id.
     pub fn find_by_app(&self, app_id: usize) -> Option<&Pcb> {
-        self.find_idx(true, app_id)
+        self.find_idx(true, app_id as u8)
             .map(|i| unsafe { self.slots.get_unchecked(i) })
     }
 
-    /// Locate mutable PCB by app_id.
     pub fn find_mut_by_app(&mut self, app_id: usize) -> Option<&mut Pcb> {
-        self.find_idx(true, app_id)
+        self.find_idx(true, app_id as u8)
             .map(|i| unsafe { self.slots.get_unchecked_mut(i) })
     }
 
-    /// Locate PCB by process name (case-insensitive ASCII match).
     pub fn find_by_name(&self, name: &str) -> Option<&Pcb> {
         self.find_idx_name(name)
             .map(|i| unsafe { self.slots.get_unchecked(i) })
     }
 
-    /// Locate mutable PCB by process name (case-insensitive ASCII match).
     pub fn find_mut_by_name(&mut self, name: &str) -> Option<&mut Pcb> {
         self.find_idx_name(name)
             .map(|i| unsafe { self.slots.get_unchecked_mut(i) })
     }
 
-    /// Terminate process and recycle slot.
     pub fn terminate(&mut self, pid: Pid) -> bool {
         if let Some(pcb) = self.find_mut(pid) {
             pcb.state = ProcState::Dead;
@@ -409,7 +364,6 @@ impl<const N: usize> ProcessTable<N> {
         }
     }
 
-    /// Count of currently active (non-dormant, non-dead) processes.
     pub fn active_count(&self) -> usize {
         let mut count = 0;
         for p in &self.slots {
@@ -426,7 +380,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pcb_hibernation_lifecycle() {
+    fn test_pcb_32b_geometry_and_hibernation_lifecycle() {
+        assert_eq!(core::mem::size_of::<Pcb>(), 32);
         let mut pcb = Pcb::new(
             Pid(1),
             "TestApp",
@@ -437,164 +392,21 @@ mod tests {
         );
         assert_eq!(pcb.state, ProcState::Ready);
         assert!(!pcb.is_hibernated());
-        assert_eq!(pcb.compressed_bytes, 0);
-
         pcb.hibernate(42);
-        assert_eq!(pcb.state, ProcState::Hibernated);
         assert!(pcb.is_hibernated());
         assert_eq!(pcb.compressed_bytes, 42);
-
         pcb.resume();
         assert_eq!(pcb.state, ProcState::Suspended);
-        assert!(!pcb.is_hibernated());
         assert_eq!(pcb.compressed_bytes, 0);
     }
 
     #[test]
-    fn test_process_table_daemon_accounting_and_multi_app_concurrency() {
-        let mut table = ProcessTable::<8>::new();
-
-        // 1. Spawn system daemons
-        let pid_kernel = table
-            .spawn(
-                "Kernel",
-                0xF0,
-                crate::sched::Priority::Safety,
-                ExecType::StaticFirmware,
-                CapabilitySet::empty(),
-            )
-            .unwrap();
-        let pid_radio = table
-            .spawn(
-                "Radio",
-                0xF1,
-                crate::sched::Priority::Radio,
-                ExecType::StaticFirmware,
-                CapabilitySet::empty(),
-            )
-            .unwrap();
-        let pid_power = table
-            .spawn(
-                "Power",
-                0xF2,
-                crate::sched::Priority::Safety,
-                ExecType::StaticFirmware,
-                CapabilitySet::empty(),
-            )
-            .unwrap();
-
-        // 2. Spawn foreground App 1 (VFO, app_id 0)
-        let pid_vfo = table
-            .spawn(
-                "Radio",
-                0,
-                crate::sched::Priority::Ui,
-                ExecType::StaticFirmware,
-                CapabilitySet::empty(),
-            )
-            .unwrap();
-
-        assert_eq!(pid_kernel, Pid(1));
-        assert_eq!(pid_radio, Pid(2));
-        assert_eq!(pid_power, Pid(3));
-        assert_eq!(pid_vfo, Pid(4));
-
-        // Mark radio daemon as ServiceIdle
-        table
-            .find_mut(pid_radio)
-            .unwrap()
-            .set_state(ProcState::ServiceIdle);
-
-        // 3. Simulate 5 scheduler ticks: daemons receive background activations
-        for _ in 0..5 {
-            table
-                .find_mut(pid_kernel)
-                .unwrap()
-                .ledger
-                .record_activation();
-            table
-                .find_mut(pid_radio)
-                .unwrap()
-                .ledger
-                .record_activation();
-            table
-                .find_mut(pid_power)
-                .unwrap()
-                .ledger
-                .record_activation();
-            table.find_mut(pid_vfo).unwrap().ledger.record_activation();
-            table.find_mut(pid_vfo).unwrap().ledger.record_event();
-        }
-
-        assert_eq!(table.find(pid_kernel).unwrap().ledger.cpu_ticks, 5);
-        assert_eq!(table.find(pid_radio).unwrap().ledger.cpu_ticks, 5);
-        assert_eq!(table.find(pid_power).unwrap().ledger.cpu_ticks, 5);
-        assert_eq!(table.find(pid_vfo).unwrap().ledger.cpu_ticks, 5);
-        assert_eq!(table.find(pid_vfo).unwrap().ledger.ipc_events, 5);
-
-        // 4. Switch foreground app from VFO (0) to Explorer (app_id 10)
-        table
-            .find_mut(pid_vfo)
-            .unwrap()
-            .set_state(ProcState::Suspended);
-        let pid_explorer = table
-            .spawn(
-                "Explorer",
-                10,
-                crate::sched::Priority::Ui,
-                ExecType::StaticFirmware,
-                CapabilitySet::empty(),
-            )
-            .unwrap();
-        table
-            .find_mut(pid_explorer)
-            .unwrap()
-            .set_state(ProcState::Running);
-
-        // 5. Simulate 3 more background ticks while Explorer is active
-        for _ in 0..3 {
-            table
-                .find_mut(pid_kernel)
-                .unwrap()
-                .ledger
-                .record_activation();
-            table
-                .find_mut(pid_radio)
-                .unwrap()
-                .ledger
-                .record_activation();
-            table
-                .find_mut(pid_power)
-                .unwrap()
-                .ledger
-                .record_activation();
-            table
-                .find_mut(pid_explorer)
-                .unwrap()
-                .ledger
-                .record_activation();
-        }
-
-        // Background daemons continued running concurrently!
-        assert_eq!(table.find(pid_radio).unwrap().ledger.cpu_ticks, 8);
-        assert_eq!(table.find(pid_radio).unwrap().state, ProcState::ServiceIdle);
-        assert_eq!(table.find(pid_kernel).unwrap().ledger.cpu_ticks, 8);
-        // VFO state was preserved in Suspended state
-        assert_eq!(table.find(pid_vfo).unwrap().state, ProcState::Suspended);
-        assert_eq!(table.find(pid_vfo).unwrap().ledger.cpu_ticks, 5);
-        // Explorer accumulated 3 activations
-        assert_eq!(table.find(pid_explorer).unwrap().ledger.cpu_ticks, 3);
-    }
-
-    #[test]
-    fn test_process_table_slot_recycling_under_saturation() {
+    fn test_process_table_slot_recycling_and_health() {
         let mut table = ProcessTable::<4>::new();
-
-        // Fill all 4 slots: 1 daemon + 3 user apps
         let pid1 = table
             .spawn(
-                "Sys",
-                1,
+                "Home",
+                0,
                 crate::sched::Priority::Safety,
                 ExecType::StaticFirmware,
                 CapabilitySet::empty(),
@@ -605,77 +417,62 @@ mod tests {
                 "AppA",
                 2,
                 crate::sched::Priority::Ui,
-                ExecType::StaticFirmware,
+                ExecType::RelocatableNative,
                 CapabilitySet::empty(),
             )
             .unwrap();
         let pid3 = table
             .spawn(
-                "AppB",
-                3,
-                crate::sched::Priority::Ui,
-                ExecType::StaticFirmware,
+                "SvcA",
+                0xE0,
+                crate::sched::Priority::Radio,
+                ExecType::RelocatableNative,
                 CapabilitySet::empty(),
             )
             .unwrap();
         let pid4 = table
             .spawn(
-                "AppC",
-                4,
-                crate::sched::Priority::Ui,
-                ExecType::StaticFirmware,
+                "SvcB",
+                0xE1,
+                crate::sched::Priority::Idle,
+                ExecType::RelocatableNative,
                 CapabilitySet::empty(),
             )
             .unwrap();
 
-        // Mark AppA, AppB, AppC suspended
         table
             .find_mut(pid2)
             .unwrap()
             .set_state(ProcState::Suspended);
-        table.find_mut(pid2).unwrap().ledger.cpu_ticks = 10;
-        table
-            .find_mut(pid3)
-            .unwrap()
-            .set_state(ProcState::Suspended);
-        table.find_mut(pid3).unwrap().ledger.cpu_ticks = 2; // Lowest ticks -> should be victim
-        table
-            .find_mut(pid4)
-            .unwrap()
-            .set_state(ProcState::Suspended);
-        table.find_mut(pid4).unwrap().ledger.cpu_ticks = 8;
+        table.find_mut(pid2).unwrap().health.record_page_fault();
+        table.find_mut(pid2).unwrap().health.record_stack_depth(500);
+        assert_eq!(table.find(pid2).unwrap().health.page_faults, 1);
+        assert!(table.find(pid2).unwrap().health.stack_watermark_bytes() >= 500);
 
-        // Normal spawn fails because all slots are occupied
         assert!(
             table
                 .spawn(
-                    "AppD",
-                    5,
+                    "AppB",
+                    3,
                     crate::sched::Priority::Ui,
-                    ExecType::StaticFirmware,
+                    ExecType::RelocatableNative,
                     CapabilitySet::empty()
                 )
                 .is_err()
         );
-
-        // spawn_or_recycle succeeds by recycling AppB (lowest CPU ticks)
         let pid_new = table
             .spawn_or_recycle(
-                "AppD",
-                5,
+                "AppB",
+                3,
                 crate::sched::Priority::Ui,
-                ExecType::StaticFirmware,
+                ExecType::RelocatableNative,
                 CapabilitySet::empty(),
             )
             .unwrap();
-        assert_eq!(pid_new, Pid(5));
-
-        // Daemon and other apps preserved, AppB replaced by AppD
         assert!(table.find(pid1).is_some());
-        assert!(table.find(pid2).is_some());
-        assert!(table.find(pid3).is_none()); // Evicted
+        assert!(table.find(pid2).is_none());
+        assert!(table.find(pid3).is_some());
         assert!(table.find(pid4).is_some());
-        assert_eq!(table.find(pid_new).unwrap().name.as_str(), "AppD");
-        assert_eq!(table.find(pid_new).unwrap().app_id, 5);
+        assert_eq!(table.find(pid_new).unwrap().name.as_str(), "AppB");
     }
 }

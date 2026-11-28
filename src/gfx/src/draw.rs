@@ -3,7 +3,6 @@
 use crate::{Canvas, Color};
 
 /// Draw line using Bresenham algorithm
-#[inline(never)]
 pub fn draw_line(canvas: &mut Canvas, mut x0: i16, mut y0: i16, x1: i16, y1: i16, color: Color) {
     let dx = (x1 - x0).abs();
     let sx = if x0 < x1 { 1 } else { -1 };
@@ -31,7 +30,6 @@ pub fn draw_line(canvas: &mut Canvas, mut x0: i16, mut y0: i16, x1: i16, y1: i16
 // Circle & rounded rect primitives removed to save 1.3KB flash
 
 /// Draw horizontal dotted line for grid or graph dividers
-#[inline(never)]
 pub fn draw_dotted_line_h(canvas: &mut Canvas, x0: i16, x1: i16, y: i16, step: u8, color: Color) {
     if y < 0 || y >= canvas.height() as i16 {
         return;
@@ -48,7 +46,6 @@ pub fn draw_dotted_line_h(canvas: &mut Canvas, x0: i16, x1: i16, y: i16, step: u
 }
 
 /// Draw 1-bit monochrome bitmap.
-#[inline(never)]
 pub fn draw_bitmap(
     canvas: &mut Canvas,
     x: i16,
@@ -66,34 +63,9 @@ pub fn draw_bitmap(
 }
 
 /// Decompress a 128x64 PackBits RLE page-packed bitmap into `canvas`.
-#[inline(never)]
 pub fn draw_rle_splash(canvas: &mut Canvas, rle: &[u8]) {
     canvas.clear();
-    let flat = canvas.buffer_flat_mut();
-    let mut idx = 0usize;
-    let mut i = 0usize;
-    while i < rle.len() && idx < 1024 {
-        let hdr = rle[i] as i8;
-        i += 1;
-        if hdr >= 0 {
-            let mut count = (hdr as usize) + 1;
-            while count > 0 && i < rle.len() && idx < 1024 {
-                flat[idx] = rle[i];
-                idx += 1;
-                i += 1;
-                count -= 1;
-            }
-        } else if hdr != -128 && i < rle.len() {
-            let mut count = (1 - hdr as i16) as usize;
-            let val = rle[i];
-            i += 1;
-            while count > 0 && idx < 1024 {
-                flat[idx] = val;
-                idx += 1;
-                count -= 1;
-            }
-        }
-    }
+    utils::codec::packbits_decompress_clamped(rle, canvas.buffer_flat_mut());
     canvas.sync_planes();
 }
 

@@ -16,7 +16,6 @@ fn is_plugged_in(hw: &SystemHardware) -> bool {
     is_usb_plugged || crate::power_service().is_charging()
 }
 
-#[inline(never)]
 fn drain_keypad_matrix(hw: &mut SystemHardware) {
     while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
         py32_hal::wdt::Watchdog::feed();
@@ -50,7 +49,6 @@ fn next_stop_sleep_ticks(exit_held: bool, hold_steps: &mut u8) -> Option<u16> {
 /// Latched `EXTI4_15` pending mask captured inside ISR for STOP wakeup dispatch.
 pub static WAKE_EXTI_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-#[inline(never)]
 fn suspend_peripherals(hw: &mut SystemHardware, turn_off_lcd: bool) {
     hw.backlight.turn_off();
     if turn_off_lcd {
@@ -74,7 +72,6 @@ fn suspend_peripherals(hw: &mut SystemHardware, turn_off_lcd: bool) {
     hw.usb.disconnect_for_sleep();
 }
 
-#[inline(never)]
 fn resume_peripherals(hw: &mut SystemHardware) {
     hw.radio.set_status_led(bsp::StatusLed::Off);
     #[cfg(feature = "filesystem")]
@@ -87,7 +84,6 @@ fn resume_peripherals(hw: &mut SystemHardware) {
     hw.usb.init();
 }
 
-#[inline(never)]
 fn finish_wake_radio(hw: &mut SystemHardware) {
     hw.radio.wake();
     #[cfg(feature = "radio")]
@@ -113,7 +109,10 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
     // 1. Play gentle descending power-down cue and drain before clock shutdown
     let tone_seq = &mut crate::radio_state().tone_seq;
-    tone_seq.enqueue(&mut hw.radio, MelodyEngine::dialog_notes(DialogSoundType::Lock));
+    tone_seq.enqueue(
+        &mut hw.radio,
+        MelodyEngine::dialog_notes(DialogSoundType::Lock),
+    );
     tone_seq.drain_blocking(&mut hw.radio);
 
     // 2. Shut down power-hungry subsystems and enter chip standby states
@@ -154,9 +153,10 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     finish_wake_radio(hw);
 
     // Sound unlock confirmation chime non-blockingly with display already active and responsive
-    crate::radio_state()
-        .tone_seq
-        .enqueue(&mut hw.radio, MelodyEngine::dialog_notes(DialogSoundType::Unlock));
+    crate::radio_state().tone_seq.enqueue(
+        &mut hw.radio,
+        MelodyEngine::dialog_notes(DialogSoundType::Unlock),
+    );
 
     // Ensure matrix is clean before returning to event dispatch
     drain_keypad_matrix(hw);
@@ -187,7 +187,6 @@ fn run_stop_sleep_cycle() {
     py32_hal::exti::clear_pending_mask(wakeup_mask);
 
     use py32_hal::pac::Interrupt;
-    #[inline(never)]
     fn wake_irqs(op: u8) {
         for irq in [Interrupt::EXTI4_15 as u8, Interrupt::TIM6_LPTIM1_DAC as u8] {
             unsafe {
@@ -297,7 +296,6 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
     finish_wake_radio(hw);
 }
 
-#[inline(never)]
 pub(super) fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     // Catch silent Cortex-M0+ stack exhaustion before it corrupts `.bss` / `RADIO_STATE`.
     // If a KRX guest is active (even if an overflow clobbered `NATIVE_SLOT.is_loaded`),

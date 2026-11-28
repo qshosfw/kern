@@ -69,7 +69,6 @@ pub(super) fn is_remote_control_active(hw: &SystemHardware, now: u32) -> bool {
 }
 
 /// Failsafe: unkey a wire-keyed transmitter whose controlling link went silent.
-#[inline(never)]
 pub(super) fn enforce_tx_failsafe(hw: &mut SystemHardware, now: u32) {
     if !WIRE_TX_ACTIVE.load(Ordering::Relaxed) {
         return;

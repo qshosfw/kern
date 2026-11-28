@@ -2,6 +2,35 @@
 
 use pac::dma;
 
+/// PY32F071 `SYSCFG_CFGR3` / `SYSCFG_CFGR4` 6-bit DMA peripheral request IDs.
+pub mod req {
+    pub const ADC1: u8 = 0x00;
+    pub const SPI1_RX: u8 = 0x03;
+    pub const SPI1_TX: u8 = 0x04;
+    pub const SPI2_RX: u8 = 0x05;
+    pub const SPI2_TX: u8 = 0x06;
+    pub const USART1_RX: u8 = 0x07;
+    pub const USART1_TX: u8 = 0x08;
+}
+
+/// Fixed DMA1 channel assignments across the KERN BSP:
+/// - Ch 1: `ADC1` baseband / telemetry capture
+/// - Ch 2: `SPI1_TX` (`ST7565` LCD strip/page burst)
+/// - Ch 3: `SPI2_RX` (`PY25Q16` 24 MHz NOR Flash read burst)
+/// - Ch 4: `SPI2_TX` (`PY25Q16` 24 MHz NOR Flash write / dummy-clock burst)
+/// - Ch 6: `USART1_RX` (`256 B` hardware circular serial/RigWire RX ring)
+pub const CH_ADC1: u8 = 1;
+pub const CH_SPI1_TX: u8 = 2;
+pub const CH_SPI2_RX: u8 = 3;
+pub const CH_SPI2_TX: u8 = 4;
+pub const CH_USART1_RX: u8 = 6;
+
+/// Read live remaining transfer count (`DMA1_CNDTRx`) for circular DMA ring head calculation.
+#[inline(always)]
+pub fn remaining_count(channel_idx: u8) -> u16 {
+    unsafe { dma::cndtr(channel_idx).read_volatile() as u16 }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     MemToPeriph,

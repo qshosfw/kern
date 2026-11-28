@@ -6,7 +6,7 @@
 
 pub use kernel::service::{
     ATTR_COMPRESSED, ATTR_ENCRYPTED, ATTR_HIDDEN, ATTR_READ_ONLY, ATTR_SYSTEM, ATTR_UNENCRYPTED,
-    DirEntryInfo, FileAttributes, StorageError,
+    FileAttributes, StorageError,
 };
 use kernfs::{BlockDevice, FsError, KernFS};
 
@@ -97,10 +97,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.session_unlocked
     }
 
-    pub fn stats(&self) -> kernfs::FsStats {
-        self.fs.stats()
-    }
-
     /// Stream directory entries `(name, size, permission, is_dir)` without buffering.
     #[inline(always)]
     pub fn for_each_entry<F: FnMut(&str, usize, u8, bool)>(
@@ -129,7 +125,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         }
     }
 
-    #[inline(never)]
     fn check_writable(&mut self, path: &str) -> Result<u8, StorageError> {
         let perm = self.fs.get_permission(path).unwrap_or(0);
         if (perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
@@ -139,7 +134,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     #[cfg(feature = "secure_fs")]
-    #[inline(never)]
     fn write_encrypted(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         if !self.session_unlocked {
             return Err(StorageError::EncryptedNoKey);
@@ -178,11 +172,23 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 }
 
-impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
-    pub fn exists(&mut self, path: &str) -> bool {
-        self.fs.exists(path)
+impl<'a, D: BlockDevice> core::ops::Deref for FileSystemDriver<'a, D> {
+    type Target = KernFS<'a, D>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.fs
     }
+}
 
+impl<'a, D: BlockDevice> core::ops::DerefMut for FileSystemDriver<'a, D> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.fs
+    }
+}
+
+impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
+    #[inline(never)]
     pub fn remove(&mut self, path: &str) -> Result<(), StorageError> {
         self.check_writable(path)?;
         self.fs.remove(path).map_err(Self::map_error)
@@ -196,6 +202,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.file_size(path).map_err(Self::map_error)
     }
 
+    #[inline(never)]
     pub fn create_dir(&mut self, path: &str) -> Result<(), StorageError> {
         self.fs.create_dir(path).map_err(Self::map_error)
     }
@@ -214,7 +221,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.write_file(path, slice)
     }
 
-    #[inline(never)]
     pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
         #[cfg(feature = "secure_fs")]
         {
@@ -259,7 +265,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         }
     }
 
-    #[inline(never)]
     pub fn read_file_at(
         &mut self,
         path: &str,
@@ -272,7 +277,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             .map_err(Self::map_error)
     }
 
-    #[inline(never)]
     pub fn lookup_ino(&mut self, path: &str) -> Result<u16, StorageError> {
         if (self.fs.get_permission(path).map_err(Self::map_error)? & ATTR_ENCRYPTED) != 0 {
             return Err(StorageError::EncryptedNoKey);
@@ -292,7 +296,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             .map_err(Self::map_error)
     }
 
-    #[inline(never)]
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         let perm = self.check_writable(path)?;
         if (perm & ATTR_ENCRYPTED) != 0 {
@@ -329,6 +332,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         Ok(FileAttributes { permission: perm })
     }
 
+    #[inline(never)]
     pub fn set_attributes(
         &mut self,
         path: &str,
@@ -346,38 +350,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             .map_err(Self::map_error)
     }
 
-    pub fn count_encrypted_in_dir(&mut self, dir_path: &str) -> usize {
-        let mut count = 0usize;
-        let _ = self.fs.list_dir(dir_path, |_path, _size, perm, is_dir| {
-            if !is_dir && (perm & ATTR_ENCRYPTED) != 0 {
-                count += 1;
-            }
-        });
-        count
-    }
-
-    pub fn list_dir(
-        &mut self,
-        dir_path: &str,
-        out_entries: &mut [DirEntryInfo],
-    ) -> Result<usize, StorageError> {
-        let mut count = 0;
-        self.fs
-            .list_dir(dir_path, |path, size, perm, is_dir| {
-                if count < out_entries.len() {
-                    let entry = &mut out_entries[count];
-                    entry.path.clear();
-                    let _ = entry.path.push_str(path);
-                    entry.size = size;
-                    entry.is_dir = is_dir;
-                    entry.permission = perm;
-                    count += 1;
-                }
-            })
-            .map_err(Self::map_error)?;
-        Ok(count)
-    }
-
+    #[inline(never)]
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), StorageError> {
         let perm = self.fs.get_permission(old_path).map_err(Self::map_error)?;
         if (perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0
@@ -388,59 +361,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         }
         self.check_writable(new_path)?;
         self.fs.rename(old_path, new_path).map_err(Self::map_error)
-    }
-}
-
-impl<'a, D: BlockDevice> kernel::service::StorageService for FileSystemDriver<'a, D> {
-    fn exists(&mut self, path: &str) -> bool {
-        self.exists(path)
-    }
-    fn file_size(&mut self, path: &str) -> Result<usize, StorageError> {
-        self.file_size(path)
-    }
-    fn remove(&mut self, path: &str) -> Result<(), StorageError> {
-        self.remove(path)
-    }
-    fn create_dir(&mut self, path: &str) -> Result<(), StorageError> {
-        self.create_dir(path)
-    }
-    fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
-        self.read_file(path, buf)
-    }
-    fn read_file_at(
-        &mut self,
-        path: &str,
-        offset: usize,
-        buf: &mut [u8],
-    ) -> Result<usize, StorageError> {
-        self.read_file_at(path, offset, buf)
-    }
-    fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
-        self.write_file(path, data)
-    }
-    fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError> {
-        self.get_attributes(path)
-    }
-    fn set_attributes(&mut self, path: &str, attrs: FileAttributes) -> Result<(), StorageError> {
-        self.set_attributes(path, attrs)
-    }
-    fn list_dir(
-        &mut self,
-        dir_path: &str,
-        out_entries: &mut [DirEntryInfo],
-    ) -> Result<usize, StorageError> {
-        self.list_dir(dir_path, out_entries)
-    }
-    fn stats(&mut self) -> Option<kernel::service::StorageStats> {
-        let s = self.fs.stats();
-        Some(kernel::service::StorageStats {
-            active_files: s.active_files,
-            used_sectors: s.used_sectors,
-            free_sectors: s.free_sectors,
-            deleted_sectors: s.deleted_sectors,
-            wear_cycles: s.wear_cycles,
-            total_sectors: s.total_sectors,
-        })
     }
 }
 
@@ -517,15 +437,13 @@ mod tests {
                 drv.set_attributes(bad, FileAttributes { permission: 0 }),
                 Err(StorageError::InvalidPath)
             );
-            let mut entries = [const { DirEntryInfo::empty() }; 2];
             assert_eq!(
-                drv.list_dir(bad, &mut entries),
+                drv.for_each_entry(bad, |_, _, _, _| {}),
                 Err(StorageError::InvalidPath)
             );
         }
 
-        let mut entries = [const { DirEntryInfo::empty() }; 2];
-        assert!(drv.list_dir("/", &mut entries).is_ok());
+        assert!(drv.for_each_entry("/", |_, _, _, _| {}).is_ok());
     }
 
     #[test]

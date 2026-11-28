@@ -164,7 +164,6 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
     }
 
     /// Configure memory layout in-place with optional overlay window (`overlay_size == 0` disables overlay).
-    #[inline(never)]
     pub fn init_regions(
         &mut self,
         code_vma: u32,

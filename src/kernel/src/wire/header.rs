@@ -20,6 +20,9 @@ pub const FLAG_RESP: u8 = 1 << 7;
 
 pub const HEADER_LEN: usize = 8;
 pub const CRC_LEN: usize = 2;
+pub const AUTH_TAG_LEN: usize = 16;
+/// Maximum payload bytes (`8 B` transfer/stream subheader + `256 B` full KernFS flash page).
+pub const MAX_PAYLOAD_LEN: usize = 264;
 pub const MIN_RECORD_LEN: usize = HEADER_LEN + CRC_LEN; // 10 bytes
 
 /// RigWire v2 Core Channels (`0x00..=0x0F` reserved, `0x10..=0xEF` dynamic nodes).

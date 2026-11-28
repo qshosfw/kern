@@ -19,12 +19,10 @@ pub use power::WAKE_EXTI_FLAGS;
 pub use remote::{note_wire_activity, set_wire_tx};
 
 use crate::hardware::SystemHardware;
-use crate::orchestrator::record_proc_activation;
 use crate::services::power::PowerService;
 use kernel::event::Event;
 use py32_hal::adc::Adc;
 
-#[inline(never)]
 fn wake_and_notify_activity(hw: &mut SystemHardware) {
     hw.backlight.wake();
     crate::power_service().notify_activity();
@@ -66,13 +64,14 @@ pub(crate) fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render:
 
     #[cfg(all(feature = "wire", any(feature = "uart", feature = "usb_cdc")))]
     for _ in 0..4 {
-        let Some((header, _raw_len)) = hw.wire.poll(now) else {
+        let Some(header) = hw.wire.poll() else {
             break;
         };
         note_wire_activity(now);
-        let is_passive_read = header.channel == kernel::wire::CH_CONTROL
-            && (header.op == kernel::wire::OP_HANDLE_GET
-                || header.op == kernel::wire::OP_HANDLE_STREAM);
+        let is_passive_read = header.channel == kernel::wire::CH_CORE
+            || (header.channel == kernel::wire::CH_CONTROL
+                && (header.op == kernel::wire::OP_HANDLE_GET
+                    || header.op == kernel::wire::OP_HANDLE_STREAM));
         if !is_passive_read {
             wake_and_notify_activity(hw);
             *dirty_render = true;
@@ -89,7 +88,6 @@ pub(crate) fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render:
 
 #[inline(never)]
 fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool) {
-    record_proc_activation(0xF2);
     crate::services::telemetry::sample_battery_and_system(adc, hw.audio.is_active());
 
     let pwr = crate::power_service();
@@ -135,7 +133,6 @@ fn should_keep_awake_on_keypad(
 
 #[inline(never)]
 fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
-    record_proc_activation(0xF3);
     hw.key_scanner.scan_with_dt(dt);
     let admit = admits_physical_input();
     let release_guard = admit && headless::waiting_escape_release(hw.key_scanner.is_any_key_down());
@@ -181,7 +178,6 @@ fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
     }
 }
 
-#[inline(never)]
 fn timer_due(last: &mut u32, now: u32, period: u32) -> Option<u32> {
     let dt = now.wrapping_sub(*last);
     if dt >= period {
@@ -272,9 +268,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         // High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
         #[cfg(feature = "radio")]
-        if timer_due(&mut last_radio_tick, now, 10).is_some()
-            && !crate::orchestrator::is_proc_paused(0xF1)
-        {
+        if timer_due(&mut last_radio_tick, now, 10).is_some() {
             hw.tick_radio_services();
         }
 
@@ -321,10 +315,9 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         let ui_tick_interval = if is_ui_live { 50u32 } else { 100u32 };
 
         if let Some(delta) = timer_due(&mut last_ui_tick, now, ui_tick_interval) {
-            record_proc_activation(0xF0);
             hw.backlight.tick(delta as u16);
             hw.audio.tick(delta as u16);
-            gfx::gui::repeater::set_tick_dt_ms(delta as u16);
+            gfx::views::repeater::set_tick_dt_ms(delta as u16);
             enqueue_event(Event::Tick);
         }
 
@@ -345,9 +338,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         } else {
             1000u32
         };
-        if timer_due(&mut last_battery_tick, now, batt_interval).is_some()
-            && !crate::orchestrator::is_proc_paused(0xF2)
-        {
+        if timer_due(&mut last_battery_tick, now, batt_interval).is_some() {
             poll_battery_tick(hw, &adc, &mut dirty_render);
         }
 
@@ -378,16 +369,12 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             continue;
         }
 
-        #[cfg(feature = "animations")]
-        if is_anim {
-            continue;
-        }
-
         #[cfg(feature = "grayscale")]
         if is_display_awake && crate::master_config_ref().display.shading_mode == 0 {
             continue;
         }
 
+        // SysTick (1 ms) and peripheral IRQs wake `wfi()` deterministically even during UI animations.
         cortex_m::asm::wfi();
     }
 }

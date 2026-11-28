@@ -3,7 +3,6 @@
 //! Provides generic `SecretBuf<const N: usize>` that explicitly overwrites contents with zeroes
 //! when dropped, using `core::ptr::write_volatile` to prevent compiler optimization.
 
-#[inline(never)]
 pub fn zeroize_bytes(bytes: &mut [u8]) {
     for byte in bytes.iter_mut() {
         unsafe {

@@ -4,8 +4,6 @@
 //! Concrete implementations are provided by drivers or system subsystems, while
 //! applications, framework components, and loadable modules consume these contracts.
 
-use heapless::String;
-
 pub mod radio;
 pub use radio::*;
 
@@ -160,94 +158,6 @@ pub struct FileAttributes {
     pub permission: u8,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct DirEntryInfo {
-    pub path: String<64>,
-    pub size: usize,
-    pub is_dir: bool,
-    pub permission: u8,
-}
-
-impl DirEntryInfo {
-    pub const fn empty() -> Self {
-        Self {
-            path: String::new(),
-            size: 0,
-            is_dir: false,
-            permission: 0,
-        }
-    }
-}
-
-/// Filesystem usage statistics descriptor.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct StorageStats {
-    pub active_files: u16,
-    pub used_sectors: u16,
-    pub free_sectors: u16,
-    pub deleted_sectors: u16,
-    pub wear_cycles: u32,
-    pub total_sectors: u16,
-}
-
-/// Declarative interface for non-volatile storage and filesystem access.
-pub trait StorageService {
-    fn exists(&mut self, path: &str) -> bool;
-    fn file_size(&mut self, path: &str) -> Result<usize, StorageError>;
-    fn remove(&mut self, path: &str) -> Result<(), StorageError>;
-    fn create_dir(&mut self, path: &str) -> Result<(), StorageError>;
-
-    fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError>;
-    fn read_file_at(
-        &mut self,
-        path: &str,
-        offset: usize,
-        buf: &mut [u8],
-    ) -> Result<usize, StorageError> {
-        if offset == 0 {
-            self.read_file(path, buf)
-        } else {
-            Err(StorageError::IoError)
-        }
-    }
-    fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError>;
-
-    fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError>;
-    fn set_attributes(&mut self, path: &str, attrs: FileAttributes) -> Result<(), StorageError>;
-
-    fn rename(&mut self, _old_path: &str, _new_path: &str) -> Result<(), StorageError> {
-        Err(StorageError::IoError)
-    }
-
-    fn list_dir(
-        &mut self,
-        _dir_path: &str,
-        _out_entries: &mut [DirEntryInfo],
-    ) -> Result<usize, StorageError> {
-        Ok(0)
-    }
-
-    fn stats(&mut self) -> Option<StorageStats> {
-        None
-    }
-}
-
-pub trait StorageExt: StorageService {
-    fn read_struct<T: Copy>(&mut self, path: &str, out: &mut T) -> Result<usize, StorageError> {
-        let size = core::mem::size_of::<T>();
-        let slice = unsafe { core::slice::from_raw_parts_mut(out as *mut T as *mut u8, size) };
-        self.read_file(path, slice)
-    }
-
-    fn write_struct<T: Copy>(&mut self, path: &str, data: &T) -> Result<(), StorageError> {
-        let size = core::mem::size_of::<T>();
-        let slice = unsafe { core::slice::from_raw_parts(data as *const T as *const u8, size) };
-        self.write_file(path, slice)
-    }
-}
-
-impl<T: StorageService + ?Sized> StorageExt for T {}
-
 // ── Serial & USB Communications ─────────────────────────────────────────────
 
 /// Declarative interface for USB device connection and status.
@@ -377,9 +287,6 @@ pub trait SerialPort {
     /// Drain TX hardware FIFO / endpoint before baud changes, sleep, or system reset.
     fn flush(&mut self) {}
 }
-
-/// Declarative interface for UART/Serial communications.
-pub trait UartService: SerialPort {}
 
 impl<T: SerialPort + ?Sized> SerialPort for &mut T {
     fn write(&mut self, data: &[u8]) {

@@ -35,6 +35,8 @@ pub struct Canvas {
     pub buffer: [[u8; LCD_WIDTH]; 8],
     #[cfg(feature = "grayscale")]
     pub buffer_lo: [[u8; LCD_WIDTH]; 8],
+    pub dirty_x0: [u8; 8],
+    pub dirty_x1: [u8; 8],
     pub dirty: u8,
 }
 
@@ -44,7 +46,25 @@ impl Canvas {
             buffer: [[0; LCD_WIDTH]; 8],
             #[cfg(feature = "grayscale")]
             buffer_lo: [[0; LCD_WIDTH]; 8],
+            dirty_x0: [0; 8],
+            dirty_x1: [0; 8],
             dirty: 0,
+        }
+    }
+
+    pub fn mark_span(&mut self, page: usize, x0: u8, x1: u8) {
+        let bit = 1u8 << page;
+        if (self.dirty & bit) == 0 {
+            self.dirty |= bit;
+            self.dirty_x0[page] = x0;
+            self.dirty_x1[page] = x1;
+        } else {
+            if x0 < self.dirty_x0[page] {
+                self.dirty_x0[page] = x0;
+            }
+            if x1 > self.dirty_x1[page] {
+                self.dirty_x1[page] = x1;
+            }
         }
     }
 
@@ -58,22 +78,22 @@ impl Canvas {
         LCD_HEIGHT as u8
     }
 
-    #[inline(never)]
     pub fn clear(&mut self) {
         unsafe {
             core::ptr::write_bytes(self.buffer.as_mut_ptr() as *mut u8, 0, LCD_WIDTH * 8);
             #[cfg(feature = "grayscale")]
             core::ptr::write_bytes(self.buffer_lo.as_mut_ptr() as *mut u8, 0, LCD_WIDTH * 8);
         }
-        self.dirty = 0xFF;
+        self.mark_all_dirty();
     }
 
     #[inline(always)]
     pub fn mark_all_dirty(&mut self) {
         self.dirty = 0xFF;
+        self.dirty_x0 = [0; 8];
+        self.dirty_x1 = [127; 8];
     }
 
-    #[inline(never)]
     pub fn draw_pixel(&mut self, x: u8, y: u8, color: Color) {
         if (x as usize) < LCD_WIDTH && (y as usize) < LCD_HEIGHT {
             let page = (y >> 3) as usize;
@@ -127,7 +147,7 @@ impl Canvas {
                     }
                 }
             }
-            self.dirty |= 1 << page;
+            self.mark_span(page, x, x);
         }
     }
 
@@ -169,7 +189,6 @@ impl Canvas {
         self.fill_rect_i(x, y, 1, len, color);
     }
 
-    #[inline(never)]
     pub fn draw_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
         if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
             return;
@@ -180,7 +199,6 @@ impl Canvas {
         self.draw_vertical_line_i(x + w - 1, y, h, color);
     }
 
-    #[inline(never)]
     pub fn clear_corners_i(&mut self, x: i16, y: i16, w: i16, h: i16) {
         if w >= 2 && h >= 2 {
             let x1 = x + w - 1;
@@ -191,7 +209,6 @@ impl Canvas {
         }
     }
 
-    #[inline(never)]
     fn clamp_rect_i(x: i16, y: i16, w: i16, h: i16) -> u32 {
         if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
             return 0;
@@ -210,7 +227,6 @@ impl Canvas {
         }
     }
 
-    #[inline(never)]
     pub fn fill_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
         let r = Self::clamp_rect_i(x, y, w, h);
         if r != 0 {
@@ -224,7 +240,6 @@ impl Canvas {
         }
     }
 
-    #[inline(never)]
     pub fn fill_rect_dither_i(&mut self, x: i16, y: i16, w: i16, h: i16, progress: u8) {
         if progress != 0 {
             let r = Self::clamp_rect_i(x, y, w, h);
@@ -324,7 +339,7 @@ impl Canvas {
                     };
                 }
             }
-            self.dirty |= 1 << page;
+            self.mark_span(page, x, (end_x - 1) as u8);
         }
     }
 
@@ -332,15 +347,15 @@ impl Canvas {
     pub fn write_page_byte(&mut self, page: usize, col: usize, byte: u8) {
         if page < 8 && col < LCD_WIDTH {
             self.buffer[page][col] = byte;
-            self.dirty |= 1 << page;
+            self.mark_span(page, col as u8, col as u8);
         }
     }
 
     pub fn load_page_slice(&mut self, page: usize, data: &[u8]) {
-        if page < 8 {
+        if page < 8 && !data.is_empty() {
             let len = data.len().min(LCD_WIDTH);
             self.buffer[page][..len].copy_from_slice(&data[..len]);
-            self.dirty |= 1 << page;
+            self.mark_span(page, 0, (len - 1) as u8);
         }
     }
 
@@ -354,7 +369,6 @@ impl Canvas {
         }
     }
 
-    #[inline(never)]
     pub fn load_raw_vram(&mut self, data: &[u8]) {
         let n = data.len().min(LCD_WIDTH * 8);
         unsafe {
@@ -370,14 +384,13 @@ impl Canvas {
 
     #[inline(always)]
     pub fn buffer_flat_mut(&mut self) -> &mut [u8; 1024] {
-        self.dirty = 0xFF;
+        self.mark_all_dirty();
         unsafe { &mut *(self.buffer.as_mut_ptr() as *mut [u8; 1024]) }
     }
 
     pub const BAYER_4X4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
     /// Precompute 8-pixel-tall Bayer 4x4 column bitmasks for `threshold < progress`.
-    #[inline(never)]
     fn bayer_col_masks(progress: u8) -> [u8; 4] {
         let mut masks = [0u8; 4];
         for (c, mask) in masks.iter_mut().enumerate() {
@@ -393,7 +406,6 @@ impl Canvas {
 
     /// Fill rectangle using progressive Bayer 4x4 matrix dithering.
     /// `progress` ranges from 0 (empty) to 16 (100% solid fill).
-    #[inline(never)]
     pub fn fill_rect_dither(&mut self, x: u8, y: u8, width: u8, height: u8, progress: u8) {
         if progress == 0
             || width == 0
@@ -426,11 +438,10 @@ impl Canvas {
                     *row.get_unchecked_mut(col) |= *masks.get_unchecked(col & 3) & y_mask;
                 }
             }
-            self.dirty |= 1 << page;
+            self.mark_span(page, x, (end_x - 1) as u8);
         }
     }
 
-    #[inline(never)]
     fn apply_word_mask(&mut self, progress: u8, invert: bool) {
         let mask_word = {
             let w = u32::from_ne_bytes(Self::bayer_col_masks(progress));
@@ -461,16 +472,15 @@ impl Canvas {
                 self.apply_word_mask(progress, false);
             }
             self.sync_planes();
-            self.dirty = 0xFF;
+            self.mark_all_dirty();
         }
     }
 
     /// Dim `start_y..64` with an idempotent 50% dim + 12.5% diagonal micro-dot stipple
     /// to visually recess background content behind foreground modals and dialogs.
-    #[inline(never)]
     pub fn dim_backdrop(&mut self, start_y: u8) {
-        const DIM_LUT: [u8; 4] = [0x55, 0xAA, 0x55, 0xAA];
-        const DOT_LUT: [u8; 4] = [0x11, 0x00, 0x44, 0x00];
+        const DIM_WORD: u32 = u32::from_le_bytes([0x55, 0xAA, 0x55, 0xAA]);
+        const DOT_WORD: u32 = u32::from_le_bytes([0x11, 0x00, 0x44, 0x00]);
         if start_y >= LCD_HEIGHT as u8 {
             return;
         }
@@ -482,17 +492,26 @@ impl Canvas {
             } else {
                 0
             };
-            let edit_mask = !keep_above;
-            let row = &mut self.buffer[page];
-            for (col, byte) in row.iter_mut().enumerate() {
-                let idx = col & 3;
-                let cur = *byte;
-                let dimmed = (cur & DIM_LUT[idx]) | DOT_LUT[idx];
-                *byte = (cur & keep_above) | (dimmed & edit_mask);
+            let words = unsafe {
+                core::slice::from_raw_parts_mut(
+                    self.buffer[page].as_mut_ptr() as *mut u32,
+                    LCD_WIDTH / 4,
+                )
+            };
+            if keep_above == 0 {
+                for w in words {
+                    *w = (*w & DIM_WORD) | DOT_WORD;
+                }
+            } else {
+                let keep_w = u32::from_le_bytes([keep_above; 4]);
+                for w in words {
+                    let cur = *w;
+                    *w = (cur & keep_w) | (((cur & DIM_WORD) | DOT_WORD) & !keep_w);
+                }
             }
+            self.mark_span(page, 0, 127);
         }
         self.sync_planes();
-        self.dirty = 0xFF;
     }
 
     /// Apply 2D Bayer matrix invert dissolve across the entire 128x64 canvas.
@@ -502,7 +521,7 @@ impl Canvas {
             self.apply_word_mask(progress, true);
         }
         self.sync_planes();
-        self.dirty = 0xFF;
+        self.mark_all_dirty();
     }
 
     /// Apply curtain wipe from left to right across the 128x64 canvas.
@@ -521,10 +540,9 @@ impl Canvas {
             }
         }
         self.sync_planes();
-        self.dirty = 0xFF;
+        self.mark_all_dirty();
     }
 
-    #[inline(never)]
     fn scroll_planes(&mut self, delta: i8, fill_byte: u8, op: fn(&mut [[u8; 128]; 8], i8, u8)) {
         if delta == 0 {
             return;
@@ -534,7 +552,7 @@ impl Canvas {
         {
             op(&mut self.buffer_lo, delta, fill_byte);
         }
-        self.dirty = 0xFF;
+        self.mark_all_dirty();
     }
 
     /// Hardware-efficient in-place vertical bit-shift scroll.
@@ -622,7 +640,6 @@ impl Canvas {
     }
 }
 
-#[inline(never)]
 fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8) {
     let abs_dy = dy.unsigned_abs() as usize;
     if abs_dy >= LCD_HEIGHT {
@@ -663,7 +680,6 @@ fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8
     }
 }
 
-#[inline(never)]
 fn scroll_plane_horizontal(plane: &mut [[u8; LCD_WIDTH]; 8], dx: i8, fill_byte: u8) {
     let shift = (dx.unsigned_abs() as usize).min(LCD_WIDTH);
     let keep = LCD_WIDTH - shift;
@@ -691,6 +707,11 @@ impl PagedFramebuffer for Canvas {
     #[inline(always)]
     fn dirty_mask(&self) -> u8 {
         self.dirty
+    }
+
+    #[inline(always)]
+    fn dirty_span(&self, page: usize) -> (u8, u8) {
+        (self.dirty_x0[page & 7], self.dirty_x1[page & 7])
     }
 
     #[inline(always)]

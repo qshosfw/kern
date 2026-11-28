@@ -54,3 +54,10 @@ pub const CR1_TE: u32 = 1 << 3;
 pub const CR1_RE: u32 = 1 << 2;
 /// RXNE interrupt enable
 pub const CR1_RXNEIE: u32 = 1 << 5;
+
+// ── CR3 Bit Definitions ────────────────────────────────────────────────────
+
+/// DMA enable receiver
+pub const CR3_DMAR: u32 = 1 << 6;
+/// DMA enable transmitter
+pub const CR3_DMAT: u32 = 1 << 7;

@@ -5,7 +5,6 @@ use super::super::keychain::PackedPasscodeKey;
 use super::state::*;
 use crate::services::SystemStorage;
 
-#[inline(never)]
 pub fn read_passcode_key(
     filesystem: &mut SystemStorage,
     key: &mut PackedPasscodeKey,
@@ -23,7 +22,6 @@ pub fn read_passcode_key(
 }
 
 /// Retrieves full passcode configuration metadata from `/sys/passcode.key`
-#[inline(never)]
 pub fn get_passcode_config(filesystem: &mut SystemStorage) -> PasscodeConfigInfo {
     let mut info = PasscodeConfigInfo {
         is_set: false,
@@ -59,7 +57,6 @@ pub fn format_wrong_passcode_msg<'a>(
 }
 
 /// Updates passcode security preferences (`opt_flags` holds `PASSCODE_FLAG_{EXPOSE_LEN|STEALTH|DIGITS_ONLY}`).
-#[inline(never)]
 pub fn set_passcode_options(
     filesystem: &mut SystemStorage,
     opt_flags: u8,

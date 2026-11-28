@@ -64,7 +64,6 @@ pub static mut SWAP_SLOTS: [SwapSlot; MAX_SWAP_SLOTS] =
 
 pub use kernel::runtime::{packbits_compress, packbits_decompress};
 
-#[inline(never)]
 fn format_swap_path(app_id: usize, buf: &mut [u8; 17]) -> &str {
     let p = buf.as_mut_ptr();
     unsafe {
@@ -81,7 +80,6 @@ fn format_swap_path(app_id: usize, buf: &mut [u8; 17]) -> &str {
     }
 }
 
-#[inline(never)]
 fn compress_with_header(
     app_id: usize,
     src_state: &[u8],
@@ -100,7 +98,6 @@ fn compress_with_header(
     Ok(comp_len as u16)
 }
 
-#[inline(never)]
 fn verify_and_decompress(
     hdr: &KrxSwapHeader,
     comp: &[u8],
@@ -121,7 +118,6 @@ fn verify_and_decompress(
     Ok(decomp_len)
 }
 
-#[inline(never)]
 fn find_slot_mut(app_id: usize, allow_empty: bool) -> Option<&'static mut SwapSlot> {
     let slots = unsafe { &mut *core::ptr::addr_of_mut!(SWAP_SLOTS) };
     let mut empty: Option<usize> = None;
@@ -151,7 +147,6 @@ impl AppSwapManager {
 
     /// Two-tier hibernation: tries Tier-1 RAM first (per `policy`), spilling to Tier-2 KernFS
     /// `/sys/swap/aXX.swp` when Tier-1 is full or the compressed payload exceeds 48 B.
-    #[inline(never)]
     pub fn swap_out_tiered(
         app_id: usize,
         src_state: &[u8],
@@ -197,7 +192,6 @@ impl AppSwapManager {
     }
 
     /// Two-tier restore: checks Tier-1 RAM first, then falls back to Tier-2 `/sys/swap/aXX.swp`.
-    #[inline(never)]
     pub fn swap_in_tiered(
         app_id: usize,
         dst_state: &mut [u8],

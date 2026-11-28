@@ -29,6 +29,7 @@ from ...device.hardware import (
 from ...device.usb import probe_bootloader_beacon
 from ..runtime import DockRuntime
 from ..widgets.hex_view import show_hex_viewer_dialog
+from ..widgets.util import wrap_actions
 
 
 class HardwareView:
@@ -84,8 +85,7 @@ class HardwareView:
         self.grp_swd.add(self.swd_target_row)
 
         self.swd_ctrl_row = Adw.ActionRow(title="Target Control", subtitle="Probe, reset, halt, or resume CPU")
-        swd_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
-        swd_btns.add_css_class("linked")
+        swd_btns = wrap_actions()
         self._swd_action_btns: list[Gtk.Button] = []
         for act, lbl in (("probe", "Probe"), ("reset", "Reset"), ("halt", "Halt"), ("resume", "Resume")):
             b = Gtk.Button(label=lbl)
@@ -96,8 +96,7 @@ class HardwareView:
         self.grp_swd.add(self.swd_ctrl_row)
 
         self.swd_mem_row = Adw.ActionRow(title="Memory &amp; Flashing", subtitle="Bypass bootloader &amp; RigWire over SWD")
-        mem_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
-        mem_btns.add_css_class("linked")
+        mem_btns = wrap_actions()
         b_flash = Gtk.Button(label="Flash…")
         b_flash.connect("clicked", lambda _b: self._pick_swd_flash())
         b_dump_f = Gtk.Button(label="Dump Flash")
@@ -138,8 +137,7 @@ class HardwareView:
             description="USB power policy, interface reset &amp; hub VBUS control",
         )
         self.uhub_row = Adw.ActionRow(title="USB Hub VBUS Power", subtitle="Requires uhubctl", visible=False)
-        ub = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
-        ub.add_css_class("linked")
+        ub = wrap_actions()
         for act, lbl in (("on", "On"), ("off", "Off"), ("cycle", "Power Cycle")):
             b = Gtk.Button(label=lbl)
             b.connect("clicked", lambda _b, a=act: self._run_uhubctl(a))
@@ -185,8 +183,7 @@ class HardwareView:
         grp_raw.add(self.sw_rts)
 
         pulse_row = Adw.ActionRow(title="Hardware Signals", subtitle="Pulse physical lines or send UART break")
-        pbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
-        pbox.add_css_class("linked")
+        pbox = wrap_actions()
         self._uart_ctrl_btns: list[Gtk.Button] = []
         for lbl, fn in (
             ("Pulse DTR", lambda: self._pulse("dtr")),
@@ -290,8 +287,7 @@ class HardwareView:
                     title=GLib.markup_escape_text(d.name),
                     subtitle=GLib.markup_escape_text(" · ".join(parts)),
                 )
-                btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
-                btns.add_css_class("linked")
+                btns = wrap_actions()
                 next_mode = "auto" if d.power_control == "on" else "on"
                 pm_btn = Gtk.Button(label="Keep On" if next_mode == "on" else "Auto Suspend")
                 pm_btn.connect("clicked", lambda _b, sp=d.sysfs_path, m=next_mode: self._set_usb_power(sp, m))

@@ -36,7 +36,6 @@ static HEADLESS_TONE_HEAD: AtomicU8 = AtomicU8::new(0);
 static HEADLESS_TONE_TAIL: AtomicU8 = AtomicU8::new(0);
 
 /// Queue tone/melody notes for RigWire playback instead of driving the local speaker.
-#[inline(never)]
 pub fn push_headless_notes(notes: &[drivers::audio::ToneNote]) {
     for n in notes {
         let head = HEADLESS_TONE_HEAD.load(Ordering::Relaxed);
@@ -57,7 +56,6 @@ pub fn push_headless_notes(notes: &[drivers::audio::ToneNote]) {
 }
 
 /// Drain queued headless audio notes into `out` as packed `(u16 freq_hz LE, u16 duration_ms LE)` tuples.
-#[inline(never)]
 pub fn drain_headless_notes(out: &mut [u8]) -> usize {
     let mut pos = 0usize;
     while pos + 4 <= out.len() {
@@ -90,7 +88,6 @@ pub fn admits_physical_input() -> bool {
 }
 
 /// Latch the in-memory flag and the backup-domain bit without touching peripherals.
-#[inline(never)]
 fn latch(enable: bool) {
     HEADLESS.store(enable, Ordering::Relaxed);
     let bit = BackupCrashTag::FLAG_HEADLESS;
@@ -114,7 +111,6 @@ pub(super) fn step_physical_escape(accum_ms: &mut u16, dt_ms: u16, combo_held: b
 
 /// Advance the physical escape chord timer while headless.
 /// Returns `true` once `MENU + EXIT` has been held continuously for `ESCAPE_HOLD_MS`.
-#[inline(never)]
 pub(super) fn poll_physical_escape(dt_ms: u16, combo_held: bool) -> bool {
     let mut accum = ESCAPE_HOLD_ACCUM_MS.load(Ordering::Relaxed);
     let fired = step_physical_escape(&mut accum, dt_ms, combo_held);
@@ -142,7 +138,6 @@ pub(super) fn waiting_escape_release(any_key_down: bool) -> bool {
 /// Single transition point: latch the mode and drive the panel to match it. Leaving
 /// headless wakes the panel and schedules a top-level frame repaint (`HEADLESS_WAKE_RENDER`)
 /// rather than invoking `hw.render_frame()` inside a deep RigWire / keypad stack frame.
-#[inline(never)]
 fn engage(hw: &mut SystemHardware, enable: bool, wake_panel: bool) {
     latch(enable);
     ESCAPE_HOLD_ACCUM_MS.store(0, Ordering::Relaxed);
@@ -171,7 +166,6 @@ fn engage(hw: &mut SystemHardware, enable: bool, wake_panel: bool) {
 /// while LittleFS `/pref/keys.cfg` persistence and panel repaint are deferred to the top-level
 /// event loop (`service_deferred`) so entering/leaving headless while inside a KRX app never
 /// stacks filesystem writes or guest `KRX_OP_RENDER` frames onto `dispatch_wire_record`.
-#[inline(never)]
 pub fn set_headless(hw: &mut SystemHardware, enable: bool) {
     let was = is_headless();
     let cfg = crate::master_config();
@@ -185,7 +179,6 @@ pub fn set_headless(hw: &mut SystemHardware, enable: bool) {
 }
 
 /// Execute deferred `/pref/keys.cfg` flush and wake-render flag at top-level main-loop stack depth.
-#[inline(never)]
 pub(super) fn service_deferred(hw: &mut SystemHardware, dirty_render: &mut bool) {
     if HEADLESS_NEEDS_SAVE.load(Ordering::Acquire) {
         HEADLESS_NEEDS_SAVE.store(false, Ordering::Release);
@@ -199,7 +192,6 @@ pub(super) fn service_deferred(hw: &mut SystemHardware, dirty_render: &mut bool)
 
 /// Earliest boot stage (storage not yet mounted): honour the warm-reset backup bit so boot
 /// chords and prompts are already locked out before `/pref` is readable.
-#[inline(never)]
 pub fn restore_from_backup(hw: &mut SystemHardware) {
     if backup::has(BackupCrashTag::FLAG_HEADLESS) {
         HEADLESS.store(true, Ordering::Relaxed);
@@ -208,7 +200,6 @@ pub fn restore_from_backup(hw: &mut SystemHardware) {
 }
 
 /// After `/pref` is loaded: `keys.cfg` is the durable source of truth.
-#[inline(never)]
 pub fn restore_from_config(hw: &mut SystemHardware) {
     engage(hw, crate::master_config_ref().keys.headless != 0, false);
 }

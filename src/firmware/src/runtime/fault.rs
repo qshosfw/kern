@@ -9,7 +9,6 @@
 //! 3. `finish_fault_cleanup` revokes all leases, VFO locks, services, IPC, and
 //!    opens the firmware Exception Dialog (`[Retry] [Close]`).
 
-use crate::services::SysContext;
 #[cfg(all(target_arch = "arm", not(test)))]
 use kernel::runtime::fault::KRX_FAULT_SENTINEL;
 use kernel::runtime::fault::{AppFault, Exception};
@@ -32,20 +31,15 @@ static mut ACTIVE_FAULT: AppFault = AppFault::NONE;
 /// Package path & PID of the currently loaded / most recently faulted KRX app.
 /// Stored in `.bss` (far below `_stack_end`) so a stack overflow that clobbers `NATIVE_SLOT`
 /// cannot lose recovery identity or trigger an out-of-bounds panic in `finish_fault_cleanup`.
-static mut FAULT_PKG_PATH: [u8; 32] = [0u8; 32];
-static mut FAULT_PKG_LEN: u8 = 0;
-static mut LOADED_PKG_PATH: [u8; 32] = [0u8; 32];
-static mut LOADED_PKG_LEN: u8 = 0;
+static mut FAULT_PKG: utils::format::InlineStr<31> = utils::format::InlineStr::new();
+static mut LOADED_PKG: utils::format::InlineStr<31> = utils::format::InlineStr::new();
 static mut LOADED_PKG_PID: u8 = 0;
 
 /// Snapshot package path and PID when a KRX package loads into `NATIVE_SLOT`.
 #[inline(never)]
 pub fn note_loaded_pkg(pid: kernel::proc::Pid, path: &str) {
-    let bytes = path.as_bytes();
-    let n = bytes.len().min(32);
     unsafe {
-        (&mut *core::ptr::addr_of_mut!(LOADED_PKG_PATH))[..n].copy_from_slice(&bytes[..n]);
-        LOADED_PKG_LEN = n as u8;
+        (*core::ptr::addr_of_mut!(LOADED_PKG)).set(path);
         LOADED_PKG_PID = pid.0;
     }
 }
@@ -54,7 +48,7 @@ pub fn note_loaded_pkg(pid: kernel::proc::Pid, path: &str) {
 #[inline(always)]
 pub fn clear_loaded_pkg() {
     unsafe {
-        LOADED_PKG_LEN = 0;
+        (*core::ptr::addr_of_mut!(LOADED_PKG)).clear();
         LOADED_PKG_PID = 0;
     }
 }
@@ -140,22 +134,18 @@ pub fn has_pending_fault() -> bool {
 
 /// Returns the saved package path for the last faulted app, if any.
 pub fn fault_pkg_path() -> Option<&'static str> {
-    unsafe {
-        let len = FAULT_PKG_LEN as usize;
-        let path = &*core::ptr::addr_of!(FAULT_PKG_PATH);
-        if len == 0 || len > path.len() {
-            None
-        } else {
-            // SAFETY: populated exclusively from `slot.pkg_path.as_str()`.
-            Some(core::str::from_utf8_unchecked(&path[..len]))
-        }
+    let pkg = unsafe { &*core::ptr::addr_of!(FAULT_PKG) };
+    if pkg.is_empty() {
+        None
+    } else {
+        Some(pkg.as_str())
     }
 }
 
 /// Clears the saved fault package path after handling `[Retry]` or `[Close]`.
 pub fn clear_fault_pkg() {
     unsafe {
-        FAULT_PKG_LEN = 0;
+        (*core::ptr::addr_of_mut!(FAULT_PKG)).clear();
     }
 }
 
@@ -291,7 +281,7 @@ pub unsafe extern "C" fn invoke_krx_trampoline(
 /// Complete post-fault containment in normal Thread mode: quench RF, revoke all resources
 /// held by the faulted process, unload the slot, and open the firmware Exception Dialog.
 #[inline(never)]
-pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
+pub fn finish_fault_cleanup() {
     let fault = unsafe {
         let f = ACTIVE_FAULT;
         ACTIVE_FAULT = AppFault::NONE;
@@ -317,37 +307,29 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
 
     // Prefer the `.bss` load-time path snapshot (immune to stack overflow into `NATIVE_SLOT`),
     // falling back to `slot.pkg_path_str()` only when not snapshotted (e.g. unit tests).
-    let (pkg_ptr, pkg_len) = unsafe {
-        let snap_len = (LOADED_PKG_LEN as usize).min(32);
-        if snap_len > 0 {
-            (core::ptr::addr_of!(LOADED_PKG_PATH) as *const u8, snap_len)
-        } else {
-            let pkg = slot.pkg_path_str().as_bytes();
-            (pkg.as_ptr(), pkg.len().min(32))
-        }
-    };
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            pkg_ptr,
-            core::ptr::addr_of_mut!(FAULT_PKG_PATH) as *mut u8,
-            pkg_len,
-        );
-        FAULT_PKG_LEN = pkg_len as u8;
+        let loaded = &*core::ptr::addr_of!(LOADED_PKG);
+        if !loaded.is_empty() {
+            FAULT_PKG = *loaded;
+        } else {
+            (*core::ptr::addr_of_mut!(FAULT_PKG)).set(slot.pkg_path_str());
+        }
     }
     clear_loaded_pkg();
 
     // 1. Hardware safety & slot teardown (shared with normal exit) + PCB/lease reap.
     if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(pid) {
-        pcb.ledger.fault_count = pcb.ledger.fault_count.saturating_add(1);
+        pcb.health.record_fault();
     }
     let _ = crate::orchestrator::reap_pid_resources(pid.0);
-    super::native_runner::teardown_slot_and_hw(ctx, pid, false);
+    super::native_runner::teardown_slot_and_hw(pid, false);
     #[cfg(not(test))]
     crate::system_canvas().clear();
 
     // 2. Present firmware Exception Dialog ([Retry] / [Close]) with clear category title.
-    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
-    ctx.show_confirm(
+    #[cfg(not(test))]
+    crate::services::play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+    crate::orchestrator::compositor::active_modal_mut().show_confirm(
         crate::orchestrator::TAG_FAULT_CONFIRM,
         fault.kind.dialog_title(),
         msg,
@@ -376,10 +358,9 @@ mod tests {
         // `.bss` load-time snapshot stays intact far below `_stack_end`.
         unsafe {
             let pid = *core::ptr::addr_of!(LOADED_PKG_PID);
-            let len = *core::ptr::addr_of!(LOADED_PKG_LEN) as usize;
-            let path = &*core::ptr::addr_of!(LOADED_PKG_PATH);
+            let loaded = &*core::ptr::addr_of!(LOADED_PKG);
             assert_eq!(pid, 7);
-            assert_eq!(&path[..len], b"/apps/settings.krx");
+            assert_eq!(loaded.as_str(), "/apps/settings.krx");
         }
         clear_loaded_pkg();
         super::super::native_runner::init_native_slot();

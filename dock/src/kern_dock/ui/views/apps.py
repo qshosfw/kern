@@ -166,19 +166,12 @@ class AppsView:
         self.search_entry.connect("search-changed", self._on_search_changed)
         fbar.append(self.search_entry)
 
-        grp_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        grp_box.add_css_class("linked")
-        first_btn: Gtk.ToggleButton | None = None
-        for gid, glabel in (("all", "All"), ("core", "Core"), ("sys", "System"), ("apps", "Apps"), ("examples", "Examples")):
-            tb = Gtk.ToggleButton(label=glabel)
-            if first_btn is None:
-                first_btn = tb
-                tb.set_active(True)
-            else:
-                tb.set_group(first_btn)
-            tb.connect("toggled", lambda b, g=gid: self._set_group_filter(g) if b.get_active() else None)
-            grp_box.append(tb)
-        fbar.append(grp_box)
+        groups = (("all", "All"), ("core", "Core"), ("sys", "System"), ("apps", "Apps"), ("examples", "Examples"))
+        grp_dd = Gtk.DropDown.new_from_strings([g[1] for g in groups])
+        grp_dd.set_tooltip_text("Filter by package group")
+        grp_dd.set_valign(Gtk.Align.CENTER)
+        grp_dd.connect("notify::selected", lambda d, _p: self._set_group_filter(groups[d.get_selected()][0]))
+        fbar.append(grp_dd)
         self.ws_section.add(fbar)
 
         self.ws_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)

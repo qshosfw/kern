@@ -1,17 +1,16 @@
-use crate::SysContext;
-use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
+use crate::apps::{APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use gfx::Canvas;
 use gfx::Color;
-use kernel::app::{App, EventResult};
+use kernel::app::EventResult;
 use kernel::event::{Event, KeyCode, KeyState};
 
 pub mod catalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherTarget {
+    About,
     App(u8),
     Shortcut(Shortcut),
-    About,
     Package(u8),
 }
 
@@ -37,7 +36,6 @@ impl LauncherEntry {
         Self { target }
     }
 
-    #[inline(never)]
     pub fn title_and_icon(&self) -> (&'static str, &'static [u8; 8]) {
         match self.target {
             LauncherTarget::App(id) if id == APP_ID_VFO as u8 => {
@@ -69,7 +67,6 @@ static BUILTIN_TAIL: [LauncherEntry; 2] = [
     LauncherEntry::builtin(LauncherTarget::About),
 ];
 
-#[inline(never)]
 pub fn load_entries(
     mut _storage: Option<&mut crate::services::SystemStorage>,
 ) -> &'static [LauncherEntry] {
@@ -115,9 +112,7 @@ pub fn load_entries(
 pub fn reload_launcher(storage: &mut crate::services::SystemStorage) {
     catalog::get_catalog().mark_dirty();
     let entries = load_entries(Some(storage));
-    if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_LAUNCHER) {
-        unsafe { (*(ptr as *mut LauncherApp)).set_entries(entries) };
-    }
+    crate::apps::AppRegistry::launcher_mut().set_entries(entries);
 }
 
 /// Lean resident failsafe list launcher (`APP_ID_LAUNCHER`).
@@ -134,8 +129,8 @@ pub struct LauncherApp {
     selected_idx: u8,
     scroll_top: u8,
     items: &'static [LauncherEntry],
-    scroller: gfx::gui::animation::KineticScroller,
-    repeater: gfx::gui::KeyRepeater,
+    scroller: gfx::views::KineticScroller,
+    repeater: gfx::views::KeyRepeater,
 }
 
 impl LauncherApp {
@@ -144,8 +139,8 @@ impl LauncherApp {
             (*ptr).items = load_entries(None);
             (*ptr).show_numbers = true;
             (*ptr).show_labels = true;
-            (*ptr).scroller = gfx::gui::animation::KineticScroller::new(2);
-            (*ptr).repeater = gfx::gui::KeyRepeater::new(10, 2);
+            (*ptr).scroller = gfx::views::KineticScroller::new(2);
+            (*ptr).repeater = gfx::views::KeyRepeater::new(10, 2);
         }
     }
 
@@ -161,18 +156,18 @@ impl LauncherApp {
         }
     }
 
-    fn sync_config(&mut self, ctx: &SysContext) {
-        self.nav_layout = ctx.config.keys.nav_layout;
-        self.show_numbers = ctx.config.apps.show_numbers != 0;
-        self.show_labels = ctx.config.apps.show_labels != 0;
+    fn sync_config(&mut self) {
+        let cfg = crate::services::config();
+        self.nav_layout = cfg.keys.nav_layout;
+        self.show_numbers = cfg.apps.show_numbers != 0;
+        self.show_labels = cfg.apps.show_labels != 0;
         self.repeater.configure(
-            ctx.config.keys.hold_delay_ms(),
-            ctx.config.keys.repeat_rate_ms(),
-            ctx.config.keys.fast_scroll != 0,
+            cfg.keys.hold_delay_ms(),
+            cfg.keys.repeat_rate_ms(),
+            cfg.keys.fast_scroll != 0,
         );
     }
 
-    #[inline(never)]
     fn adjust_scroll(&mut self, animated: bool) {
         let prev = self.scroll_top;
         if self.selected_idx < self.scroll_top {
@@ -188,20 +183,14 @@ impl LauncherApp {
         }
     }
 
-    #[inline(never)]
-    fn step_selection(
-        &mut self,
-        ctx: &mut SysContext,
-        down: bool,
-        is_tick: bool,
-        beep: bool,
-    ) -> bool {
+    fn step_selection(&mut self, down: bool, is_tick: bool, beep: bool) -> bool {
         let total = self.items.len();
         if total == 0 {
             return false;
         }
         let prev = self.selected_idx as usize;
-        let mut animate = ctx.config.display.animations_enabled();
+        let cfg = crate::services::config();
+        let mut animate = cfg.display.animations_enabled();
         let next = if down {
             if prev + 1 < total {
                 prev + 1
@@ -228,52 +217,48 @@ impl LauncherApp {
             self.repeater.pause(6);
         }
         self.adjust_scroll(animate);
-        if beep && ctx.config.audio.key_beep != 0 {
-            ctx.play_beep(crate::services::melody::BeepType::Scroll);
+        if beep && cfg.audio.key_beep != 0 {
+            crate::services::play_beep(crate::services::melody::BeepType::Scroll);
         }
         true
     }
 
-    #[inline(never)]
-    fn execute_target(&mut self, ctx: &mut SysContext, target: LauncherTarget) {
+    fn execute_target(&mut self, target: LauncherTarget) {
         self.is_pressed = false;
         match target {
             LauncherTarget::App(app_id) => {
-                let _ = ctx.post_event(Shortcut::LaunchApp(app_id).into());
+                let _ = crate::services::post_event(Shortcut::LaunchApp(app_id).into());
             }
             LauncherTarget::Shortcut(sc) => {
-                let _ = ctx.post_event(sc.into());
+                let _ = crate::services::post_event(sc.into());
             }
             LauncherTarget::About => {
-                ctx.show_popup(0, "About KERN", crate::build_info::ABOUT_TEXT);
+                crate::services::show_popup(0, "About KERN", crate::build_info::ABOUT_TEXT);
             }
             LauncherTarget::Package(_pkg_idx) => {
                 #[cfg(feature = "filesystem")]
                 if let Some(pkg) = catalog::get_catalog().entries.get(_pkg_idx as usize) {
-                    if !crate::orchestrator::launch_krx_shortcut(ctx, pkg.path.as_str()) {
-                        let entries = load_entries(Some(ctx.storage));
+                    if !crate::orchestrator::launch_krx_shortcut(pkg.path.as_str()) {
+                        let entries = load_entries(Some(crate::services::storage_mut()));
                         self.set_entries(entries);
                     }
                 }
             }
         }
     }
-}
 
-impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
-    fn on_start(&mut self, ctx: &mut SysContext) {
-        let entries = load_entries(Some(ctx.storage));
+    pub fn on_start(&mut self) {
+        let entries = load_entries(Some(crate::services::storage_mut()));
         self.set_entries(entries);
-        self.sync_config(ctx);
+        self.sync_config();
         self.is_pressed = false;
         self.adjust_scroll(false);
-        crate::orchestrator::compositor::present_next_system_alert(ctx);
+        crate::orchestrator::compositor::present_next_system_alert();
     }
 
-    #[inline(never)]
-    fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
-        use gfx::gui::modules::menu::{ListNavDir, get_list_nav_dir};
-        let animated = ctx.config.display.animations_enabled();
+    pub fn on_event(&mut self, event: &Event) -> EventResult {
+        use gfx::views::{ListNavDir, get_list_nav_dir};
+        let animated = crate::services::config().display.animations_enabled();
 
         match *event {
             Event::Tick => {
@@ -281,18 +266,18 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
                 let animating = self.scroller.tick();
                 if let Some(code) = self.repeater.tick()
                     && let Some(dir) = get_list_nav_dir(self.nav_layout, code)
-                    && self.step_selection(ctx, dir == ListNavDir::Down, true, true)
+                    && self.step_selection(dir == ListNavDir::Down, true, true)
                 {
                     return EventResult::Consumed;
                 }
-                return if animating || animated {
+                return if animating || (animated && (self.tick_counter & 1) == 0) {
                     EventResult::Consumed
                 } else {
                     EventResult::Ignored
                 };
             }
             Event::Encoder(delta) if delta != 0 => {
-                self.step_selection(ctx, delta > 0, false, true);
+                self.step_selection(delta > 0, false, true);
                 return EventResult::Consumed;
             }
             Event::Key { code, state } => {
@@ -314,10 +299,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
                         }
                         if let Some(d) = digit_opt {
                             if d == 0 {
-                                self.execute_target(
-                                    ctx,
-                                    LauncherTarget::Shortcut(Shortcut::Flashlight),
-                                );
+                                self.execute_target(LauncherTarget::Shortcut(Shortcut::Flashlight));
                                 return EventResult::Consumed;
                             }
                             let idx = (d - 1) as usize;
@@ -329,19 +311,18 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
                             }
                         }
                         if let Some(dir) = get_list_nav_dir(self.nav_layout, code) {
-                            self.step_selection(ctx, dir == ListNavDir::Down, false, false);
+                            self.step_selection(dir == ListNavDir::Down, false, false);
                             return EventResult::Consumed;
                         }
                     }
-                    KeyState::Held if is_direct => {
-                        self.is_pressed = true;
+                    KeyState::Held if self.is_pressed && is_direct => {
                         return EventResult::Consumed;
                     }
                     KeyState::Released => {
                         if self.is_pressed && is_direct {
                             self.is_pressed = false;
                             if let Some(entry) = self.items.get(self.selected_idx as usize) {
-                                self.execute_target(ctx, entry.target);
+                                self.execute_target(entry.target);
                                 return EventResult::Consumed;
                             }
                         }
@@ -357,8 +338,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
         EventResult::Ignored
     }
 
-    #[inline(never)]
-    fn render(&self, canvas: &mut Canvas, _ctx: &SysContext) {
+    pub fn render(&self, canvas: &mut Canvas) {
         let total = self.items.len();
         if total == 0 {
             return;
@@ -376,7 +356,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             let is_sel = i == self.selected_idx as usize;
             let has_num = self.show_numbers && i < 9;
             let (title, icon) = item.title_and_icon();
-            let mut spec = gfx::widgets::ListRowSpec::new(
+            let mut spec = gfx::elements::ListRowSpec::new(
                 2,
                 row_top,
                 120,
@@ -388,16 +368,16 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             spec.icon = Some(icon);
             if is_sel {
                 let phase = ((self.tick_counter >> 1) & 3) as i8;
-                spec.flags = gfx::widgets::ROW_SELECTED
-                    | gfx::widgets::ROW_CHEVRON
+                spec.flags = gfx::elements::ROW_SELECTED
+                    | gfx::elements::ROW_CHEVRON
                     | if self.is_pressed {
-                        gfx::widgets::ROW_OUTLINE
+                        gfx::elements::ROW_OUTLINE
                     } else {
                         0
                     };
                 spec.chevron_dx = (if phase == 3 { 1 } else { phase }) - 2;
             }
-            gfx::widgets::draw_list_row(canvas, &spec);
+            gfx::elements::draw_list_row(canvas, &spec);
 
             if has_num {
                 let d = [b'1' + i as u8];
@@ -419,7 +399,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
 
         canvas.fill_rect(0, 0, 128, 8, Color::Clear);
         if total > 4 {
-            gfx::widgets::draw_scrollbar(
+            gfx::elements::draw_scrollbar(
                 canvas,
                 125,
                 9,
@@ -430,8 +410,6 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             );
         }
     }
-
-    fn on_exit(&mut self, _ctx: &mut SysContext) {}
 }
 
 #[cfg(test)]
@@ -514,5 +492,31 @@ mod tests {
         app.adjust_scroll(false);
         assert_eq!(app.selected_idx, 3);
         assert_eq!(app.scroll_top, saved_scroll);
+    }
+
+    #[test]
+    fn trailing_held_and_released_without_press_never_launches_radio() {
+        let mut app = core::mem::MaybeUninit::<LauncherApp>::zeroed();
+        unsafe { LauncherApp::init_at(app.as_mut_ptr()) };
+        let app = unsafe { app.assume_init_mut() };
+        assert_eq!(app.selected_idx, 0);
+        assert!(!app.is_pressed);
+
+        // Drain any prior queued events
+        while crate::system::dequeue_event().is_some() {}
+
+        let held_res = app.on_event(&Event::Key {
+            code: KeyCode::Menu,
+            state: KeyState::Held,
+        });
+        assert_eq!(held_res, EventResult::Ignored);
+        assert!(!app.is_pressed);
+
+        let rel_res = app.on_event(&Event::Key {
+            code: KeyCode::Menu,
+            state: KeyState::Released,
+        });
+        assert_eq!(rel_res, EventResult::Ignored);
+        assert!(crate::system::dequeue_event().is_none());
     }
 }

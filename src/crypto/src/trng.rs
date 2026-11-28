@@ -70,7 +70,6 @@ impl HardwareTrng {
     }
 
     /// Initialize the TRNG entropy sponge with 96-bit MCU UID and microsecond hardware timing.
-    #[inline(never)]
     pub fn init_with_uid(&mut self, mcu_uid: &[u8; 12], initial_noise: u32) {
         self.state.x = [Self::TRNG_IV, 0, 0, 0, 0];
         #[cfg(target_endian = "little")]
@@ -101,7 +100,6 @@ impl HardwareTrng {
     }
 
     /// Mix physical hardware noise into entropy pool.
-    #[inline(never)]
     pub fn mix_hardware_entropy(&mut self, hw_noise: u32) {
         self.health.test_sample(hw_noise);
         self.state.x[1] ^= (hw_noise as u64) | ((hw_noise as u64) << 32);
@@ -109,7 +107,6 @@ impl HardwareTrng {
     }
 
     /// Fill buffer with random bytes with forward secrecy.
-    #[inline(never)]
     pub fn fill_bytes(&mut self, buf: &mut [u8], hw_noise: u32) {
         if !self.initialized {
             self.init_with_uid(&[0x5au8; 12], hw_noise);

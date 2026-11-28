@@ -208,12 +208,11 @@ impl<B: VoiceAdcBackend + Delay> AudioCaptureDriver<B> {
         Self {
             backend,
             active: false,
-            period_us: 125,
-            dc_bias_est: 2048,
+            period_us: 0,
+            dc_bias_est: 0,
         }
     }
 
-    #[inline(never)]
     pub fn start_capture(&mut self, rate_hz: u16) -> Result<(), ()> {
         if self.active {
             return Ok(());
@@ -250,7 +249,6 @@ impl<B: VoiceAdcBackend + Delay> AudioCaptureDriver<B> {
         Some((centered << 4).clamp(-32768, 32767) as i16)
     }
 
-    #[inline(never)]
     pub fn read_samples(&mut self, out_samples: &mut [i16]) -> usize {
         if !self.active || out_samples.is_empty() {
             return 0;

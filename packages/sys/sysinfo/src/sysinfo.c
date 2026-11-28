@@ -198,11 +198,11 @@ static const char* format_device_val(const KrxApiTable* api, u8 idx, char* buf) 
 
 static const char* format_status_val(const KrxApiTable* api, u8 idx, char* buf) {
     if (idx == 0u) {
-        u16 mv = krx_pwr_u16(api, 0u);
-        u8 pct = (u8)krx_pwr_u16(api, 1u);
-        u8 chg = (u8)krx_pwr_u16(api, 6u);
-        u8 crit = (u8)krx_pwr_u16(api, 8u);
-        u8 low = (u8)krx_pwr_u16(api, 7u);
+        u16 mv = (u16)krx_prop_get32(api, KRX_PROP_BATT_MV);
+        u8 pct = krx_prop_get(api, KRX_PROP_BATT_PCT);
+        u8 chg = krx_prop_get(api, KRX_PROP_CHARGING);
+        u8 crit = krx_prop_get(api, KRX_PROP_BATT_CRIT);
+        u8 low = krx_prop_get(api, KRX_PROP_BATT_LOW);
         u32 rem = 0, volts = si_udivmod(api, mv, 1000u, &rem);
         u32 centi = si_udivmod(api, rem, 10u, 0);
         u8 p = si_put_uint(api, buf, volts);
@@ -225,19 +225,19 @@ static const char* format_status_val(const KrxApiTable* api, u8 idx, char* buf) 
         return buf;
     }
     if (idx == 1u) {
-        u8 btype = (u8)krx_pwr_u16(api, 3u);
+        u8 btype = krx_prop_get(api, KRX_PROP_BATT_TYPE);
         if (btype > 5u) btype = 5u;
         return si_nth(BATT_PACKS, btype);
     }
     if (idx == 2u) {
-        u16 raw = krx_pwr_u16(api, 4u);
+        u16 raw = (u16)krx_prop_get32(api, KRX_PROP_BATT_ADC);
         u8 p = put_str(buf, "raw ", 4u);
         p += si_put_uint(api, buf + p, raw);
         buf[p] = 0;
         return buf;
     }
     if (idx == 3u) {
-        i16 deci_c = (i16)krx_pwr_u16(api, 5u);
+        i16 deci_c = (i16)krx_prop_get32(api, KRX_PROP_MCU_TEMP);
         u8 p = 0;
         if (deci_c < 0) {
             buf[p++] = '-';

@@ -32,6 +32,15 @@ pub use tuner::*;
 pub use vernier::*;
 pub use vox::*;
 
+/// Transceiver front-panel RF status indicator state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RfLedState {
+    Off = 0,
+    RxGreen = 1,
+    TxRed = 2,
+}
+
 /// Full composite RF Radio Service contract combining granular facets with audio, AGC, and tone generation.
 pub trait RadioService:
     RfChannel
@@ -48,6 +57,9 @@ pub trait RadioService:
     fn sleep(&mut self);
     fn wake(&mut self);
     fn set_xtal_freq_trim(&mut self, trim: i16);
+
+    /// Drive the transceiver RX/TX status indicator LED through the radio driver's shadowed GPIO state.
+    fn set_rf_led(&mut self, _led: RfLedState) {}
 
     /// Enable or disable internal TX-to-RX analog loopback (`Reg 0x30 = 0xFFF7`, PA disabled).
     ///

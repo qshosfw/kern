@@ -12,20 +12,17 @@ pub use display::DisplayConfig;
 pub use keys::KeyConfig;
 pub use system::SystemConfig;
 
-#[inline(never)]
 pub(crate) fn read_cstr(buf: &[u8]) -> &str {
     let len = gfx::text::find_byte(buf, 0).unwrap_or(buf.len());
     utils::format::ascii_str(&buf[..len]).unwrap_or("")
 }
 
-#[inline(never)]
 pub(crate) fn write_cstr(buf: &mut [u8], path: &str) {
     buf.fill(0);
     let copy_len = path.len().min(buf.len());
     buf[..copy_len].copy_from_slice(&path.as_bytes()[..copy_len]);
 }
 
-#[inline(never)]
 pub fn update_raw_crc(buf: &mut [u8]) {
     let len = buf.len();
     if len > 4 {
@@ -39,7 +36,6 @@ pub fn update_raw_crc(buf: &mut [u8]) {
     }
 }
 
-#[inline(never)]
 pub fn is_raw_valid(buf: &[u8], expected_version: u8) -> bool {
     let len = buf.len();
     if len <= 4 || buf[0] != expected_version {
@@ -51,7 +47,6 @@ pub fn is_raw_valid(buf: &[u8], expected_version: u8) -> bool {
     stored_crc == calc_crc
 }
 
-#[inline(never)]
 pub fn save_config_raw(
     storage: &mut SystemStorage,
     path: &str,
@@ -180,15 +175,19 @@ const _: () = {
     assert!(core::mem::offset_of!(AppsConfig, crc32) == 60);
 };
 
-#[inline(never)]
+fn read_valid_domain(storage: &mut SystemStorage, path: &str, version: u8, tmp: &mut [u8]) -> bool {
+    let n = tmp.len();
+    storage
+        .read_file(path, tmp)
+        .is_ok_and(|len| len >= n && is_raw_valid(tmp, version))
+}
+
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
     let n = buf.len().min(80);
     #[cfg(not(test))]
     let loaded = crate::data::arena::try_staging_buf().is_some_and(|staging| {
         let tmp = unsafe { staging.get_unchecked_mut(..n) };
-        let ok = storage
-            .read_file(path, tmp)
-            .is_ok_and(|len| len >= n && is_raw_valid(tmp, version));
+        let ok = read_valid_domain(storage, path, version, tmp);
         if ok {
             unsafe { core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf.as_mut_ptr(), n) };
         }
@@ -197,16 +196,13 @@ pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut S
     #[cfg(test)]
     let loaded = {
         let mut temp_buf = [0u8; 80];
-        let ok = storage
-            .read_file(path, &mut temp_buf[..n])
-            .is_ok_and(|len| len >= n && is_raw_valid(&temp_buf[..n], version));
+        let ok = read_valid_domain(storage, path, version, &mut temp_buf[..n]);
         if ok {
             buf[..n].copy_from_slice(&temp_buf[..n]);
         }
         ok
     };
     if !loaded {
-        update_raw_crc(buf);
         let _ = save_config_raw(storage, path, buf);
     }
 }
@@ -319,10 +315,9 @@ static DEFAULT_MASTER_CONFIG_RLE: [u8; DEFAULT_CFG_RLE_LEN] = encode_default_con
 
 #[inline(always)]
 fn decode_default_range(start: usize, dst: &mut [u8]) {
-    utils::format::decode_rle_escape(&DEFAULT_MASTER_CONFIG_RLE, 0, start, dst);
+    utils::codec::decode_rle_escape(&DEFAULT_MASTER_CONFIG_RLE, 0, start, dst);
 }
 
-#[inline(never)]
 fn default_config_byte(offset: usize) -> u8 {
     let mut b = [0u8; 1];
     decode_default_range(offset, &mut b);
@@ -347,7 +342,6 @@ impl MasterConfig {
         Self::default()
     }
 
-    #[inline(never)]
     pub unsafe fn init_in_place(ptr: *mut Self) {
         unsafe {
             let dst = core::slice::from_raw_parts_mut(ptr.cast::<u8>(), MASTER_CONFIG_SIZE);
@@ -365,7 +359,6 @@ impl MasterConfig {
         self.system.nav_layout()
     }
 
-    #[inline(never)]
     pub fn mark_domain_dirty(&mut self, idx: usize) {
         let bit = 1u8 << idx;
         self.dirty |= bit;
@@ -405,7 +398,6 @@ impl MasterConfig {
 
     /// Re-seal a block's CRC after a legitimate mutation. Any later stray write
     /// (stack overflow, wild pointer) breaks the seal and is caught by `flush_dirty`.
-    #[inline(never)]
     pub fn seal(&mut self, idx: usize) {
         update_raw_crc(self.config_bytes_mut(idx));
     }
@@ -486,7 +478,6 @@ impl MasterConfig {
     }
 
     /// Current value of property `id` (`abi::prop`); 0 for an undeclared one.
-    #[inline(never)]
     pub fn prop_get(&self, id: u8) -> u8 {
         let dom = (id >> 5) as usize;
         if dom >= CONFIG_METAS.len() {
@@ -560,7 +551,6 @@ impl MasterConfig {
         self.controls = [[0; 2]; ::abi::prop::CONTROL_SLOTS];
     }
 
-    #[inline(never)]
     pub fn config_bytes(&self, idx: usize) -> &[u8] {
         let m = &CONFIG_METAS[idx.min(5)];
         unsafe {
@@ -595,17 +585,13 @@ impl MasterConfig {
     }
 
     /// Arena-safe reload of all valid `/pref/*.cfg` blocks into live RAM (callable from KRX apps).
-    #[inline(never)]
     pub fn reload_from_storage(&mut self, storage: &mut SystemStorage) {
         let mut tmp = [0u8; 80];
         let mut changed = 0u8;
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             let n = (meta.size as usize).min(tmp.len());
             let slice = unsafe { tmp.get_unchecked_mut(..n) };
-            if storage
-                .read_file(config_path(i), slice)
-                .is_ok_and(|len| len >= n && is_raw_valid(slice, meta.version))
-            {
+            if read_valid_domain(storage, config_path(i), meta.version, slice) {
                 let dst = self.config_bytes_mut(i);
                 if dst != slice {
                     unsafe {
@@ -670,7 +656,6 @@ impl MasterConfig {
     }
 
     /// Reset all preference domains to factory defaults, reseal CRCs, and persist to `/pref/*.cfg`.
-    #[inline(never)]
     pub fn reset_all_to_defaults(
         &mut self,
         storage: &mut SystemStorage,

@@ -5,9 +5,13 @@
 //!
 //! Default configuration: 115200 baud, 8N1 (matching the reference firmware).
 
+use crate::dma::{
+    CH_USART1_RX, DataSize, Direction, DmaChannel, DmaConfig, Priority, remaining_count, req,
+};
 use crate::gpio::Pin;
 use crate::rcc;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use pac::dma;
 use pac::gpio;
 use pac::usart;
 
@@ -83,7 +87,8 @@ impl UsartInstance {
                 self.wait_tx_complete();
             }
             self.cr1().write_volatile(cr1 & !usart::CR1_UE);
-            self.brr().write_volatile((pclk_hz + (baud >> 1)) / baud);
+            self.brr()
+                .write_volatile(crate::div::udiv(pclk_hz + (baud >> 1), baud));
             self.cr1().write_volatile(cr1);
         }
     }
@@ -188,73 +193,83 @@ pub fn resync_usart3_clock(pclk_hz: u32) {
     UsartInstance::USART3.apply_baud(pclk_hz, USART3_BAUD.load(Ordering::Relaxed));
 }
 
-/// Initialize USART1 at 115200 baud, 8N1.
+const RX_DMA_CAP: usize = 256;
+
+#[repr(align(4))]
+struct RxDmaRing([u8; RX_DMA_CAP]);
+
+static mut RX_DMA_RING: RxDmaRing = RxDmaRing([0u8; RX_DMA_CAP]);
+static RX_DMA_TAIL: AtomicU8 = AtomicU8::new(0);
+
+const DMA_UART_RX_CFG: DmaConfig = DmaConfig {
+    direction: Direction::PeriphToMem,
+    priority: Priority::High,
+    mem_size: DataSize::Byte8,
+    periph_size: DataSize::Byte8,
+    mem_inc: true,
+    periph_inc: false,
+    circular: true,
+};
+
+#[inline(always)]
+fn dma_rx_head() -> u8 {
+    let rem = remaining_count(CH_USART1_RX);
+    if rem == 0 || rem > RX_DMA_CAP as u16 {
+        RX_DMA_TAIL.load(Ordering::Relaxed)
+    } else {
+        ((RX_DMA_CAP as u16) - rem) as u8
+    }
+}
+
+/// Initialize USART1 at 115200 baud, 8N1 with hardware `DMA1_Ch6` circular `256 B` RX ring.
 pub fn init() {
     rcc::enable_usart1();
     rcc::enable_syscfg();
 
-    // Configure PA9 as AF1 (USART1_TX)
+    // Configure PA9 as AF1 (USART1_TX) and PA10 as AF1 (USART1_RX)
     let tx = Pin::new(gpio::GPIOA_BASE, 9);
     tx.configure_af(pac::gpio::AF1, pac::gpio::SPEED_MEDIUM);
-
-    // Configure PA10 as AF1 (USART1_RX)
     let rx = Pin::new(gpio::GPIOA_BASE, 10);
     rx.set_pull(pac::gpio::PULL_UP);
     rx.configure_af(pac::gpio::AF1, pac::gpio::SPEED_MEDIUM);
 
     unsafe {
-        // Disable USART before configuration
         usart::USART_CR1.write_volatile(0);
-
-        // CR2: 1 stop bit (default 0)
         usart::USART_CR2.write_volatile(0);
-        // CR3: no flow control (default 0)
-        usart::USART_CR3.write_volatile(0);
+        let _ = usart::USART_SR.read_volatile();
+        let _ = usart::USART_DR.read_volatile();
+    }
 
-        // CR1: Enable USART, TX, RX, and RXNE interrupt (8-bit word, no parity), then sync BRR
-        usart::USART_CR1
-            .write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE | usart::CR1_RXNEIE);
+    // Arm DMA1 Channel 6 (`req::USART1_RX = 0x07`) in permanent 256-byte circular mode
+    let mut ch = DmaChannel::new(CH_USART1_RX);
+    ch.disable();
+    ch.clear_flags();
+    ch.remap(req::USART1_RX);
+    RX_DMA_TAIL.store(0, Ordering::Release);
+    ch.set_peripheral_address(usart::USART_DR as u32);
+    ch.set_memory_address(core::ptr::addr_of_mut!(RX_DMA_RING) as u32);
+    ch.set_transfer_count(RX_DMA_CAP as u16);
+    unsafe {
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        dma::ccr(CH_USART1_RX)
+            .write_volatile(DmaChannel::encode_ccr(&DMA_UART_RX_CFG) | dma::CCR_EN);
+        usart::USART_CR3.write_volatile(usart::CR3_DMAR);
+        usart::USART_CR1.write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE);
     }
     resync_clock(rcc::sysclk_hz());
-    #[cfg(target_arch = "arm")]
-    unsafe {
-        pac::nvic_clear_pending(pac::Interrupt::USART1 as u8);
-        pac::nvic_enable(pac::Interrupt::USART1 as u8);
-    }
 }
 
-const RX_RING_CAP: usize = 128;
-const RX_RING_MASK: u8 = (RX_RING_CAP as u8) - 1;
-static mut RX_RING_BUF: [u8; RX_RING_CAP] = [0u8; RX_RING_CAP];
-static RX_RING_HEAD: portable_atomic::AtomicU8 = portable_atomic::AtomicU8::new(0);
-static RX_RING_TAIL: portable_atomic::AtomicU8 = portable_atomic::AtomicU8::new(0);
-
-/// `USART1` (`IRQ 27`) RXNE interrupt handler.
-/// Buffers incoming RigWire/serial bytes in a 128-byte SPSC ring so LCD blits, Flash erases,
-/// and BK4829 ramps never trigger `SR_ORE` byte drops at 115200 baud, while discarding RF-corrupted bytes.
-#[inline(never)]
+/// Legacy `USART1` (`IRQ 27`) vector entry (clears any stray line error flags).
 pub fn on_usart1_irq() {
     unsafe {
         let sr = usart::USART_SR.read_volatile();
-        if (sr & (usart::SR_NE | usart::SR_FE | usart::SR_PE)) != 0 {
-            let _ = usart::USART_DR.read_volatile();
-            return;
-        }
-        if (sr & usart::SR_RXNE) != 0 {
-            let b = usart::USART_DR.read_volatile() as u8;
-            let head = RX_RING_HEAD.load(Ordering::Relaxed);
-            let next = head.wrapping_add(1) & RX_RING_MASK;
-            if next != RX_RING_TAIL.load(Ordering::Acquire) {
-                (*core::ptr::addr_of_mut!(RX_RING_BUF))[head as usize] = b;
-                RX_RING_HEAD.store(next, Ordering::Release);
-            }
-        } else if (sr & usart::SR_ORE) != 0 {
+        if (sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE)) != 0 {
             let _ = usart::USART_DR.read_volatile();
         }
     }
 }
 
-/// Dynamically update USART1 baud rate (e.g. 115200 or 38400)
+/// Dynamically update USART1 baud rate (e.g. 115200..921600 or 38400).
 pub fn set_baud(baud: u32) {
     let baud = if baud == 0 { 115_200 } else { baud };
     if CURRENT_BAUD.load(Ordering::Relaxed) == baud {
@@ -269,22 +284,7 @@ pub fn resync_clock(pclk_hz: u32) {
     if unsafe { (pac::rcc::RCC_APB2ENR.read_volatile() & pac::rcc::APB2ENR_USART1) == 0 } {
         return;
     }
-    let baud = CURRENT_BAUD.load(Ordering::Relaxed);
-    unsafe {
-        let cr1 = usart::USART_CR1.read_volatile();
-        if (cr1 & usart::CR1_UE) == 0 {
-            return;
-        }
-        // Drain any in-flight TX shift byte before gating UE so clock shifts never corrupt framing.
-        let mut spin = 50_000u32;
-        while (usart::USART_SR.read_volatile() & usart::SR_TC) == 0 && spin > 0 {
-            spin -= 1;
-        }
-        usart::USART_CR1.write_volatile(cr1 & !usart::CR1_UE);
-        let brr = (pclk_hz + (baud >> 1)) / baud;
-        usart::USART_BRR.write_volatile(brr);
-        usart::USART_CR1.write_volatile(cr1);
-    }
+    UsartInstance::USART1.apply_baud(pclk_hz, CURRENT_BAUD.load(Ordering::Relaxed));
 }
 
 pub static LAST_UART_ACTIVITY_MS: AtomicU32 = AtomicU32::new(0);
@@ -309,42 +309,22 @@ pub enum UartError {
 }
 
 /// Transmit a single byte (blocking).
-#[inline(never)]
+#[inline]
 pub fn write_byte(byte: u8) -> Result<(), UartError> {
     mark_activity();
-    unsafe {
-        let mut timeout = 100_000;
-        // Wait until TX register is empty
-        while usart::USART_SR.read_volatile() & usart::SR_TXE == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(UartError::Timeout);
-            }
-        }
-        usart::USART_DR.write_volatile(byte as u32);
-        Ok(())
-    }
+    UsartInstance::USART1.write_byte(byte)
 }
 
 /// Transmit a byte slice (blocking).
 pub fn write_bytes(data: &[u8]) -> Result<(), UartError> {
-    for &b in data {
-        write_byte(b)?;
-    }
-    Ok(())
+    mark_activity();
+    UsartInstance::USART1.write_bytes(data)
 }
 
 /// Wait until all transmitted bytes have completely shifted out (Transmission Complete).
+#[inline]
 pub fn wait_tx_complete() {
-    unsafe {
-        let mut timeout = 100_000;
-        while usart::USART_SR.read_volatile() & usart::SR_TC == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                break;
-            }
-        }
-    }
+    UsartInstance::USART1.wait_tx_complete();
 }
 
 /// Transmit a string (blocking).
@@ -360,14 +340,13 @@ pub fn write_line(s: &str) -> Result<(), UartError> {
     Ok(())
 }
 
-/// Clear pending UART error flags (overrun, noise, framing) and flush DR + RX ring.
+/// Clear pending UART error flags (overrun, noise, framing) and sync DMA RX tail to head.
 #[inline]
 pub fn clear_errors() {
     cortex_m::interrupt::free(|_| unsafe {
         let _ = usart::USART_SR.read_volatile();
         let _ = usart::USART_DR.read_volatile();
-        RX_RING_HEAD.store(0, Ordering::Release);
-        RX_RING_TAIL.store(0, Ordering::Release);
+        RX_DMA_TAIL.store(dma_rx_head(), Ordering::Release);
     });
 }
 
@@ -380,7 +359,7 @@ fn hw_is_readable() -> bool {
             let _ = usart::USART_DR.read_volatile();
             return false;
         }
-        if (sr & usart::SR_RXNE) != 0 {
+        if (sr & usart::SR_RXNE) != 0 && (usart::USART_CR3.read_volatile() & usart::CR3_DMAR) == 0 {
             return true;
         }
         if (sr & usart::SR_ORE) != 0 {
@@ -390,10 +369,10 @@ fn hw_is_readable() -> bool {
     }
 }
 
-/// Discard RF-corrupted (noise/framing/parity) bytes and check if a valid byte is ready in ring or DR.
+/// Check if a valid byte is ready in the hardware circular DMA RX ring (or non-DMA DR).
 #[inline]
 pub fn is_readable() -> bool {
-    if RX_RING_HEAD.load(Ordering::Acquire) != RX_RING_TAIL.load(Ordering::Relaxed) {
+    if dma_rx_head() != RX_DMA_TAIL.load(Ordering::Relaxed) {
         return true;
     }
     hw_is_readable()
@@ -414,13 +393,13 @@ pub fn read_byte() -> Result<u8, UartError> {
     }
 }
 
-/// Try to read a byte without blocking. Returns `None` if no data available.
+/// Try to read a byte from the hardware circular `DMA1_Ch6` RX ring without blocking.
 #[inline]
 pub fn try_read_byte() -> Option<u8> {
-    let tail = RX_RING_TAIL.load(Ordering::Relaxed);
-    if tail != RX_RING_HEAD.load(Ordering::Acquire) {
-        let b = unsafe { (*core::ptr::addr_of!(RX_RING_BUF))[tail as usize] };
-        RX_RING_TAIL.store(tail.wrapping_add(1) & RX_RING_MASK, Ordering::Release);
+    let tail = RX_DMA_TAIL.load(Ordering::Relaxed);
+    if tail != dma_rx_head() {
+        let b = unsafe { (*core::ptr::addr_of!(RX_DMA_RING)).0[tail as usize] };
+        RX_DMA_TAIL.store(tail.wrapping_add(1), Ordering::Release);
         mark_activity();
         return Some(b);
     }

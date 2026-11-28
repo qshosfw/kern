@@ -110,7 +110,6 @@ fn chord_held() -> bool {
 }
 
 /// Run the recovery chain when requested. Returns only when the OS should keep booting.
-#[inline(never)]
 pub fn run(hw: &mut SystemHardware, warm_tools: bool) {
     let hold = backup::has(BackupCrashTag::FLAG_BOOTLOADER_HOLD);
     if !hold && !chord_held() {

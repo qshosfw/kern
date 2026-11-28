@@ -67,6 +67,7 @@ pub const APBRSTR1_CTCRST: u32 = 1 << 27;
 pub const AHBENR_DMA1: u32 = 1 << 0;
 pub const AHBENR_FLASH: u32 = 1 << 8;
 pub const AHBENR_CRC: u32 = 1 << 12;
+pub const AHBENR_DIV: u32 = 1 << 24;
 
 // ── IOPENR Bit Definitions ─────────────────────────────────────────────────
 

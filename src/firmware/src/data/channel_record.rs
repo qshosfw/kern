@@ -161,7 +161,6 @@ impl ChannelRecord {
     pub const SUBAUDIBLE_VALUE_MASK: u16 = 0x3FFF;
 
     /// Encode a `SubaudibleTone` into the compact 16-bit `rx_subaudible` / `tx_subaudible` word.
-    #[inline(never)]
     pub const fn encode_subaudible(tone: kernel::service::radio::SubaudibleTone) -> u16 {
         match tone {
             kernel::service::radio::SubaudibleTone::None => 0,
@@ -178,7 +177,6 @@ impl ChannelRecord {
     }
 
     /// Decode a 16-bit subaudible word back into a `SubaudibleTone`.
-    #[inline(never)]
     pub const fn decode_subaudible(raw: u16) -> kernel::service::radio::SubaudibleTone {
         if raw == 0 {
             kernel::service::radio::SubaudibleTone::None
@@ -341,7 +339,6 @@ impl ChannelRecord {
         unsafe { &mut *(self as *mut Self as *mut [u8; 64]) }
     }
 
-    #[inline(never)]
     pub fn from_bytes(bytes: &[u8; 64]) -> Self {
         let mut out = core::mem::MaybeUninit::<Self>::uninit();
         unsafe {

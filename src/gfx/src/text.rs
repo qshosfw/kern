@@ -43,7 +43,6 @@ pub fn has_localize_hook() -> bool {
 
 /// Translate an English UI key via the active language pack hook (if registered),
 /// falling back to `key` untouched on miss, empty input, or numeric strings.
-#[inline(never)]
 pub fn localize<'a>(key: &'a str, prefer_short: bool, out: &'a mut [u8]) -> &'a str {
     let bytes = key.as_bytes();
     if bytes.is_empty() || bytes[0].is_ascii_digit() {
@@ -59,14 +58,12 @@ pub fn localize<'a>(key: &'a str, prefer_short: bool, out: &'a mut [u8]) -> &'a 
 
 /// Zero-stack-buffer localization into the shared Thread-mode `LOC_SCRATCH` buffer.
 /// Callers must finish using the returned `&str` before invoking `localize_scratch` again.
-#[inline(never)]
 pub fn localize_scratch<'a>(key: &'a str, prefer_short: bool) -> &'a str {
     let out = unsafe { &mut *core::ptr::addr_of_mut!(LOC_SCRATCH) };
     localize(key, prefer_short, out)
 }
 
 /// Decode one UTF-8 character starting at `bytes[i]`, returning `(codepoint_u32, byte_len)`.
-#[inline(never)]
 fn decode_utf8_at(bytes: &[u8], i: usize) -> (u32, usize) {
     let b0 = unsafe { *bytes.get_unchecked(i) };
     if b0 < 0x80 {
@@ -111,15 +108,11 @@ pub fn draw_char_clipped(
     let code = c as u32;
 
     // Render degree symbol '°' (U+00B0)
-    if c == '°' || code == 0xB0 {
-        if y >= 4 {
-            for dx in 0..2i16 {
-                let px = x + dx;
-                if px >= min_x && px < max_x && (px as u16) < 128 {
-                    canvas.draw_pixel(px as u8, (y - 4) as u8, color);
-                    canvas.draw_pixel(px as u8, (y - 3) as u8, color);
-                }
-            }
+    if code == 0xB0 {
+        let x0 = x.max(min_x);
+        let x1 = (x + 2).min(max_x);
+        if y >= 4 && x1 > x0 {
+            canvas.fill_rect_i(x0, y - 4, x1 - x0, 2, color);
         }
         return 3;
     }
@@ -169,7 +162,6 @@ pub fn draw_char_clipped(
 }
 
 /// Draw a single ASCII character using the provided GfxFont.
-#[inline(never)]
 pub fn draw_char(
     canvas: &mut Canvas,
     x: i16,
@@ -235,7 +227,6 @@ pub fn draw_str_clipped(
 }
 
 /// Draw a string clipped to `max_x`, appending `".."` when truncated so overflow is legible.
-#[inline(never)]
 pub fn draw_str_ellipsis(
     canvas: &mut Canvas,
     x: i16,
@@ -263,13 +254,11 @@ pub fn draw_str_ellipsis(
 }
 
 /// Draw a string onto the canvas using the provided GfxFont.
-#[inline(never)]
 pub fn draw_str(canvas: &mut Canvas, x: i16, y: i16, text: &str, font: &GfxFont, color: Color) {
     draw_str_clipped(canvas, x, 128, 0, y, text, font, color);
 }
 
 /// Draw a string onto the canvas up to a maximum X coordinate. Returns the advanced X.
-#[inline(never)]
 pub fn draw_str_max_x(
     canvas: &mut Canvas,
     x: i16,
@@ -283,7 +272,6 @@ pub fn draw_str_max_x(
 }
 
 /// Calculate the total pixel width of a string formatted with the specified GfxFont.
-#[inline(never)]
 pub fn str_width(text: &str, font: &GfxFont) -> i16 {
     let mut width = 0i16;
     let bytes = text.as_bytes();
@@ -326,7 +314,6 @@ pub enum Align {
 }
 
 /// Draw aligned text (Left, Center, or Right) onto the canvas.
-#[inline(never)]
 pub fn draw_str_align(
     canvas: &mut Canvas,
     x: i16,
@@ -385,7 +372,6 @@ pub fn find_byte(bytes: &[u8], target: u8) -> Option<usize> {
 }
 
 /// Count lines in a string slice without pulling in Split<char> iterator machinery.
-#[inline(never)]
 pub fn count_lines(s: &str) -> usize {
     if s.is_empty() {
         return 0;

@@ -42,7 +42,6 @@ impl PowerControl {
 
     /// Reboots according to the requested [`RebootMode`], delegating to the registered
     /// board/firmware handler when present before triggering `AIRCR` `SYSRESETREQ`.
-    #[inline(never)]
     pub fn reboot_with(mode: RebootMode) -> ! {
         let ptr = REBOOT_HANDLER.load(Ordering::Acquire);
         if !ptr.is_null() {

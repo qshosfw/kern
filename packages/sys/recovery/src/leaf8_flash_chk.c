@@ -40,9 +40,9 @@ u32 leaf8_entry(u32 op, const KrxApiTable* api, void* param) {
     u8 plen = (u8)krx_strlen(path);
     u8 err = 0u;
 
-    u16 mv = st->ui.pwr_get(api, SUB_IO_POWER_BATT_MV);
-    if ((st->ui.pwr_get(api, SUB_IO_POWER_CRITICAL) || (mv && mv < 6800u)) &&
-        !st->ui.pwr_get(api, SUB_IO_POWER_CHARGING)) {
+    u16 mv = st->ui.prop_get(api, KRX_PROP_BATT_MV);
+    if ((st->ui.prop_get(api, KRX_PROP_BATT_CRIT) || (mv && mv < 6800u)) &&
+        !st->ui.prop_get(api, KRX_PROP_CHARGING)) {
         err = 1u;
     } else if (krx_fs_extents(api, (const u8*)path, plen, &job->ext) != sizeof(KrxFileExtents) ||
                !job->ext.depth) {

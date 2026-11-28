@@ -22,7 +22,6 @@ use super::backup;
 
 /// Append a valid crash `BootSlot` (128 B) into the `/log/crash.bin` 1 KB ring (`8 x 128 B`).
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
     let mut tag = backup::read();
     if (tag.flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) == 0 {
@@ -61,7 +60,6 @@ pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 fn render_boot_screen(
     lcd: &mut St7565<bsp::LcdBus>,
     big_title: &str,
@@ -71,7 +69,7 @@ fn render_boot_screen(
 ) {
     let canvas = crate::system_canvas();
     if hold_prompt {
-        gfx::widgets::draw_dialog_hold_prompt(
+        gfx::views::dialog::draw_dialog_hold_prompt(
             canvas,
             big_title,
             sub_title,
@@ -80,7 +78,7 @@ fn render_boot_screen(
             progress_percent,
         );
     } else {
-        gfx::widgets::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
+        gfx::views::dialog::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
     }
     lcd.blit(canvas);
 }
@@ -117,7 +115,6 @@ fn has_valid_calib_file(vfs: &mut SystemStorage) -> bool {
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 fn finish_calib_or_warn(
     vfs: &mut SystemStorage,
     raw_calib: &[u8; 512],
@@ -146,7 +143,6 @@ fn wait_keys_released(key_scanner: &mut KeypadScanner) {
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 fn prepare_boot_dialog(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
@@ -159,7 +155,6 @@ fn prepare_boot_dialog(
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 fn confirm_corrupt_format(
     lcd: &mut St7565<bsp::LcdBus>,
     key_scanner: &mut KeypadScanner,
@@ -175,7 +170,7 @@ fn confirm_corrupt_format(
     prepare_boot_dialog(lcd, radio);
     wait_keys_released(key_scanner);
 
-    let mut hold = gfx::gui::animation::HoldProgress::new();
+    let mut hold = gfx::views::HoldProgress::new();
     hold.required_ms = 1500;
     let mut last_ms = py32_hal::delay::millis();
     let mut last_pct = 0u8;
@@ -223,7 +218,8 @@ fn recover_calibration_to_fs(
     vfs: &mut SystemStorage,
 ) {
     let raw_calib = crate::services::staging_buf();
-    let from_prov = crate::services::calibration::read_valid_calib(vfs, "/prov/calib.dat", raw_calib);
+    let from_prov =
+        crate::services::calibration::read_valid_calib(vfs, "/prov/calib.dat", raw_calib);
     let has_hw_calib = from_prov || rescue_raw_calibration(&mut vfs.fs, raw_calib);
     if has_hw_calib && crate::system::admits_physical_input() {
         render_boot_screen(lcd, "Restoring", "Calibration...", 80, false);
@@ -254,7 +250,11 @@ pub fn mount_or_format<'a>(
 
         if do_format {
             if crate::system::admits_physical_input() {
-                let title = if blank { "First-Time Setup" } else { "Formatting" };
+                let title = if blank {
+                    "First-Time Setup"
+                } else {
+                    "Formatting"
+                };
                 render_boot_screen(lcd, title, "Initializing...", 50, false);
                 prepare_boot_dialog(lcd, radio);
             }
@@ -291,7 +291,6 @@ const INIT_MARK_JINGLES: u8 = if cfg!(feature = "boot_jingle") {
 };
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 pub fn ensure_default_files(filesystem: &mut SystemStorage) {
     let desired: u8 = INIT_MARK_BASE | INIT_MARK_SPLASHES | INIT_MARK_JINGLES;
 

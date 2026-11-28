@@ -60,7 +60,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Err(FsError::CapacityFull)
     }
 
-    #[inline(never)]
     fn read_block_ec(&mut self, block: usize) -> u32 {
         let mut h = [0u32; 4];
         let b = unsafe { core::slice::from_raw_parts_mut(h.as_mut_ptr() as *mut u8, 16) };
@@ -73,7 +72,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         0
     }
 
-    #[inline(never)]
     fn pick_next_alloc_block(&mut self) -> u16 {
         let mut best_erased = 0usize;
         let mut best_ec = u32::MAX;
@@ -115,7 +113,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             .program(block * D::BLOCK_SIZE + 14, &[BLOCK_KIND_BAD]);
     }
 
-    #[inline(never)]
     fn erase_and_init_block(&mut self, block: usize, prev_ec: u32) -> Result<(), FsError> {
         if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || block >= MAX_BLOCKS {
             return Err(FsError::InvalidPath);
@@ -200,7 +197,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// - `ino_l2`: `(ino as u32) | ((l2_idx as u32) << 16)`
     /// - `old_slot`: `(old_idx_p as u32) | ((slot as u32) << 16)`
     /// - `new_gc`: `(new_ptr as u32) | ((allow_gc as u32) << 16)`
-    #[inline(never)]
     fn cow_set_idx_slot(
         &mut self,
         ino_l2: u32,
@@ -238,18 +234,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 if !self.read_inode(ino, Some(inode))? {
                     return Ok(());
                 }
-                let expected = if kind == TAG_KIND_INDEX1 || inode.depth == DEPTH_DIRECT {
+                let expected = if kind == TAG_KIND_INDEX1 {
                     inode.l1_page(idx)
-                } else if inode.depth == DEPTH_SINGLE_INDIRECT {
-                    let p = inode.l1_page(idx >> 7);
-                    if p != 0 {
-                        self.load_page(p)?;
-                        read_idx_u16(&self.page_buf, idx & 0x7F)
-                    } else {
-                        0
-                    }
                 } else {
-                    0
+                    self.resolve_inode_page(inode, idx)?
                 };
                 if expected != phys {
                     return Ok(());
@@ -306,19 +294,31 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(false)
     }
 
-    #[inline(never)]
+    fn spill_inline_to_page(
+        &mut self,
+        len: usize,
+        kind: u8,
+        extra_idx: Option<(usize, u16)>,
+    ) -> Result<u16, FsError> {
+        let phys = self.alloc_page(true)?;
+        self.invalidate_cache();
+        self.page_buf.fill(0);
+        self.page_buf[..len].copy_from_slice(&self.cur_inode.inline_data[..len]);
+        if let Some((slot, val)) = extra_idx {
+            write_idx_u16(&mut self.page_buf, slot, val);
+        }
+        self.program_page_buf(phys, self.cur_inode.ino, 0, kind)?;
+        self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
+        self.cur_inode.set_l1_page(0, phys);
+        Ok(phys)
+    }
+
     pub(crate) fn write_pages_at(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
         let ino = self.cur_inode.ino;
         if self.cur_inode.is_inline() {
             if self.cur_inode.size > 0 {
-                let phys = self.alloc_page(true)?;
                 let ilen = (self.cur_inode.size as usize).min(MAX_INLINE_LEN);
-                self.invalidate_cache();
-                self.page_buf.fill(0);
-                self.page_buf[..ilen].copy_from_slice(&self.cur_inode.inline_data[..ilen]);
-                self.program_page_buf(phys, ino, 0, TAG_KIND_DATA)?;
-                self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
-                self.cur_inode.set_l1_page(0, phys);
+                self.spill_inline_to_page(ilen, TAG_KIND_DATA, None)?;
             } else {
                 self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
             }
@@ -403,16 +403,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 return Err(FsError::CapacityFull);
             }
             if old_d == DEPTH_DIRECT {
-                let l1_0 = self.alloc_page(true)?;
-                self.invalidate_cache();
-                self.page_buf.fill(0);
-                self.page_buf[..MAX_INLINE_LEN].copy_from_slice(&self.cur_inode.inline_data);
-                if l2_idx == 0 {
-                    write_idx_u16(&mut self.page_buf, l1_idx, new_data_p);
-                }
-                self.program_page_buf(l1_0, ino, 0, TAG_KIND_INDEX1)?;
-                self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
-                self.cur_inode.set_l1_page(0, l1_0);
+                let extra = (l2_idx == 0).then_some((l1_idx, new_data_p));
+                self.spill_inline_to_page(MAX_INLINE_LEN, TAG_KIND_INDEX1, extra)?;
                 self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
                 if l2_idx != 0 {
                     self.commit_cur_inode(&[])?;
@@ -438,7 +430,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok((obs0 as u32) | ((obs1 as u32) << 16))
     }
 
-    #[inline(never)]
     pub(crate) fn mark_tree_obsolete(&mut self, depth: u8, ptrs: &[u8; MAX_INLINE_LEN]) {
         if depth == 0 {
             return;
@@ -460,7 +451,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     /// Metadata-only rename across any directories (zero data page copies).
-    #[inline(never)]
     pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
         fn trim_slashes(s: &str) -> &[u8] {
             let mut b = s.as_bytes();
@@ -505,7 +495,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(())
     }
 
-    #[inline(never)]
     pub fn remove(&mut self, path: &str) -> Result<(), FsError> {
         self.lookup_inode(path)?;
         let ino = self.cur_inode.ino;
@@ -531,7 +520,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(())
     }
 
-    #[inline(never)]
     pub fn set_permission(&mut self, path: &str, perm: u8) -> Result<(), FsError> {
         self.lookup_inode(path)?;
         if self.cur_inode.perm == perm {
@@ -541,7 +529,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.commit_cur_inode(&[])
     }
 
-    #[inline(never)]
     fn list_dir_dyn(
         &mut self,
         dir_path: &str,
@@ -572,7 +559,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.list_dir_dyn(dir_path, &mut cb)
     }
 
-    #[inline(never)]
     fn load_latest_superblock(&mut self) -> bool {
         self.invalidate_cache();
         let mut found = false;
@@ -598,7 +584,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     /// Format flash into a fresh KernFS v2 volume, preserving block erase counts where possible.
-    #[inline(never)]
     pub fn format(&mut self, progress_cb: Option<&mut dyn FnMut(u8)>) -> Result<(), FsError> {
         if self.low_power {
             return Err(FsError::LowPower);
@@ -649,7 +634,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(())
     }
 
-    #[inline(never)]
     pub fn mount(&mut self) -> Result<(), FsError> {
         if !self.load_latest_superblock() {
             return Err(FsError::NotFound);

@@ -9,6 +9,7 @@ rustflags = [
   "-C", "target-cpu=cortex-m0plus",
   "-C", "no-vectorize-loops",
   "-C", "opt-level=z",
+  "-Z", "mir-opt-level=1",
   "-Z", "location-detail=none",
   "-Z", "fmt-debug=none",
 ]

@@ -11,7 +11,6 @@ pub use key_sink::*;
 pub use procs::*;
 
 /// Shared monotonic tick delta helper for compositor and lock/sleep hold timers.
-#[inline(never)]
 pub(super) fn tick_dt_ms(last_ms: &mut u32, max_dt: u16) -> u16 {
     #[cfg(target_arch = "arm")]
     let (now, dt) = {
@@ -34,6 +33,7 @@ use crate::apps::APP_ID_SETTINGS;
 #[cfg(not(test))]
 use crate::apps::APP_ID_VFO;
 use crate::apps::{APP_ID_LAUNCHER, Shortcut};
+#[cfg(test)]
 use ::abi::CapabilitySet;
 use compositor::OsCompositor;
 use gfx::Canvas;
@@ -57,20 +57,15 @@ pub struct Orchestrator {
     nav_stack: NavStack<6>,
 }
 
-#[inline(never)]
-pub(crate) fn launch_krx_shortcut_arg(
-    ctx: &mut crate::services::SysContext,
-    path: &str,
-    action_id: u32,
-) -> bool {
-    let mut path_copy = [0u8; 24];
+pub(crate) fn launch_krx_shortcut_arg(path: &str, action_id: u32) -> bool {
+    let mut path_copy = [0u8; 32];
     let pb = path.as_bytes();
     let plen = pb.len().min(path_copy.len());
     path_copy[..plen].copy_from_slice(&pb[..plen]);
     let safe_path = unsafe { core::str::from_utf8_unchecked(&path_copy[..plen]) };
-    if let Err(err) = crate::runtime::launch_krx_package(ctx, safe_path, action_id) {
-        crate::runtime::show_launch_error_dialog(ctx, safe_path, err);
-        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+    if let Err(err) = crate::runtime::launch_krx_package(safe_path, action_id) {
+        crate::runtime::show_launch_error_dialog(safe_path, err);
+        crate::services::play_dialog_sound(crate::services::melody::DialogSoundType::Error);
         return false;
     }
     true
@@ -78,8 +73,8 @@ pub(crate) fn launch_krx_shortcut_arg(
 
 #[cfg(feature = "filesystem")]
 #[inline(always)]
-pub(crate) fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) -> bool {
-    launch_krx_shortcut_arg(ctx, path, 0)
+pub(crate) fn launch_krx_shortcut(path: &str) -> bool {
+    launch_krx_shortcut_arg(path, 0)
 }
 
 impl Orchestrator {
@@ -88,70 +83,24 @@ impl Orchestrator {
         init_proc_table();
         let table = proc_table_mut();
 
-        #[inline(never)]
-        fn spawn_proc(
-            table: &mut ProcessTable<MAX_PROCESSES>,
-            name: &str,
-            app_id: usize,
-            priority: kernel::sched::Priority,
-            caps: CapabilitySet,
-            state: ProcState,
-        ) {
-            if table
-                .spawn(name, app_id, priority, ExecType::StaticFirmware, caps)
-                .is_ok()
-            {
-                if let Some(pcb) = table.find_mut_by_app(app_id) {
-                    pcb.set_state(state);
-                    pcb.ledger.record_activation();
-                }
-            }
-        }
-
-        const CORE_NAMES: &[u8] = b"Kernel\0Radio\0Power\0Input\0";
-        const CORE_PRIOS: [kernel::sched::Priority; 4] = [
-            kernel::sched::Priority::Safety,
-            kernel::sched::Priority::Radio,
-            kernel::sched::Priority::Safety,
-            kernel::sched::Priority::Ui,
-        ];
-        let radio_caps = CapabilitySet::empty()
-            .with(::abi::Cap::RadioRx)
-            .with(::abi::Cap::RadioTx)
-            .raw();
-        for i in 0..4u8 {
-            let caps_raw = match i {
-                0 => u32::MAX,
-                1 => radio_caps,
-                _ => 0,
-            };
-            spawn_proc(
-                table,
-                utils::format::nth_cstr(CORE_NAMES, i),
-                (0xF0 + i) as usize,
-                CORE_PRIOS[i as usize],
-                CapabilitySet::from_raw(caps_raw),
-                if i == 0 {
-                    ProcState::Running
-                } else {
-                    ProcState::ServiceIdle
-                },
-            );
-        }
-
-        // 5. Active Foreground Startup Application (PID 5)
+        // Spawn only real resident/foreground application actors (zero fake static kernel PCBs).
         let name = crate::AppRegistry::descriptor(startup_app)
             .map(|m| m.name)
-            .unwrap_or("Radio");
+            .unwrap_or("Home");
         let caps = crate::AppRegistry::required_caps(startup_app);
-        spawn_proc(
-            table,
-            name,
-            startup_app,
-            kernel::sched::Priority::Ui,
-            caps,
-            ProcState::Running,
-        );
+        if table
+            .spawn(
+                name,
+                startup_app,
+                kernel::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                caps,
+            )
+            .is_ok()
+            && let Some(pcb) = table.find_mut_by_app(startup_app)
+        {
+            pcb.set_state(ProcState::Running);
+        }
 
         unsafe {
             core::ptr::write_bytes(dst as *mut u8, 0, core::mem::size_of::<Self>());
@@ -231,7 +180,7 @@ impl Orchestrator {
                     .unwrap_or("App");
                 pcb.name.clear();
                 let _ = pcb.name.push_str(name);
-                pcb.app_id = app_id;
+                pcb.app_id = app_id as u8;
             }
         }
     }
@@ -241,59 +190,46 @@ impl Orchestrator {
         self.lock_mgr.reset_input_tracking();
     }
 
-    fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
-        // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
-        record_proc_activation(0xF1);
-
-        // 2. Power Management & Battery Supervisor (PID 3)
-        record_proc_activation(0xF2);
-
-        // 3. System Kernel & Watch Uptime Service (PID 1)
-        record_proc_activation(0xF0);
-
-        // 4. Cooperative Zone A background daemons, services, drivers, and modules
+    fn tick_background_services(&mut self) {
         #[cfg(feature = "krx_native")]
-        crate::runtime::background::BgManager::tick_system(ctx.millis());
-        #[cfg(not(feature = "krx_native"))]
-        let _ = ctx;
+        crate::runtime::background::BgManager::tick_system(py32_hal::delay::millis());
     }
 
-    #[inline(never)]
-    fn cleanup_app_radio<'a>(
-        app_id: usize,
-        stop_tx: bool,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-    ) {
-        if stop_tx && ctx.state.coord.is_transmitting {
-            ctx.request_ptt_stop();
+    fn quench_app_radio(app_id: usize) {
+        let (state, radio) = crate::services::state_and_radio();
+        if state.coord.is_transmitting {
+            state.coord.request_ptt_stop(radio);
         }
-        if app_id >= crate::AppRegistry::count() {
-            if let Some(pcb) = proc_table().find_by_app(app_id) {
-                let cid = kernel::service::radio::ClientId::for_krx_pid(pcb.pid.0);
-                let _ = ctx.state.coord.release_client_lock(ctx.radio, cid);
-            }
+        if app_id >= crate::AppRegistry::count()
+            && let Some(pcb) = proc_table().find_by_app(app_id)
+        {
+            let cid = kernel::service::radio::ClientId::for_krx_pid(pcb.pid.0);
+            let _ = state.coord.release_client_lock(radio, cid);
         }
     }
 
-    #[inline(never)]
-    pub fn force_close_active_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
+    fn reap_dynamic_app(app_id: usize) {
+        if let Some(pcb) = proc_table().find_by_app(app_id) {
+            reap_pid_only(pcb.pid);
+        }
+        crate::AppRegistry::unregister_dynamic();
+    }
+
+    pub fn force_close_active_app(&mut self) {
         if self.active_app_id == APP_ID_LAUNCHER {
             return;
         }
         let closing_app = self.active_app_id;
-        Self::cleanup_app_radio(closing_app, true, ctx);
+        Self::quench_app_radio(closing_app);
         self.lock_mgr.reset_input_tracking();
         self.nav_stack.clear();
-        self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+        self.switch_app_internal(APP_ID_LAUNCHER, false);
         if closing_app >= crate::AppRegistry::count() {
-            if let Some(pcb) = proc_table().find_by_app(closing_app) {
-                reap_pid_only(pcb.pid);
-            }
-            crate::AppRegistry::unregister_dynamic();
+            Self::reap_dynamic_app(closing_app);
         } else if let Some(pcb) = proc_table_mut().find_mut_by_app(closing_app) {
             pcb.set_state(ProcState::Stopped);
         }
-        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
+        crate::services::play_dialog_sound(crate::services::melody::DialogSoundType::Success);
     }
 }
 
@@ -304,17 +240,15 @@ enum FilterFlow {
 }
 
 impl Orchestrator {
-    fn handle_f_key_action<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        code: KeyCode,
-    ) {
+    fn handle_f_key_action(&mut self, code: KeyCode) {
         self.lock_mgr.clear_f_active();
         if code == KeyCode::Exit {
             if self.active_app_id != APP_ID_LAUNCHER {
                 self.nav_stack.clear();
-                self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
+                self.switch_app_internal(APP_ID_LAUNCHER, false);
+                crate::services::play_dialog_sound(
+                    crate::services::melody::DialogSoundType::Success,
+                );
             }
             return;
         }
@@ -332,26 +266,20 @@ impl Orchestrator {
         };
         let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
         let target_id = slot.map_or(0, |i| {
-            crate::apps::shortcut::resolve_slot(&ctx.config.keys, i, cur_ctx)
+            crate::apps::shortcut::resolve_slot(&crate::services::config().keys, i, cur_ctx)
         });
-        self.execute_shortcut_target(ctx, target_id, true);
+        self.execute_shortcut_target(target_id, true);
     }
 
-    #[inline(never)]
-    pub fn execute_shortcut_target<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        target_id: u16,
-        warn_if_empty: bool,
-    ) -> bool {
+    pub fn execute_shortcut_target(&mut self, target_id: u16, warn_if_empty: bool) -> bool {
         let cat = crate::apps::launcher::catalog::get_catalog();
         #[cfg(feature = "filesystem")]
         if (target_id & 0x8000) != 0 && !cat.scanned {
-            cat.scan(ctx.storage);
+            cat.scan(crate::services::storage_mut());
         }
         match crate::apps::shortcut::resolve(target_id, cat) {
             crate::apps::shortcut::ResolvedShortcut::Builtin(cmd) => {
-                self.process_ipc_command(ctx, cmd);
+                self.process_ipc_command(cmd);
                 true
             }
             crate::apps::shortcut::ResolvedShortcut::App { path, action_id } => {
@@ -360,15 +288,17 @@ impl Orchestrator {
                     && crate::runtime::native_runner::active_pkg_matches(path)
                 {
                     if action_id != 0 {
-                        crate::runtime::native_runner::dispatch_action(ctx, action_id);
+                        crate::runtime::native_runner::dispatch_action(action_id);
                     }
                     return true;
                 }
-                launch_krx_shortcut_arg(ctx, path, action_id as u32)
+                launch_krx_shortcut_arg(path, action_id as u32)
             }
             crate::apps::shortcut::ResolvedShortcut::None => {
                 if warn_if_empty {
-                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                    crate::services::play_dialog_sound(
+                        crate::services::melody::DialogSoundType::Warning,
+                    );
                 }
                 false
             }
@@ -376,11 +306,7 @@ impl Orchestrator {
     }
 
     #[inline(never)]
-    fn filter_keypad_lock<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: &Event,
-    ) -> FilterFlow {
+    fn filter_keypad_lock(&mut self, event: &Event) -> FilterFlow {
         let was_locked = self.lock_mgr.is_locked;
         let was_f_active = self.lock_mgr.is_f_active;
         let was_f_drawer_animating = self.lock_mgr.is_f_drawer_animating();
@@ -389,23 +315,24 @@ impl Orchestrator {
         let can_sleep =
             !self.lock_mgr.is_locked && self.active_app_id == APP_ID_LAUNCHER && !is_modal_active;
 
+        let cfg = crate::services::config();
         let intercepted = self.lock_mgr.handle_event(
             event,
-            ctx.config.keys.hold_delay_ms(),
-            ctx.config.keys.f_key_timeout_ms(),
-            ctx.config.keys.auto_lock_ms(),
+            cfg.keys.hold_delay_ms(),
+            cfg.keys.f_key_timeout_ms(),
+            cfg.keys.auto_lock_ms(),
             can_sleep,
         );
 
-        if ctx.config.keys.f_drawer == 0 {
+        if cfg.keys.f_drawer == 0 {
             self.lock_mgr.snap_f_drawer(true);
-        } else if !ctx.config.display.animations_enabled() {
+        } else if !cfg.display.animations_enabled() {
             self.lock_mgr.snap_f_drawer(false);
         }
 
         if self.lock_mgr.force_close_requested {
             self.lock_mgr.force_close_requested = false;
-            self.force_close_active_app(ctx);
+            self.force_close_active_app();
             self.lock_mgr.reset_hold_tracking();
             return FilterFlow::Stop(true);
         }
@@ -417,13 +344,15 @@ impl Orchestrator {
 
         if was_locked != self.lock_mgr.is_locked {
             if self.lock_mgr.is_locked {
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
+                crate::services::play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
             } else {
-                ctx.wake_display();
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+                crate::services::wake_display();
+                crate::services::play_dialog_sound(
+                    crate::services::melody::DialogSoundType::Unlock,
+                );
             }
         } else if !was_f_active && self.lock_mgr.is_f_active {
-            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
+            crate::services::play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
         }
 
         if intercepted {
@@ -446,7 +375,6 @@ impl Orchestrator {
         }
     }
 
-    #[inline(never)]
     fn update_key_ownership(&mut self, event: &Event, status: EventResult, fault_handled: bool) {
         if !fault_handled {
             if let Event::Key { code, state } = *event {
@@ -463,12 +391,7 @@ impl Orchestrator {
         }
     }
 
-    #[inline(never)]
-    fn handle_system_audio_events<'a>(
-        &self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: &Event,
-    ) {
+    fn handle_system_audio_events(&self, event: &Event) {
         use crate::services::melody::DialogSoundType;
         let sound = match event {
             Event::Charging(true) => Some(DialogSoundType::Charging),
@@ -484,7 +407,8 @@ impl Orchestrator {
             },
             #[cfg(feature = "radio")]
             Event::Bus(bus_evt)
-                if bus_evt.topic == kernel::ipc::Topic::RADIO && ctx.config.audio.key_beep != 0 =>
+                if bus_evt.topic == kernel::ipc::Topic::RADIO
+                    && crate::services::config().audio.key_beep != 0 =>
             {
                 match crate::services::radio::RadioEvent::from_bus_event(bus_evt) {
                     Some(crate::services::radio::RadioEvent::TotWarning { .. }) => {
@@ -499,41 +423,34 @@ impl Orchestrator {
             _ => None,
         };
         if let Some(s) = sound {
-            ctx.play_dialog_sound(s);
+            crate::services::play_dialog_sound(s);
         }
     }
 
-    #[inline(never)]
-    fn filter_hotkeys_and_system<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: &Event,
-    ) -> FilterFlow {
+    fn filter_hotkeys_and_system(&mut self, event: &Event) -> FilterFlow {
         if let Event::Key {
             code,
             state: KeyState::Pressed,
         } = *event
         {
             if self.lock_mgr.is_f_active {
-                self.handle_f_key_action(ctx, code);
+                self.handle_f_key_action(code);
                 return FilterFlow::Stop(true);
             }
-            if code != KeyCode::Ptt && code != KeyCode::KeyF && ctx.config.audio.key_beep != 0 {
-                ctx.play_beep(crate::services::melody::BeepType::from_u8(
-                    ctx.config.audio.key_beep,
-                ));
+            let key_beep = crate::services::config().audio.key_beep;
+            if code != KeyCode::Ptt && code != KeyCode::KeyF && key_beep != 0 {
+                crate::services::play_beep(crate::services::melody::BeepType::from_u8(key_beep));
             }
         }
 
-        self.handle_system_audio_events(ctx, event);
+        self.handle_system_audio_events(event);
 
         if matches!(event, Event::Tick) {
-            self.tick_background_services(ctx);
-            record_proc_activation(self.active_app_id);
+            self.tick_background_services();
         }
 
         if let Event::Sys(sys_evt) = *event {
-            if self.handle_kernel_sys_event(ctx, sys_evt) {
+            if self.handle_kernel_sys_event(sys_evt) {
                 return FilterFlow::Stop(true);
             }
         }
@@ -541,44 +458,41 @@ impl Orchestrator {
         FilterFlow::Continue
     }
 
-    #[inline(never)]
-    pub fn dispatch_event<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: Event,
-    ) -> bool {
+    pub fn dispatch_event(&mut self, event: Event) -> bool {
         if filter_sunk_keys(&event) {
             self.lock_mgr.reset_input_tracking();
             return false;
         }
         let mut handled = false;
-        let filters: [fn(&mut Self, &mut crate::services::SysContext<'_, '_>, &Event) -> FilterFlow;
-            4] = [
-            Self::filter_modal_event,
-            Self::filter_keypad_lock,
-            Self::filter_hotkeys_and_system,
-            Self::filter_active_app,
-        ];
-        for f in filters {
-            match f(self, ctx, &event) {
-                FilterFlow::Continue => {}
-                FilterFlow::DirtyContinue => handled = true,
-                FilterFlow::Stop(res) => {
-                    handled |= res;
-                    break;
-                }
-            }
+        if matches!(event, Event::Tick)
+            && crate::orchestrator::compositor::active_modal_mut()
+                .tick(gfx::views::repeater::tick_dt_ms())
+        {
+            handled = true;
         }
-        self.drain_ipc_commands(ctx);
+        macro_rules! run_step {
+            ($step:expr) => {
+                match $step {
+                    FilterFlow::Continue => false,
+                    FilterFlow::DirtyContinue => {
+                        handled = true;
+                        false
+                    }
+                    FilterFlow::Stop(res) => {
+                        handled |= res;
+                        true
+                    }
+                }
+            };
+        }
+        let _ = run_step!(self.filter_modal_event(&event))
+            || run_step!(self.filter_keypad_lock(&event))
+            || run_step!(self.filter_hotkeys_and_system(&event))
+            || run_step!(self.filter_active_app(&event));
         handled
     }
 
-    #[inline(never)]
-    fn filter_active_app<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: &Event,
-    ) -> FilterFlow {
+    fn filter_active_app(&mut self, event: &Event) -> FilterFlow {
         let prev_app = self.active_app_id;
 
         let is_key = matches!(*event, Event::Key { .. });
@@ -588,7 +502,7 @@ impl Orchestrator {
         };
 
         // Forward event to active foreground app
-        let status = crate::AppRegistry::on_event(self.active_app_id, ctx, event);
+        let status = crate::AppRegistry::on_event(self.active_app_id, event);
         record_proc_event_and_stack(self.active_app_id);
 
         // Dynamic Fault & Error Interception
@@ -596,7 +510,7 @@ impl Orchestrator {
         match status {
             EventResult::Error(code) | EventResult::RecoverableFault(code) => {
                 fault_handled = true;
-                self.handle_dynamic_fault(ctx, code);
+                self.handle_dynamic_fault(code);
             }
             _ => {}
         }
@@ -615,17 +529,13 @@ impl Orchestrator {
         }
 
         // Global navigation shortcuts & hotkeys (only if foreground app ignored the event and does not own the key)
-        self.handle_global_shortcuts(ctx, *event);
+        self.handle_global_shortcuts(*event);
         FilterFlow::Stop(self.active_app_id != prev_app)
     }
 
     #[cold]
-    fn handle_dynamic_fault<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        code: u8,
-    ) {
-        Self::cleanup_app_radio(self.active_app_id, true, ctx);
+    fn handle_dynamic_fault(&mut self, code: u8) {
+        Self::quench_app_radio(self.active_app_id);
         if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
             pcb.restart_budget = pcb.restart_budget.saturating_sub(1);
             if pcb.restart_budget == 0 {
@@ -633,7 +543,7 @@ impl Orchestrator {
             }
         }
 
-        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+        crate::services::play_dialog_sound(crate::services::melody::DialogSoundType::Error);
 
         let err = kernel::error::KernelError::from_code(code);
         let err_desc = err.as_str();
@@ -648,8 +558,7 @@ impl Orchestrator {
         sink_modal_keys();
     }
 
-    #[inline(never)]
-    fn pop_active_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
+    fn pop_active_app(&mut self) {
         if self.active_app_id == APP_ID_LAUNCHER {
             return;
         }
@@ -663,32 +572,29 @@ impl Orchestrator {
                 false
             };
             if prev != self.active_app_id && is_valid {
-                self.switch_app_internal(ctx, prev, false);
+                self.switch_app_internal(prev, false);
                 return;
             }
         }
-        self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+        self.switch_app_internal(APP_ID_LAUNCHER, false);
     }
 
     #[inline(never)]
-    fn filter_modal_event<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: &Event,
-    ) -> FilterFlow {
+    fn filter_modal_event(&mut self, event: &Event) -> FilterFlow {
         unsafe {
             let modal_mut = crate::orchestrator::compositor::active_modal_mut();
-            if modal_mut.is_active() {
+            if !matches!(
+                modal_mut.modal,
+                crate::orchestrator::compositor::ActiveModal::None
+            ) {
                 if let Event::Key {
                     code: KeyCode::Ptt,
                     state,
                 } = *event
                 {
                     if state == KeyState::Released {
-                        ctx.handle_system_ptt(KeyState::Released);
+                        crate::services::handle_system_ptt(KeyState::Released);
                     } else {
-                        // Latch PTT into key_sink while an overlay is open so dismissing a modal
-                        // with PTT held can never accidentally key the transmitter.
                         sink_key(KeyCode::Ptt);
                     }
                 }
@@ -704,75 +610,45 @@ impl Orchestrator {
 
                     if tag == TAG_FAULT_CONFIRM {
                         let is_confirmed = matches!(res, kernel::app::ModalResult::Confirmed(_));
-                        let is_canceled_or_dismissed = matches!(
-                            res,
-                            kernel::app::ModalResult::Canceled(_)
-                                | kernel::app::ModalResult::Dismissed(_)
-                        );
-                        // Always close the fault dialog BEFORE retrying or switching apps so
-                        // Retry never leaves the old dialog open or stacks on a repeat fault.
                         modal_mut.dismiss();
                         #[cfg(feature = "krx_native")]
-                        let handled_krx = if let Some(pkg) = crate::runtime::fault::fault_pkg_path()
-                        {
+                        if let Some(pkg) = crate::runtime::fault::fault_pkg_path() {
                             let mut path_buf = [0u8; 32];
                             let n = pkg.len().min(32);
                             path_buf[..n].copy_from_slice(&pkg.as_bytes()[..n]);
                             crate::runtime::fault::clear_fault_pkg();
                             let retried = is_confirmed
                                 && launch_krx_shortcut_arg(
-                                    ctx,
                                     core::str::from_utf8_unchecked(&path_buf[..n]),
                                     0,
                                 );
                             if !retried {
-                                self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+                                self.switch_app_internal(APP_ID_LAUNCHER, false);
                             }
-                            true
                         } else {
-                            false
-                        };
-                        #[cfg(not(feature = "krx_native"))]
-                        let handled_krx = false;
-                        if !handled_krx {
-                            if is_confirmed {
-                                if let Some(pcb) =
-                                    proc_table_mut().find_mut_by_app(self.active_app_id)
-                                {
-                                    if pcb.restart_budget == 0 {
-                                        pcb.restart_budget = 1;
-                                    }
-                                    pcb.set_state(ProcState::Ready);
-                                }
-                                if self.active_app_id < crate::AppRegistry::count() {
-                                    crate::AppRegistry::init_app(self.active_app_id);
-                                    crate::AppRegistry::on_start(self.active_app_id, ctx);
-                                } else {
-                                    self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
-                                }
-                            } else if is_canceled_or_dismissed {
-                                if let Some(pcb) =
-                                    proc_table_mut().find_mut_by_app(self.active_app_id)
-                                {
-                                    pcb.set_state(ProcState::Stopped);
-                                }
-                                self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
-                            }
+                            self.switch_app_internal(APP_ID_LAUNCHER, false);
                         }
-                    } else if tag == crate::orchestrator::compositor::TAG_SYSTEM_ALERT {
-                        // System notifications self-dismiss without dispatching app modal callbacks.
-                    } else {
-                        crate::AppRegistry::on_modal_result(self.active_app_id, ctx, &res);
+                        #[cfg(not(feature = "krx_native"))]
+                        {
+                            let _ = is_confirmed;
+                            self.switch_app_internal(APP_ID_LAUNCHER, false);
+                        }
+                    } else if tag != crate::orchestrator::compositor::TAG_SYSTEM_ALERT {
+                        crate::AppRegistry::on_modal_result(self.active_app_id, &res);
                     }
 
-                    if modal_mut.is_active() && modal_mut.tag == tag {
+                    if !matches!(
+                        modal_mut.modal,
+                        crate::orchestrator::compositor::ActiveModal::None
+                    ) && modal_mut.tag == tag
+                    {
                         modal_mut.dismiss();
                     }
 
                     if tag == crate::orchestrator::compositor::TAG_SYSTEM_ALERT
                         && self.active_app_id == APP_ID_LAUNCHER
                     {
-                        crate::orchestrator::compositor::present_next_system_alert(ctx);
+                        crate::orchestrator::compositor::present_next_system_alert();
                     }
                 }
                 self.lock_mgr.reset_input_tracking();
@@ -783,12 +659,7 @@ impl Orchestrator {
         }
     }
 
-    #[inline(never)]
-    fn handle_global_shortcuts<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        event: Event,
-    ) {
+    fn handle_global_shortcuts(&mut self, event: Event) {
         let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
         let mut fire_slot: Option<u16> = None;
         match event {
@@ -796,17 +667,15 @@ impl Orchestrator {
                 code: KeyCode::Ptt,
                 state,
             } => {
-                ctx.handle_system_ptt(state);
+                crate::services::handle_system_ptt(state);
                 return;
             }
             Event::Key {
                 code: KeyCode::Exit,
                 state: KeyState::Pressed,
             } => {
-                // When already in Launcher (root launcher screen), Exit does not navigate back.
-                // This ensures holding Exit to sleep does not trigger an accidental switch to VFO.
                 if self.active_app_id != APP_ID_LAUNCHER {
-                    self.pop_active_app(ctx);
+                    self.pop_active_app();
                 }
                 return;
             }
@@ -819,10 +688,9 @@ impl Orchestrator {
                 } else {
                     (&mut self.side2_held, 2usize)
                 };
-                let long =
-                    crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot + 1, cur_ctx);
-                let short =
-                    crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot, cur_ctx);
+                let keys = &crate::services::config().keys;
+                let long = crate::apps::shortcut::resolve_slot(keys, base_slot + 1, cur_ctx);
+                let short = crate::apps::shortcut::resolve_slot(keys, base_slot, cur_ctx);
                 fire_slot = Self::handle_side_key(held, state, long, short);
             }
             Event::Key {
@@ -830,7 +698,7 @@ impl Orchestrator {
                 state: KeyState::Held,
             } => {
                 fire_slot = Some(crate::apps::shortcut::resolve_slot(
-                    &ctx.config.keys,
+                    &crate::services::config().keys,
                     4,
                     cur_ctx,
                 ));
@@ -838,15 +706,12 @@ impl Orchestrator {
             _ => {}
         }
         if let Some(target_id) = fire_slot {
-            self.execute_shortcut_target(ctx, target_id, false);
+            self.execute_shortcut_target(target_id, false);
         }
     }
 
-    fn handle_kernel_sys_event<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        sys_evt: kernel::ipc::SysEvent,
-    ) -> bool {
+    #[inline(never)]
+    fn handle_kernel_sys_event(&mut self, sys_evt: kernel::ipc::SysEvent) -> bool {
         if sys_evt.target == ipc_target::KERNEL {
             #[cfg(feature = "krx_native")]
             {
@@ -858,7 +723,7 @@ impl Orchestrator {
                     let ack: Option<&[u8]> = match msg.msg_type {
                         ipc_msg_type::APP_SWITCH if msg.payload_len > 0 => {
                             let target_app = msg.payload[0] as usize;
-                            self.switch_app(ctx, target_app);
+                            self.switch_app(target_app);
                             ack_byte[0] = target_app as u8;
                             Some(&ack_byte)
                         }
@@ -889,16 +754,10 @@ impl Orchestrator {
 
         let cmd = Shortcut::from(sys_evt);
         if cmd != Shortcut::None {
-            self.process_ipc_command(ctx, cmd);
+            self.process_ipc_command(cmd);
             return true;
         }
         false
-    }
-
-    fn drain_ipc_commands<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
-        while let Some(ev) = ctx.ipc.pop() {
-            self.process_ipc_command(ctx, Shortcut::from(ev));
-        }
     }
 
     fn handle_side_key(
@@ -922,19 +781,16 @@ impl Orchestrator {
     }
 
     #[cfg(feature = "app_hibernation")]
-    #[inline(never)]
     fn swap_app_state(
         app_id: usize,
         storage: Option<&mut crate::services::SystemStorage>,
         is_out: bool,
     ) -> bool {
-        let size = crate::AppRegistry::app_size(app_id);
-        let Some(ptr) = (size > 0)
-            .then(|| crate::AppRegistry::app_instance(app_id))
-            .flatten()
-        else {
+        if app_id != APP_ID_LAUNCHER {
             return false;
-        };
+        }
+        let ptr = crate::apps::AppRegistry::launcher_mut() as *mut crate::apps::LauncherApp;
+        let size = core::mem::size_of::<crate::apps::LauncherApp>();
         if is_out {
             let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, size) };
             if let Ok(comp_len) = crate::runtime::AppSwapManager::swap_out_tiered(
@@ -978,34 +834,23 @@ impl Orchestrator {
         Self::swap_app_state(app_id, storage, false)
     }
 
-    pub fn switch_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>, app_id: usize) {
-        self.switch_app_internal(ctx, app_id, true);
+    pub fn switch_app(&mut self, app_id: usize) {
+        self.switch_app_internal(app_id, true);
     }
 
     #[inline(never)]
-    fn switch_app_internal<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        app_id: usize,
-        push_history: bool,
-    ) {
+    fn switch_app_internal(&mut self, app_id: usize, push_history: bool) {
         if app_id < crate::AppRegistry::app_count() {
             if self.active_app_id < crate::AppRegistry::app_count() {
                 let is_dyn_reload =
                     self.active_app_id == app_id && app_id >= crate::apps::AppRegistry::count();
                 if !is_dyn_reload {
-                    if self.active_app_id != app_id {
-                        Self::cleanup_app_radio(self.active_app_id, false, ctx);
-                    }
                     if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
                         pcb.set_state(ProcState::Suspended);
                     }
-                    crate::AppRegistry::on_exit(self.active_app_id, ctx);
+                    crate::AppRegistry::on_exit(self.active_app_id);
                     if self.active_app_id >= crate::apps::AppRegistry::count() {
-                        if let Some(pcb) = proc_table().find_by_app(self.active_app_id) {
-                            reap_pid_only(pcb.pid);
-                        }
-                        crate::AppRegistry::unregister_dynamic();
+                        Self::reap_dynamic_app(self.active_app_id);
                     }
                 }
             }
@@ -1019,7 +864,10 @@ impl Orchestrator {
                         self.nav_stack.trim_oldest(max_apps.saturating_sub(1))
                     {
                         #[cfg(feature = "app_hibernation")]
-                        Self::hibernate_app_state(_evicted_app, Some(ctx.storage));
+                        Self::hibernate_app_state(
+                            _evicted_app,
+                            Some(crate::services::storage_mut()),
+                        );
                     }
                 }
                 self.previous_app = Some(self.active_app_id);
@@ -1035,7 +883,7 @@ impl Orchestrator {
 
             // Resume app if hibernated in Tier-1 RAM or Tier-2 KernFS swap
             #[cfg(feature = "app_hibernation")]
-            Self::resume_app_state(app_id, Some(ctx.storage));
+            Self::resume_app_state(app_id, Some(crate::services::storage_mut()));
 
             // Track process activation in PCB table
             let table = proc_table_mut();
@@ -1059,19 +907,13 @@ impl Orchestrator {
             }
             if let Some(pcb) = table.find_mut_by_app(app_id) {
                 pcb.set_state(ProcState::Running);
-                pcb.ledger.record_activation();
             }
 
-            crate::AppRegistry::on_start(self.active_app_id, ctx);
+            crate::AppRegistry::on_start(self.active_app_id);
         }
     }
 
-    #[inline(never)]
-    pub fn process_ipc_command<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        cmd: Shortcut,
-    ) {
+    pub fn process_ipc_command(&mut self, cmd: Shortcut) {
         match cmd {
             Shortcut::None => {}
             Shortcut::LaunchApp(id) => {
@@ -1083,17 +925,17 @@ impl Orchestrator {
                         _ => None,
                     };
                     if let Some(path) = pkg_path {
-                        let _ = launch_krx_shortcut(ctx, path);
+                        let _ = launch_krx_shortcut(path);
                         return;
                     }
                 }
-                self.switch_app(ctx, id as usize);
+                self.switch_app(id as usize);
             }
-            Shortcut::CloseApp => self.pop_active_app(ctx),
+            Shortcut::CloseApp => self.pop_active_app(),
             Shortcut::LaunchPendingPkg => {
                 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
                 if let Some(path) = crate::runtime::syscall::service::take_pending_launch_path() {
-                    let _ = launch_krx_shortcut(ctx, path);
+                    let _ = launch_krx_shortcut(path);
                 }
             }
             Shortcut::Flashlight => {
@@ -1113,19 +955,12 @@ impl Orchestrator {
     }
 
     #[inline]
-    pub fn execute_shortcut<'a>(
-        &mut self,
-        ctx: &mut crate::services::SysContext<'a, '_>,
-        action: Shortcut,
-    ) {
-        self.process_ipc_command(ctx, action);
+    pub fn execute_shortcut(&mut self, action: Shortcut) {
+        self.process_ipc_command(action);
     }
 
-    pub fn render<'a>(&self, canvas: &mut Canvas, ctx: &'a crate::services::SysContext<'a, '_>) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL)).tick(20);
-        }
-        OsCompositor::render(self.active_app_id, canvas, ctx, &self.lock_mgr);
+    pub fn render(&self, canvas: &mut Canvas) {
+        OsCompositor::render(self.active_app_id, canvas, &self.lock_mgr);
     }
 
     pub fn is_animating(&self) -> bool {
@@ -1142,9 +977,7 @@ impl Orchestrator {
             }
         }
         if self.active_app_id == APP_ID_LAUNCHER {
-            if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_LAUNCHER) {
-                return unsafe { (*(ptr as *const crate::apps::LauncherApp)).is_animating() };
-            }
+            return crate::apps::AppRegistry::launcher_ref().is_animating();
         }
         false
     }
@@ -1167,7 +1000,7 @@ mod tests {
         let pcb = table
             .find_by_app(crate::apps::APP_ID_VFO)
             .expect("startup app PCB updated to new app_id");
-        assert_eq!(pcb.app_id, crate::apps::APP_ID_VFO);
+        assert_eq!(pcb.app_id as usize, crate::apps::APP_ID_VFO);
     }
 
     #[test]
@@ -1184,11 +1017,17 @@ mod tests {
     fn reap_pid_resources_protects_core_daemons_and_cleans_user_process() {
         // Shares the global process table: keep PID lifecycle assertions in this one test.
         let mut orch = Orchestrator::new(crate::apps::APP_ID_LAUNCHER);
-        // Core daemons PID 1..=4 must never be killable.
-        assert!(!reap_pid_resources(1));
-        assert!(!reap_pid_resources(4));
+        // Zero fake static PCBs: only the resident Home launcher is initially spawned at PID 1.
+        assert_eq!(orch.proc_table().active_count(), 1);
+        let launcher_pid = orch
+            .proc_table()
+            .find_by_app(crate::apps::APP_ID_LAUNCHER)
+            .expect("Home launcher PCB")
+            .pid;
+        assert!(!reap_pid_resources(0));
+        assert!(!reap_pid_resources(launcher_pid.0));
 
-        // Spawn user process PID > 4 with an active lease.
+        // Spawn user KRX process with an active lease.
         let pid = orch
             .proc_table_mut()
             .spawn(
@@ -1199,7 +1038,7 @@ mod tests {
                 CapabilitySet::empty(),
             )
             .expect("worker slot");
-        assert!(pid.0 > 4);
+        assert!(pid.0 >= 2);
         assert!(
             lease_manager_mut()
                 .acquire(pid, kernel::proc::LeaseKind::RadioRx, 1000, 0)
@@ -1226,7 +1065,7 @@ mod tests {
                 CapabilitySet::empty(),
             )
             .expect("dynamic slot");
-        assert!(dyn_pid.0 > 4);
+        assert!(dyn_pid.0 >= 2);
         assert_eq!(orch.proc_table().find_by_app(dyn_app).unwrap().pid, dyn_pid);
 
         // Transient modules run as Pid(0), which owns nothing: reaping it leaves processes intact.

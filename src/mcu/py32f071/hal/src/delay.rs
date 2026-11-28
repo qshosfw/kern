@@ -2,7 +2,7 @@
 //!
 //! Uses the ARM Cortex-M0+ SysTick timer configured for 1 kHz (1 ms) ticks.
 
-use portable_atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Global millisecond counter, incremented every SysTick tick (1ms).
 static MILLIS: AtomicU32 = AtomicU32::new(0);
@@ -40,7 +40,10 @@ pub fn update_systick_freq(sysclk_hz: u32) {
 /// Called by the SysTick exception handler at 1 kHz to increment the ms counter every 1ms.
 #[inline(always)]
 pub fn on_systick() {
-    MILLIS.fetch_add(1, Ordering::Relaxed);
+    MILLIS.store(
+        MILLIS.load(Ordering::Relaxed).wrapping_add(1),
+        Ordering::Relaxed,
+    );
 }
 
 /// Get the current millisecond count since boot.

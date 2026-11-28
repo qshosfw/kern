@@ -43,7 +43,6 @@ impl PackageCatalogEntry {
 
     /// Resolve the package's 8x8 icon: prefers embedded `SECTION_ASSETS` `ASSET_ICON_8`,
     /// falling back to the legacy `icon_id` lookup.
-    #[inline(never)]
     pub fn resolved_icon_8(&self) -> &'static [u8; 8] {
         if self.has_custom_icon_8() {
             unsafe { &*(&self.icon_8 as *const [u8; 8]) }
@@ -51,23 +50,6 @@ impl PackageCatalogEntry {
             gfx::icons::system_icon(u8::try_from(self.icon_id).unwrap_or(::abi::icon::APPS))
                 .unwrap_or(gfx::icons::ICON_APPS)
         }
-    }
-
-    /// Resolve the package's fallback 16x16 ROM icon from `icon_id`.
-    #[inline(always)]
-    pub fn resolved_icon_16(&self) -> &'static [u8; 32] {
-        gfx::icons::icon_16(u8::try_from(self.icon_id).unwrap_or(::abi::icon::APPS))
-    }
-
-    /// Resolve both 8x8 and 16x16 icons for this entry, preferring embedded `SECTION_ASSETS`
-    /// bitmaps (`ASSET_ICON_8`, and `custom_icon_16` read on demand for `Launcher`) over ROM glyphs.
-    #[inline(always)]
-    pub fn resolved_icons(
-        &self,
-        custom_icon_16: Option<&'static [u8; 32]>,
-    ) -> (&'static [u8; 8], &'static [u8; 32]) {
-        let icon_16 = custom_icon_16.unwrap_or_else(|| self.resolved_icon_16());
-        (self.resolved_icon_8(), icon_16)
     }
 }
 
@@ -139,15 +121,6 @@ impl PackageCatalog {
         }
     }
 
-    #[inline(always)]
-    pub fn resolved_icons(
-        &self,
-        entry: &PackageCatalogEntry,
-        custom_icon_16: Option<&'static [u8; 32]>,
-    ) -> (&'static [u8; 8], &'static [u8; 32]) {
-        entry.resolved_icons(custom_icon_16)
-    }
-
     /// Mark catalog dirty to trigger a re-scan on next access.
     #[inline(always)]
     pub fn mark_dirty(&mut self) {
@@ -164,130 +137,116 @@ impl PackageCatalog {
         self.scan_internal(filesystem);
     }
 
-    #[inline(never)]
     #[cfg(feature = "filesystem")]
     fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
         self.entries.clear();
         self.actions.clear();
 
-        let mut dir_entry = kernel::proc::abi::KrxDirEntry {
-            name: [0; 24],
-            size: 0,
-            is_dir: 0,
-            reserved: [0; 3],
-        };
-        let mut off = 0usize;
-        while crate::services::primitives::list_krx_dir_at(
-            filesystem,
-            "/apps",
-            off,
-            core::slice::from_mut(&mut dir_entry),
-        )
-        .is_ok_and(|(_, written)| written > 0)
-        {
-            off += 1;
-            if dir_entry.is_dir == 0 && self.entries.len() < MAX_CATALOG_PACKAGES {
-                self.inspect_package(filesystem, &dir_entry);
+        let _ = filesystem.for_each_entry("/apps", |name, size, _perm, is_dir| {
+            let base_name = extract_filename(name);
+            let bytes = base_name.as_bytes();
+            let len = self.entries.len();
+            if is_dir
+                || base_name.is_empty()
+                || len >= MAX_CATALOG_PACKAGES
+                || bytes.ends_with(b".mod")
+            {
+                return;
+            }
+            let entry = unsafe {
+                let ptr = self.entries.as_mut_ptr().add(len);
+                core::ptr::write_bytes(ptr, 0, 1);
+                self.entries.set_len(len + 1);
+                &mut *ptr
+            };
+            entry.exec_type = KrxExecType::App;
+            entry.icon_16_off = (size > 0) as u16;
+            unsafe {
+                core::ptr::copy_nonoverlapping(b"/apps/".as_ptr(), entry.path.buf.as_mut_ptr(), 6);
+            }
+            entry.path.len = utils::format::copy_trunc_utf8(&mut entry.path.buf, 6, base_name);
+        });
+
+        let mut write = 0usize;
+        let total = self.entries.len();
+        for read in 0..total {
+            if self.inspect_entry_at(filesystem, read, write) {
+                if write != read {
+                    unsafe {
+                        let ptr = self.entries.as_mut_ptr();
+                        core::ptr::copy_nonoverlapping(ptr.add(read), ptr.add(write), 1);
+                    }
+                }
+                write += 1;
             }
         }
+        unsafe { self.entries.set_len(write) };
 
         self.scanned = true;
     }
 
-    #[inline(never)]
     #[cfg(feature = "filesystem")]
-    fn inspect_package(
+    fn inspect_entry_at(
         &mut self,
         filesystem: &mut SystemStorage,
-        dir: &kernel::proc::abi::KrxDirEntry,
-    ) {
-        let name_len = gfx::text::find_byte(&dir.name, 0).unwrap_or(24);
-        let raw_name =
-            unsafe { core::str::from_utf8_unchecked(dir.name.get_unchecked(..name_len)) };
-        let base_name = extract_filename(raw_name);
-        let len = self.entries.len();
+        idx: usize,
+        dst_idx: usize,
+    ) -> bool {
+        let has_data = self.entries[idx].icon_16_off != 0;
+        self.entries[idx].icon_16_off = 0;
+        let path_copy = self.entries[idx].path;
+        let base_name = extract_filename(path_copy.as_str());
         let bytes = base_name.as_bytes();
-        let n = bytes.len();
-        if base_name.is_empty() || len >= MAX_CATALOG_PACKAGES || bytes.ends_with(b".mod") {
-            return;
-        }
-        let size = dir.size;
-        let entry = unsafe {
-            let ptr = self.entries.as_mut_ptr().add(len);
-            core::ptr::write_bytes(ptr, 0, 1);
-            self.entries.set_len(len + 1);
-            &mut *ptr
-        };
-        entry.exec_type = KrxExecType::App;
-        entry.icon_16_off = 0;
-
         let is_pkg = is_package_ext(bytes);
+        let stem_len = if is_pkg { bytes.len() - 4 } else { bytes.len() };
+        let stem = unsafe { core::str::from_utf8_unchecked(bytes.get_unchecked(..stem_len)) };
 
-        unsafe {
-            core::ptr::copy_nonoverlapping(b"/apps/".as_ptr(), entry.path.buf.as_mut_ptr(), 6);
-        }
-        entry.path.len = utils::format::copy_trunc_utf8(&mut entry.path.buf, 6, base_name);
-
-        let mut title: Option<&str> = None;
-        if is_pkg && (size as usize) >= KrxPreamble::SIZE {
-            if let Ok((hdr_buf, summary)) =
-                crate::runtime::read_krx_summary_in_scratch(filesystem, entry.path.as_str())
+        if is_pkg && has_data {
+            if let Ok((_hdr_buf, summary)) =
+                crate::runtime::read_krx_summary_in_scratch(filesystem, path_copy.as_str())
             {
-                if summary.preamble.execution_class().is_some() {
-                    entry.is_valid = true;
+                let is_valid = summary.preamble.execution_class().is_some();
+                if is_valid && summary.exec_type != KrxExecType::App {
+                    return false;
                 }
+                let entry = &mut self.entries[idx];
+                entry.is_valid = is_valid;
                 entry.exec_type = summary.exec_type;
-                if entry.is_valid && entry.exec_type != KrxExecType::App {
-                    unsafe {
-                        self.entries.set_len(len);
-                    }
-                    return;
-                }
                 entry.icon_id = summary.icon_id;
-                title = summary.title;
-                if entry.is_valid {
+                let title = summary.title.filter(|t| !t.is_empty()).unwrap_or(stem);
+                entry.title.set(title);
+                if is_valid {
+                    if let Some(assets) = summary.aux.assets
+                        && let Some((_, _, ic8)) =
+                            KrxPreamble::find_icon_in_assets(assets, kernel::runtime::ASSET_ICON_8)
+                        && ic8.len() >= 8
+                    {
+                        entry.icon_8.copy_from_slice(&ic8[..8]);
+                    }
                     let act_body = summary.aux.actions.unwrap_or(&[]);
                     let mut off = 0usize;
-                    while off + kernel::runtime::KrxActionDecl::SIZE <= act_body.len() {
+                    while off + kernel::runtime::KrxActionDecl::SIZE <= act_body.len()
+                        && self.actions.len() < MAX_CATALOG_ACTIONS
+                    {
                         let alen = self.actions.len();
-                        if alen < MAX_CATALOG_ACTIONS {
-                            unsafe {
-                                let dst = self.actions.as_mut_ptr().add(alen);
-                                core::ptr::copy_nonoverlapping(
-                                    act_body.as_ptr().add(off),
-                                    dst.cast::<u8>(),
-                                    kernel::runtime::KrxActionDecl::SIZE,
-                                );
-                                (*dst).pkg_idx = len as u8;
-                                self.actions.set_len(alen + 1);
-                            }
+                        unsafe {
+                            let dst = self.actions.as_mut_ptr().add(alen);
+                            core::ptr::copy_nonoverlapping(
+                                act_body.as_ptr().add(off),
+                                dst.cast::<u8>(),
+                                kernel::runtime::KrxActionDecl::SIZE,
+                            );
+                            (*dst).pkg_idx = dst_idx as u8;
+                            self.actions.set_len(alen + 1);
                         }
                         off += kernel::runtime::KrxActionDecl::SIZE;
                     }
-                    if let Some((_, _, ic8)) =
-                        KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_8)
-                        && ic8.len() >= 8
-                    {
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(
-                                ic8.as_ptr(),
-                                entry.icon_8.as_mut_ptr(),
-                                8,
-                            );
-                        }
-                    }
                 }
-            }
-            if let Some(t) = title {
-                entry.title.set(t);
+                return true;
             }
         }
-
-        if entry.title.is_empty() {
-            let stem_len = if is_pkg { n - 4 } else { n };
-            let stem = unsafe { core::str::from_utf8_unchecked(bytes.get_unchecked(..stem_len)) };
-            entry.title.set(stem);
-        }
+        self.entries[idx].title.set(stem);
+        true
     }
 
     #[cfg(not(feature = "filesystem"))]
@@ -296,7 +255,6 @@ impl PackageCatalog {
 
 pub static mut PACKAGE_CATALOG: PackageCatalog = PackageCatalog::new();
 
-#[inline(never)]
 pub fn get_catalog() -> &'static mut PackageCatalog {
     unsafe { &mut *core::ptr::addr_of_mut!(PACKAGE_CATALOG) }
 }
@@ -370,6 +328,7 @@ mod tests {
         assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
 
         let cat = PackageCatalog::new();
+        let _ = cat;
         let mut entry = PackageCatalogEntry {
             exec_type: KrxExecType::App,
             is_valid: true,
@@ -380,13 +339,8 @@ mod tests {
             icon_8: [0; 8],
         };
         entry.icon_8.copy_from_slice(bits8);
-        let mut icon16_buf = [0u8; 32];
-        icon16_buf.copy_from_slice(bits16);
-        let icon16_static: &'static [u8; 32] = unsafe { &*(&icon16_buf as *const [u8; 32]) };
-
-        let (res8, res16) = cat.resolved_icons(&entry, Some(icon16_static));
-        assert_eq!(res8, bits8);
-        assert_eq!(res16, bits16);
+        assert_eq!(entry.resolved_icon_8(), bits8);
+        assert_eq!(bits16.len(), 32);
     }
 
     #[test]

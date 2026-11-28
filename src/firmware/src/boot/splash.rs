@@ -73,39 +73,14 @@ pub static SPLASH_DEFS: &[SplashDef] = &[
     },
 ];
 
-/// Decompress RLE directly into display buffer.
-/// Supports both Apple PackBits RLE (standard) and byte-run pair RLE [count, value].
-/// Returns true if full 1024 bytes were decompressed.
+/// Decompress PackBits RLE directly into the 1024-byte display buffer.
+/// Returns `true` if full 1024 bytes were decompressed.
 #[allow(dead_code)]
 pub fn render_rle(canvas: &mut Canvas, rle: &[u8]) -> bool {
     canvas.clear();
-    let buf = canvas.buffer_flat_mut();
-
-    let mut idx = 0usize;
-    let mut i = 0usize;
-    while i < rle.len() && idx < 1024 {
-        let b = rle[i] as i8;
-        i += 1;
-        if b >= 0 {
-            let count = (b as usize) + 1;
-            let n = count.min(rle.len() - i).min(1024 - idx);
-            buf[idx..idx + n].copy_from_slice(&rle[i..i + n]);
-            idx += n;
-            i += count;
-        } else if b != -128 {
-            let count = (1 - (b as i16)) as usize;
-            if i < rle.len() {
-                let val = rle[i];
-                i += 1;
-                let n = count.min(1024 - idx);
-                buf[idx..idx + n].fill(val);
-                idx += n;
-            }
-        }
-    }
-
+    let n = utils::codec::packbits_decompress_clamped(rle, canvas.buffer_flat_mut());
     canvas.sync_planes();
-    idx >= 1024
+    n >= 1024
 }
 
 #[cfg(not(feature = "filesystem"))]
@@ -129,50 +104,8 @@ pub fn provision_splashes(_storage: &mut crate::services::SystemStorage) {
     }
 }
 
-/// Helper to get a human-friendly display name from a splash file path
-pub fn get_splash_name(path: &str) -> gfx::gui::modules::menu::ShortString {
-    use gfx::gui::modules::menu::ShortString;
-    if path == "dither" {
-        return ShortString::from_str("Dither Fill");
-    }
-    if path == "invert" {
-        return ShortString::from_str("Invert Dissolve");
-    }
-    if path == "curtain" {
-        return ShortString::from_str("Curtain Wipe");
-    }
-
-    let name_start = gfx::text::rfind_byte(path, b'/').map_or(0, |i| i + 1);
-    let file_part = &path[name_start..];
-    let base = if let Some(dot_idx) = gfx::text::rfind_byte(file_part, b'.') {
-        &file_part[..dot_idx]
-    } else {
-        file_part
-    };
-
-    let s = if base.starts_with("01_quansheng") {
-        "Quansheng"
-    } else if base.starts_with("02_minikong") {
-        "Mini-Kong"
-    } else {
-        // Strip leading index prefix e.g. "03_mylogo" -> "mylogo"
-        let clean = if base.len() > 3
-            && base.as_bytes()[0].is_ascii_digit()
-            && base.as_bytes()[1].is_ascii_digit()
-            && base.as_bytes()[2] == b'_'
-        {
-            &base[3..]
-        } else {
-            base
-        };
-        if clean.is_empty() { "Active" } else { clean }
-    };
-    ShortString::from_str(s)
-}
-
 /// Load and render splash from storage supporting both RLE and raw VRAM formats
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 pub fn load_and_render_splash(
     canvas: &mut Canvas,
     storage: &mut crate::services::SystemStorage,
@@ -181,7 +114,7 @@ pub fn load_and_render_splash(
     if path.is_empty() || !storage.exists(path) {
         return false;
     }
-    let buf = &mut crate::data::arena::transient_arena_bytes_mut()[6144..7176];
+    let buf = &mut crate::data::arena::transient_arena_bytes_mut()[2048..3080];
     if let Ok(n) = storage.read_file(path, buf) {
         if n == 1024 || n == 1032 {
             canvas.load_raw_vram(&buf[n - 1024..n]);
@@ -196,7 +129,7 @@ pub fn load_and_render_splash(
 /// Render procedural high-tech KERN banner fallback
 pub fn render_default_banner(canvas: &mut Canvas) {
     canvas.clear();
-    gfx::widgets::draw_sheet_frame(canvas, "KERN OS", 12, 40);
+    gfx::elements::draw_sheet_frame(canvas, "KERN OS", 12, 40);
     gfx::text::draw_str_align(
         canvas,
         64,
@@ -256,29 +189,4 @@ fn apply_anim_effect(canvas: &mut Canvas, anim_type: u8, progress: u8) {
 pub fn apply_splash_anim(canvas: &mut Canvas, base_vram: &[u8; 1024], anim_type: u8, progress: u8) {
     canvas.load_raw_vram(base_vram);
     apply_anim_effect(canvas, anim_type, progress);
-}
-
-/// Animated progressive splash frame renderer
-pub fn render_splash_frame(
-    canvas: &mut Canvas,
-    storage: &mut crate::services::SystemStorage,
-    disp_cfg: &crate::config::DisplayConfig,
-    progress: u8, // 0..=16
-) {
-    if disp_cfg.boot_splash_mode == 0 {
-        canvas.clear();
-        return;
-    }
-
-    render_base_logo(canvas, storage, disp_cfg);
-    apply_anim_effect(canvas, disp_cfg.boot_splash_anim, progress);
-}
-
-/// Render boot splash according to configured mode and path
-pub fn render_splash(
-    canvas: &mut Canvas,
-    storage: &mut crate::services::SystemStorage,
-    disp_cfg: &crate::config::DisplayConfig,
-) {
-    render_splash_frame(canvas, storage, disp_cfg, 16);
 }

@@ -92,14 +92,6 @@ typedef struct {
 } KrxBusReq;
 
 typedef struct {
-    const u8* target;
-    const u8* msg;
-    u8  target_len;
-    u8  msg_len;
-    u8  _pad[2];
-} KrxIpcSendReq;
-
-typedef struct {
     i16* out_rssi;
     u32  start_hz;
     u32  step_hz;
@@ -345,18 +337,25 @@ typedef struct {
     u8  fault_count;
 } KrxProcInfo;
 
-#define PROC_CTL_KILL         0u
-#define PROC_CTL_SET_STATE    1u
-#define PROC_CTL_SET_PRIORITY 2u
-#define PROC_CTL_FOCUS_APP    3u
-#define PROC_CTL_REVOKE_LEASE 4u
-#define PROC_CTL_RESET_STATS  5u
+#define KRX_IPC_FLAG_REPLY    (1u << 0)
+#define KRX_IPC_FLAG_URGENT   (1u << 1)
+#define KRX_IPC_TARGET_FG     0x00u
+#define KRX_IPC_TARGET_KERNEL 0x01u
+#define KRX_IPC_TARGET_BCAST  0xFFu
+#define KRX_IPC_MSG_STRING    0x0010u
+#define KRX_IPC_MSG_APP_DATA  0x0031u
 
-#define PROC_CTL_SYS_OVERVIEW 0x80u
-#define PROC_CTL_LEASE_ENTRY  0x81u
-#define PROC_CTL_SVC_ENTRY    0x82u
-#define PROC_CTL_IPC_ENTRY    0x83u
-#define PROC_CTL_PROC_EXT     0x84u
+typedef struct {
+    u8  sender_pid;
+    u8  target_pid;
+    u16 msg_type;
+    u8  payload_len;
+    u8  flags;
+    u16 seq;
+    u8  payload[24];
+} KrxIpcMessage;
+
+_Static_assert(sizeof(KrxIpcMessage) == 32, "KrxIpcMessage must be 32 bytes");
 
 // Event Kinds & Keys
 #define KRX_EV_NONE         0u
@@ -432,14 +431,14 @@ typedef struct __attribute__((packed)) {
 
 #define KRX_PAGED_INVOKE(api, block_id, fn_type, offset, ret_offset, ...) \
     ({ \
-        u32 _target = krx_call((api), OP_PROC_PAGED, SUB_PROC_PAGED_CALL, ((u32)(block_id)) | (((u32)(offset)) << 16), (u32)(ret_offset)); \
+        u32 _target = krx_call((api), OP_PROC_EXEC, SUB_PROC_EXEC_PAGED_CALL, ((u32)(block_id)) | (((u32)(offset)) << 16), (u32)(ret_offset)); \
         fn_type _fn = (fn_type)_target; \
         u32 _res = _fn(__VA_ARGS__); \
-        krx_call((api), OP_PROC_PAGED, SUB_PROC_PAGED_RETURN, 0u, 0u); \
+        krx_call((api), OP_PROC_EXEC, SUB_PROC_EXEC_PAGED_RET, 0u, 0u); \
         _res; \
     })
 
-// ── Inline Helpers: SYS / PROC ───────────────────────────────────────────────
+// ── Inline Helpers: SYS / PROP / PROC / IPC ──────────────────────────────────
 
 static inline u16 krx_strlen(const char* s) {
     u16 len = 0;
@@ -447,24 +446,47 @@ static inline u16 krx_strlen(const char* s) {
     return len;
 }
 
+static inline u32 krx_prop_get32(const KrxApiTable* api, u8 prop) {
+    return krx_call(api, OP_SYS_PROP, (u32)prop | ((u32)SUB_SYS_PROP_GET << 8), 0u, 0u);
+}
+
+static inline u32 krx_prop_set32(const KrxApiTable* api, u8 prop, u32 val) {
+    return krx_call(api, OP_SYS_PROP, (u32)prop | ((u32)SUB_SYS_PROP_SET << 8), val, 0u);
+}
+
+static inline u8 krx_prop_get(const KrxApiTable* api, u8 prop) {
+    return (u8)krx_prop_get32(api, prop);
+}
+
+/* Live control: changes the running system only and is handed back when the
+ * app exits. Display, audio, and live RF properties; 0 = applied. */
+static inline u8 krx_prop_set(const KrxApiTable* api, u8 prop, u8 val) {
+    return (u8)krx_prop_set32(api, prop, (u32)val);
+}
+
+/* User preference: persisted to /pref. Needs KRX_CAP_PREFERENCES; 0 = stored. */
+static inline u8 krx_pref_set(const KrxApiTable* api, u8 prop, u8 val) {
+    return (u8)krx_call(api, OP_SYS_PROP, (u32)prop | ((u32)SUB_SYS_PROP_PREF << 8), (u32)val, 0u);
+}
+
 static inline u8 krx_sys_info(const KrxApiTable* api, KrxSysInfo* out) {
-    return (u8)krx_call(api, OP_SYS_INFO, (u32)out, 0u, 0u);
+    return (u8)krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_INFO, (u32)out, 0u);
 }
 
 static inline u32 krx_sys_os_version(const KrxApiTable* api) {
-    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_OS_VERSION, 0u, 0u);
+    return krx_prop_get32(api, KRX_PROP_OS_VERSION);
 }
 
 static inline u16 krx_sys_stack_free(const KrxApiTable* api) {
-    return (u16)krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_STACK_FREE, 0u, 0u);
+    return (u16)krx_prop_get32(api, KRX_PROP_STACK_FREE);
 }
 
 static inline u32 krx_sys_cpu_freq_hz(const KrxApiTable* api) {
-    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_CPU_HZ, 0u, 0u);
+    return krx_prop_get32(api, KRX_PROP_CPU_HZ);
 }
 
 static inline u32 krx_sys_rand32(const KrxApiTable* api) {
-    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_RAND32, 0u, 0u);
+    return krx_prop_get32(api, KRX_PROP_RAND32);
 }
 
 static inline u32 krx_crc32(const KrxApiTable* api, const u8* data, u16 len) {
@@ -476,15 +498,50 @@ static inline u32 krx_udivmod(const KrxApiTable* api, u32 n, u32 d, u32* rem) {
 }
 
 static inline void krx_sys_reboot(const KrxApiTable* api, u8 mode) {
-    krx_call(api, OP_SYS_REBOOT, (u32)mode, 0u, 0u);
+    krx_call(api, OP_SYS_CTL, SUB_SYS_CTL_REBOOT, (u32)mode, 0u);
+}
+
+static inline u32 krx_sys_event(const KrxApiTable* api, u32 event_id) {
+    return krx_call(api, OP_SYS_CTL, SUB_SYS_CTL_EVENT, event_id, 0u);
 }
 
 static inline u8 krx_sys_flush_config(const KrxApiTable* api) {
-    return (u8)krx_call(api, OP_SYS_FLUSH, 0u, 0u, 0u);
+    return (u8)krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_FLUSH, 0u, 0u);
 }
 
 static inline u32 krx_leaf_call(const KrxApiTable* api, u8 leaf_id, u32 arg) {
-    return krx_call(api, OP_PROC_LEAF, (u32)leaf_id, arg, 0u);
+    return krx_call(api, OP_PROC_EXEC, SUB_PROC_EXEC_LEAF, (u32)leaf_id, arg);
+}
+
+static inline u8 krx_ipc_send(
+    const KrxApiTable* api, u8 target_pid, u16 msg_type, u8 flags, const u8* payload, u8 len
+) {
+    KrxIpcMessage m;
+    u8 n = len > 24u ? 24u : len;
+    m.sender_pid = 0u;
+    m.target_pid = target_pid;
+    m.msg_type = msg_type;
+    m.payload_len = n;
+    m.flags = flags;
+    m.seq = 0u;
+    for (u8 i = 0u; i < 24u; i++) {
+        m.payload[i] = (payload && i < n) ? payload[i] : 0u;
+    }
+    return (u8)krx_call(api, OP_IPC, SUB_IPC_SEND, (u32)&m, 0u);
+}
+
+static inline u8 krx_ipc_recv(const KrxApiTable* api, KrxIpcMessage* out) {
+    return (u8)krx_call(api, OP_IPC, SUB_IPC_RECV, (u32)out, 0u);
+}
+
+static inline u8 krx_ipc_reply(
+    const KrxApiTable* api, u8 sender_pid, u16 msg_type, const u8* payload, u8 len
+) {
+    return krx_ipc_send(api, sender_pid, msg_type, KRX_IPC_FLAG_REPLY, payload, len);
+}
+
+static inline u8 krx_ipc_send_str(const KrxApiTable* api, u8 target_pid, const char* str) {
+    return krx_ipc_send(api, target_pid, KRX_IPC_MSG_STRING, 0u, (const u8*)str, (u8)krx_strlen(str));
 }
 
 // ── Inline Helpers: FS ───────────────────────────────────────────────────────
@@ -551,6 +608,15 @@ static inline u8 krx_fs_mkdir(const KrxApiTable* api, const u8* path, u8 path_le
     return (u8)krx_call(api, OP_FS_META, SUB_FS_META_MKDIR, (u32)path, (u32)path_len);
 }
 
+static inline u8 krx_fs_rename(
+    const KrxApiTable* api, const u8* old_path, u8 old_len, const u8* new_path, u8 new_len
+) {
+    KrxFsReq r;
+    r.path = old_path; r.buf = (u8*)new_path; r.offset = 0u;
+    r.len = (u16)new_len; r.path_len = old_len; r.extra = 0u;
+    return (u8)krx_call(api, OP_FS_META, SUB_FS_META_RENAME, (u32)&r, 0u);
+}
+
 // ── Inline Helpers: RF & AUD ─────────────────────────────────────────────────
 
 /* Read VFO `slot` (0 = A, 1 = B, 2 = C) as a full channel record. Returns the memory
@@ -576,28 +642,13 @@ static inline u8 krx_rf_tune(const KrxApiTable* api, u32 freq_hz, u8 bw, u32 ste
 }
 
 static inline u32 krx_rf_get_freq(const KrxApiTable* api) {
-    return krx_call(api, OP_RF_GET, SUB_RF_GET_FREQ, 0u, 0u);
-}
-
-static inline u8 krx_prop_get(const KrxApiTable* api, u8 prop) {
-    return (u8)krx_call(api, OP_PROP_GET, (u32)prop, 0u, 0u);
-}
-
-/* Live control: changes the running system only and is handed back when the
- * app exits. Display and audio properties; 0 = applied. */
-static inline u8 krx_prop_set(const KrxApiTable* api, u8 prop, u8 val) {
-    return (u8)krx_call(api, OP_PROP_SET, (u32)prop, (u32)val, 0u);
-}
-
-/* User preference: persisted to /pref. Needs KRX_CAP_PREFERENCES; 0 = stored. */
-static inline u8 krx_pref_set(const KrxApiTable* api, u8 prop, u8 val) {
-    return (u8)krx_call(api, OP_PREF_SET, (u32)prop, (u32)val, 0u);
+    return krx_prop_get32(api, KRX_PROP_RF_FREQ);
 }
 
 // ── Inline Helpers: GFX ──────────────────────────────────────────────────────
 
 static inline void krx_clear(const KrxApiTable* api) {
-    krx_call(api, OP_GFX_CLEAR, 0u, 0u, 0u);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_CLEAR, 0u, 0u);
 }
 
 static inline void krx_draw_pixel(const KrxApiTable* api, i16 x, i16 y, u8 color) {
@@ -692,29 +743,30 @@ static inline void krx_draw_str(const KrxApiTable* api, i16 x, i16 y, const char
 }
 
 static inline void krx_commit_frame(const KrxApiTable* api) {
-    krx_call(api, OP_GFX_COMMIT, 0u, 0u, 0u);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_COMMIT, 0u, 0u);
 }
 
 static inline u8* krx_get_framebuffer(const KrxApiTable* api) {
-    return (u8*)krx_call(api, OP_GFX_FB, 0u, 0u, 0u);
+    return (u8*)krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_FB, 0u, 0u);
 }
 
 static inline void krx_draw_bitmap(
     const KrxApiTable* api, i16 x, i16 y, u8 w, u8 h, const u8* data, u16 len
 ) {
-    KrxWidget d;
-    d.p0 = data; d.x = x; d.y = y; d.len0 = len; d.w = w; d.h = h;
-    krx_call(api, OP_GFX_CTL, SUB_GFX_CTL_BITMAP, (u32)&d, 0u);
+    u32 req_bytes = (((u32)w + 7u) >> 3) * (u32)h;
+    if (!data || len < req_bytes || !req_bytes) return;
+    u32 a0 = (u32)SUB_GFX_DRAW_BITMAP | ((u32)COLOR_FILL << 8) | ((u32)w << 16) | ((u32)h << 24);
+    krx_call(api, OP_GFX_DRAW, a0, krx_pack_xy(x, y), (u32)data);
 }
 
 // ── Inline Helpers: UI & Widgets ─────────────────────────────────────────────
 
 static inline void krx_ui_close_modal(const KrxApiTable* api) {
-    krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_CLOSE, 0u, 0u);
+    krx_prop_set32(api, KRX_PROP_MODAL_STATE, 0u);
 }
 
 static inline void krx_ui_set_modal_hold(const KrxApiTable* api, u16 hold_ms) {
-    krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_SET_HOLD, (u32)hold_ms, 0u);
+    krx_prop_set32(api, KRX_PROP_MODAL_HOLD_MS, (u32)hold_ms);
 }
 
 static inline void krx_ui_show_confirm_labels(
@@ -738,11 +790,11 @@ static inline u32 krx_ui_prompt_number(const KrxApiTable* api, const KrxNumReq* 
 }
 
 static inline u8 krx_ui_set_status_bar(const KrxApiTable* api, const KrxStatusBar* sb) {
-    return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_SET_BAR, (u32)sb, 0u);
+    return (u8)krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_SET_BAR, (u32)sb, 0u);
 }
 
 static inline u8 krx_ui_set_tray_icon(const KrxApiTable* api, u8 icon_id) {
-    return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_TRAY_ICON, (u32)icon_id, 0u);
+    return (u8)krx_prop_set32(api, KRX_PROP_TRAY_ICON, (u32)icon_id);
 }
 
 /* Package-side chrome. Titles are a bounded, NUL-separated byte string.
@@ -877,57 +929,101 @@ static inline u8 krx_draw_tabbed_sheet(
 }
 
 static inline u8 krx_draw_rounded_box(const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = (i16)x; d.y = (i16)y; d.w = w; d.h = h;
-    return (u8)krx_call(api, OP_UI_WIDGET, KRX_WIDGET_ROUNDED_BOX, (u32)&d, 0u);
+    if (!w || !h) return 1u;
+    krx_draw_rect(api, (i16)x, (i16)y, w, h, COLOR_FILL);
+    krx_clear_corners(api, (i16)x, (i16)y, w, h);
+    return 0u;
 }
 
 static inline void krx_ui_draw_progress_bar(
     const KrxApiTable* api, i16 x, i16 y, u8 w, u8 h, u8 pct, u8 border
 ) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = x; d.y = y; d.w = w; d.h = h; d.a = pct; d.b = border;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_PROGRESS_BAR, (u32)&d, 0u);
+    if (w < 4u || h < 2u) return;
+    if (pct > 100u) pct = 100u;
+    krx_fill_rect(api, x, y, w, h, COLOR_CLEAR);
+    if (border) {
+        krx_draw_rect(api, x, y, w, h, COLOR_FILL);
+        if (h >= 5u) krx_clear_corners(api, x, y, w, h);
+    }
+    u8 inset = border ? 2u : 0u;
+    u8 max_fw = w > (inset * 2u) ? (u8)(w - inset * 2u) : 0u;
+    u8 fh = h > (inset * 2u) ? (u8)(h - inset * 2u) : 1u;
+    u8 fw = (u8)krx_udivmod(api, (u32)max_fw * (u32)pct, 100u, (u32*)0);
+    if (fw > 0u) {
+        krx_fill_rect(api, (i16)(x + inset), (i16)(y + inset), fw, fh, COLOR_FILL);
+    }
 }
 
 static inline void krx_ui_draw_s_meter(
     const KrxApiTable* api, i16 x, i16 y, i16 rssi_dbm, u8 peak_hold
 ) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = x; d.y = y; d.extra = (u16)rssi_dbm; d.a = peak_hold;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_S_METER, (u32)&d, 0u);
+    (void)peak_hold;
+    i32 adj = (i32)rssi_dbm + 127;
+    u8 pct = adj <= 0 ? 0u : adj >= 73 ? 100u : (u8)((adj * 100) >> 6);
+    krx_ui_draw_progress_bar(api, x, y, 60u, 5u, pct, 1u);
 }
 
 static inline void krx_ui_draw_tag_badge(
     const KrxApiTable* api, i16 x, i16 y, const u8* text, u8 len, u8 style
 ) {
-    KrxWidget d;
-    d.p0 = text; d.x = x; d.y = y; d.len0 = (u16)len; d.a = style;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_TAG_BADGE, (u32)&d, 0u);
+    if (!text || !len) return;
+    i16 tw = krx_str_width(api, text, len, KRX_FONT_TOMTHUMB) + 4;
+    if (tw < 6) tw = 6;
+    if (style == 1u) {
+        krx_fill_rect(api, x, y, (u8)tw, 7u, COLOR_FILL);
+        krx_draw_str(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
+    } else {
+        krx_draw_rect(api, x, y, (u8)tw, 7u, COLOR_FILL);
+        krx_draw_str(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_FILL);
+    }
 }
 
 static inline void krx_ui_draw_key_badge(
     const KrxApiTable* api, i16 x, i16 y, const u8* key_s, u8 k_len, const u8* lbl, u8 l_len
 ) {
-    KrxWidget d;
-    d.p0 = key_s; d.p1 = lbl; d.x = x; d.y = y; d.len0 = (u16)k_len; d.len1 = (u16)l_len;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_KEY_BADGE, (u32)&d, 0u);
+    if (!key_s || !k_len) return;
+    i16 kw = krx_str_width(api, key_s, k_len, KRX_FONT_TOMTHUMB) + 4;
+    if (kw < 5) kw = 5;
+    krx_fill_rect(api, x, y, (u8)kw, 7u, COLOR_FILL);
+    krx_clear_corners(api, x, y, (u8)kw, 7u);
+    krx_draw_str(api, (i16)(x + 2), (i16)(y + 6), key_s, k_len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
+    if (lbl && l_len) {
+        krx_draw_str(api, (i16)(x + kw + 2), (i16)(y + 6), lbl, l_len, KRX_FONT_TOMTHUMB, COLOR_FILL);
+    }
 }
 
 static inline void krx_ui_draw_capsule_button(
     const KrxApiTable* api, i16 x, i16 y, u8 w, u8 h, const u8* lbl, u8 l_len, u8 sel
 ) {
-    KrxWidget d;
-    d.p0 = lbl; d.x = x; d.y = y; d.len0 = (u16)l_len; d.w = w; d.h = h; d.a = sel;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_CAPSULE_BUTTON, (u32)&d, 0u);
+    if (w < 4u || h < 5u) return;
+    if (sel) {
+        krx_fill_rect(api, x, y, w, h, COLOR_FILL);
+    } else {
+        krx_fill_rect(api, x, y, w, h, COLOR_CLEAR);
+        krx_draw_rect(api, x, y, w, h, COLOR_FILL);
+    }
+    krx_clear_corners(api, x, y, w, h);
+    if (lbl && l_len) {
+        krx_draw_str_align(
+            api, (i16)(x + (w >> 1)), (i16)(y + h - 2),
+            lbl, l_len, KRX_FONT_TOMTHUMB, sel ? COLOR_CLEAR : COLOR_FILL, KRX_ALIGN_CENTER
+        );
+    }
 }
 
 static inline void krx_ui_draw_scrollbar(
     const KrxApiTable* api, u8 x, u8 y, u8 h, u16 cur, u16 total, u16 vis
 ) {
-    KrxWidget d;
-    d.p0 = 0; d.x = (i16)x; d.y = (i16)y; d.len0 = cur; d.len1 = vis; d.extra = total; d.h = h;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_SCROLLBAR, (u32)&d, 0u);
+    if (total == 0u || vis == 0u || total <= vis || h < 4u) return;
+    krx_draw_line_v(api, (i16)(x + 1u), (i16)y, h, COLOR_FILL);
+    u32 th = krx_udivmod(api, (u32)h * (u32)vis + ((u32)total >> 1), (u32)total, (u32*)0);
+    if (th < 4u) th = 4u;
+    if (th > h) th = h;
+    u32 max_off = (u32)(total - vis);
+    u32 travel = (u32)h - th;
+    u32 pos = cur >= max_off ? max_off : (u32)cur;
+    u32 ty = pos >= max_off ? travel : krx_udivmod(api, pos * travel + (max_off >> 1), max_off, (u32*)0);
+    krx_fill_rect(api, (i16)x, (i16)(y + ty), 3u, (u8)th, COLOR_FILL);
 }
 
 #define KRX_MENU_COMPACT     10u
@@ -942,7 +1038,7 @@ static inline void krx_ui_draw_menu_item_ex(
 ) {
     KrxWidget d;
     d.p0 = title; d.p1 = val; d.x = 0; d.y = y; d.len0 = (u16)t_len; d.len1 = (u16)v_len;
-    d.w = 0u; d.h = row_h; d.a = flags; d.b = icon;
+    d.extra = 0u; d.w = 0u; d.h = row_h; d.a = flags; d.b = icon;
     krx_call(api, OP_UI_WIDGET, KRX_WIDGET_MENU_ITEM, (u32)&d, 0u);
 }
 
@@ -953,44 +1049,64 @@ static inline void krx_ui_draw_menu_item(
 }
 
 static inline void krx_ui_draw_big_digit(const KrxApiTable* api, i16 x, i16 y, u8 dig, u8 col) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = x; d.y = y; d.a = dig; d.b = col;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_BIG_DIGIT, (u32)&d, 0u);
+    u8 ch = (u8)('0' + (dig % 10u));
+    krx_draw_str(api, x, (i16)(y + 8), &ch, 1u, KRX_FONT_MUMATRIX, col);
 }
 
 static inline void krx_ui_draw_small_digit(const KrxApiTable* api, i16 x, i16 y, u8 dig, u8 col) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = x; d.y = y; d.a = dig; d.b = col;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_SMALL_DIGIT, (u32)&d, 0u);
+    u8 ch = (u8)('0' + (dig % 10u));
+    krx_draw_str(api, x, (i16)(y + 5), &ch, 1u, KRX_FONT_TOMTHUMB, col);
 }
 
 static inline void krx_ui_draw_battery(const KrxApiTable* api, i16 x, i16 y, u8 pct, u8 chg) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = x; d.y = y; d.a = pct; d.b = chg;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_BATTERY, (u32)&d, 0u);
+    (void)chg;
+    if (pct > 100u) pct = 100u;
+    krx_draw_rect(api, x, y, 12u, 6u, COLOR_FILL);
+    krx_fill_rect(api, (i16)(x + 12), (i16)(y + 2), 1u, 2u, COLOR_FILL);
+    u8 fw = (u8)(((u32)pct * 8u + 50u) >> 7);
+    if (fw > 8u) fw = 8u;
+    if (fw > 0u) krx_fill_rect(api, (i16)(x + 2), (i16)(y + 2), fw, 2u, COLOR_FILL);
 }
 
 static inline void krx_ui_draw_signal(const KrxApiTable* api, i16 x, i16 y, u8 lvl, u8 col) {
-    KrxWidget d;
-    d.p0 = 0; d.len0 = 0u; d.x = x; d.y = y; d.a = lvl; d.b = col;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_SIGNAL, (u32)&d, 0u);
+    krx_draw_pixel(api, x, y, col);
+    krx_draw_line_v(api, (i16)(x + 1), (i16)(y + 1), 4u, col);
+    krx_draw_pixel(api, (i16)(x + 2), y, col);
+    u8 bars = lvl > 5u ? 5u : lvl;
+    for (u8 i = 1u; i <= bars; i++) {
+        krx_draw_line_v(api, (i16)(x + 1 + i * 2u), (i16)(y + 5 - i), i, col);
+    }
 }
 
 static inline void krx_ui_draw_modal_box(const KrxApiTable* api, u8 w, u8 h, u8* out_origin) {
-    KrxWidget d;
-    d.p0 = (const u8*)out_origin; d.len0 = 0u; d.x = 0; d.y = 0; d.w = w; d.h = h;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_MODAL_BOX, (u32)&d, 0u);
+    u8 ox = w < 128u ? (u8)((128u - w) >> 1) : 0u;
+    u8 oy = h < 64u ? (u8)((64u - h) >> 1) : 0u;
+    if (ox > 0u && oy > 0u) {
+        krx_fill_rect(api, (i16)(ox - 1u), (i16)(oy - 1u), (u8)(w + 2u), (u8)(h + 2u), COLOR_CLEAR);
+    }
+    krx_draw_rounded_box(api, ox, oy, w, h);
+    if (out_origin) {
+        out_origin[0] = ox;
+        out_origin[1] = oy;
+    }
 }
 
-/* `title_packed` is `title` or NUL-separated `title\0badge\0right_metric` of length `t_len`. */
 static inline void krx_ui_draw_detail_row(
     const KrxApiTable* api, i16 y,
     const u8* title_packed, u16 t_len, const u8* sub, u16 s_len, u8 sel
 ) {
-    KrxWidget d;
-    d.p0 = title_packed; d.p1 = sub; d.x = 0; d.y = y; d.len0 = t_len; d.len1 = s_len;
-    d.w = 121u; d.h = 21u; d.a = sel; d.b = 0u; d.extra = 0u;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_DETAIL_ROW, (u32)&d, 0u);
+    u8 bg = sel ? COLOR_FILL : COLOR_CLEAR;
+    u8 tc = sel ? COLOR_CLEAR : COLOR_FILL;
+    krx_fill_rect(api, 2, y, 121u, 21u, bg);
+    if (sel) krx_clear_corners(api, 2, y, 121u, 21u);
+    if (title_packed && t_len) {
+        u16 n = 0u;
+        while (n < t_len && title_packed[n]) n++;
+        krx_draw_str_max(api, 5, (i16)(y + 9), title_packed, (u8)(n > 255u ? 255u : n), KRX_FONT_MUMATRIX, tc, 115u);
+    }
+    if (sub && s_len) {
+        krx_draw_str_max(api, 5, (i16)(y + 18), sub, (u8)(s_len > 255u ? 255u : s_len), KRX_FONT_TOMTHUMB, tc, 115u);
+    }
 }
 
 // ── Inline Helpers: IO (Key / Power / Serial / Time) ─────────────────────────
@@ -1003,12 +1119,8 @@ static inline u32 krx_key_matrix(const KrxApiTable* api) {
     return krx_call(api, OP_IO_KEY, SUB_IO_KEY_MATRIX, 0u, 0u);
 }
 
-static inline u16 krx_pwr_u16(const KrxApiTable* api, u8 sub) {
-    return (u16)krx_call(api, OP_IO_POWER, (u32)sub, 0u, 0u);
-}
-
 static inline void krx_wake_backlight(const KrxApiTable* api) {
-    krx_call(api, OP_IO_POWER, SUB_IO_POWER_BL_WAKE, 0u, 0u);
+    krx_prop_set32(api, KRX_PROP_BL_WAKE, 1u);
 }
 
 static inline u16 krx_serial_write(const KrxApiTable* api, const u8* data, u16 len) {
@@ -1022,7 +1134,7 @@ static inline void krx_print(const KrxApiTable* api, const char* str) {
 }
 
 static inline u32 krx_ticks_ms(const KrxApiTable* api) {
-    return krx_call(api, OP_IO_TIME, SUB_IO_TIME_TICKS_MS, 0u, 0u);
+    return krx_prop_get32(api, KRX_PROP_TICKS_MS);
 }
 
 static inline u32 krx_uptime_secs(const KrxApiTable* api) {
@@ -1030,7 +1142,7 @@ static inline u32 krx_uptime_secs(const KrxApiTable* api) {
 }
 
 static inline void krx_delay_ms(const KrxApiTable* api, u32 ms) {
-    krx_call(api, OP_IO_TIME, SUB_IO_TIME_DELAY_MS, ms, 0u);
+    krx_call(api, OP_SYS_CTL, SUB_SYS_CTL_DELAY_MS, ms, 0u);
 }
 
 #endif // KRX_H

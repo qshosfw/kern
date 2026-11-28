@@ -103,7 +103,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         krx_draw_icon(api, 5, 5, KRX_ICON_ANTENNA, 1u);
         krx_scroll(api, 1, 0, 0u);
 
-        (void)krx_pwr_u16(api, 0u);
+        (void)krx_prop_get32(api, KRX_PROP_BATT_MV);
         (void)krx_key_matrix(api);
         (void)krx_rf_get_freq(api);
         (void)krx_prop_get(api, KRX_PROP_VOLUME);

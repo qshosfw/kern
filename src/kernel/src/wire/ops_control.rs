@@ -189,7 +189,15 @@ mod tests {
         assert_eq!(get_req.handle.domain, DOMAIN_UI);
         assert_eq!(get_req.params, &[0xAA, 0xBB]);
 
-        let inv_raw = [DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, 0x01, 0x00, 0x05, 0x00, 0xFF];
+        let inv_raw = [
+            DOMAIN_INPUT,
+            INPUT_INSTANCE_KEYPAD,
+            0x01,
+            0x00,
+            0x05,
+            0x00,
+            0xFF,
+        ];
         let inv_req = HandleInvokeReq::parse(&inv_raw).unwrap();
         assert_eq!(inv_req.action_id, 5);
         assert_eq!(inv_req.params, &[0xFF]);

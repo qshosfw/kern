@@ -10,8 +10,7 @@ use core::mem::MaybeUninit;
 use kern_sdk::{
     COLOR_CLEAR, COLOR_FILL, KRX_EV_ENCODER, KRX_EV_KEY, KRX_EV_MODAL, KRX_OP_EVENT, KRX_OP_EXIT,
     KRX_OP_RENDER, KRX_OP_START, KRX_STATUS_CUSTOM_TITLE, KRX_STATUS_DIVIDER, KRX_STATUS_VISIBLE,
-    KRX_WIDGET_KEY_BADGE, KRX_WIDGET_PROGRESS_BAR, KrxApiTable, KrxEvent, KrxFsReq, KrxStatusBar,
-    KrxWidget, MODAL_RESULT_CONFIRMED, Op, key, krx_entry,
+    KrxApiTable, KrxEvent, KrxFsReq, KrxStatusBar, MODAL_RESULT_CONFIRMED, Op, key, krx_entry,
 };
 
 const MODAL_FORMAT: u8 = 51;
@@ -186,42 +185,14 @@ impl StorageState {
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 fn draw_bar(api: &KrxApiTable, x: i16, y: i16, w: u8, h: u8, pct: u8) {
-    let bar = KrxWidget {
-        p0: core::ptr::null(),
-        p1: core::ptr::null(),
-        x,
-        y,
-        len0: 0,
-        len1: 0,
-        extra: 0,
-        w,
-        h,
-        a: pct,
-        b: 0,
-        _pad: [0; 2],
-    };
-    let _ = api.call_op(Op::UiWidget, KRX_WIDGET_PROGRESS_BAR as usize, &raw const bar as usize, 0);
+    api.draw_progress_bar(x, y, w, h, pct, false);
 }
 
-#[inline(never)]
+#[inline(always)]
 fn draw_key_badge(api: &KrxApiTable, x: i16, y: i16, key_s: &[u8], lbl: &[u8]) {
-    let d = KrxWidget {
-        p0: key_s.as_ptr(),
-        p1: lbl.as_ptr(),
-        x,
-        y,
-        len0: key_s.len() as u16,
-        len1: lbl.len() as u16,
-        extra: 0,
-        w: 0,
-        h: 0,
-        a: 0,
-        b: 0,
-        _pad: [0; 2],
-    };
-    let _ = api.call_op(Op::UiWidget, KRX_WIDGET_KEY_BADGE as usize, &raw const d as usize, 0);
+    api.draw_key_badge(x, y, key_s, lbl);
 }
 
 fn scale_px(num: u32, den: u32, max_px: u8) -> u8 {

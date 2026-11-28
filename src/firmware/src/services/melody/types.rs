@@ -1,11 +1,9 @@
 //! Melody, Roger Beep, and Sound Cue Type Definitions.
 
 pub use drivers::audio::ToneNote;
-use heapless::Vec;
 
 /// Maximum notes in a standard melody sequence
 pub const MAX_MELODY_NOTES: usize = 32;
-pub type MelodyBuffer = Vec<ToneNote, MAX_MELODY_NOTES>;
 
 /// Roger Beep (end-of-transmission) Melody Types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -8,8 +8,8 @@ use crate::apps::launcher::catalog::{PackageCatalog, PackageCatalogEntry};
 use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO};
 use crate::config::keys::KeyConfig;
 #[cfg(test)]
-use gfx::gui::modules::menu::OptionSheet;
-use gfx::gui::modules::menu::ShortString;
+use gfx::views::OptionSheet;
+use gfx::views::ShortString;
 use kernel::ipc::SysEvent;
 use kernel::runtime::KrxExecType;
 
@@ -23,7 +23,6 @@ pub const SLOT_OPTIONS: &str = "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F
 #[cfg(test)]
 pub const CTX_OPTIONS: &str = "Global\0VFO\0Home\0Prefs\0App\0";
 
-#[inline(never)]
 pub fn slot_label(slot: usize) -> &'static str {
     utils::format::nth_cstr(
         SLOT_OPTIONS.as_bytes(),
@@ -147,7 +146,6 @@ pub static BUILTIN_TARGETS: [BuiltinTarget; 5] = [
     },
 ];
 
-#[inline(never)]
 pub const fn hash_app_action(path: &str, action_id: u16) -> u16 {
     ::abi::hash_app_action(path.as_bytes(), action_id)
 }
@@ -158,7 +156,6 @@ pub const fn hash_app(path: &str) -> u16 {
 }
 
 /// Resolve effective 16-bit target for `slot` under `cur_ctx`, returning `(id, overridden)`.
-#[inline(never)]
 pub fn resolve_slot_override(keys: &KeyConfig, slot: usize, cur_ctx: u8) -> (u16, bool) {
     if slot >= KEY_SHORTCUT_COUNT {
         return (TARGET_NONE, false);
@@ -192,7 +189,6 @@ fn builtin_icon(icon_id: u8) -> &'static [u8; 8] {
 }
 
 #[cfg(test)]
-#[inline(never)]
 pub fn format_label_into(out: &mut ShortString, title: &str, suffix: &str) {
     out.set_str(title);
     if !suffix.is_empty() {
@@ -201,7 +197,6 @@ pub fn format_label_into(out: &mut ShortString, title: &str, suffix: &str) {
     }
 }
 
-#[inline(never)]
 fn find_dynamic<'a>(
     id: u16,
     cat: &'a PackageCatalog,
@@ -221,7 +216,6 @@ fn find_dynamic<'a>(
     None
 }
 
-#[inline(never)]
 pub fn resolve<'a>(id: u16, cat: &'a PackageCatalog) -> ResolvedShortcut<'a> {
     if id == TARGET_NONE {
         return ResolvedShortcut::None;
@@ -240,7 +234,6 @@ pub fn resolve<'a>(id: u16, cat: &'a PackageCatalog) -> ResolvedShortcut<'a> {
     }
 }
 
-#[inline(never)]
 pub fn describe_into(
     id: u16,
     cat: &PackageCatalog,
@@ -276,7 +269,6 @@ pub fn describe_into(
 }
 
 #[cfg(test)]
-#[inline(never)]
 pub fn assign_rule(keys: &mut KeyConfig, cur_ctx: u8, slot: usize, target_id: u16) -> u8 {
     if slot >= KEY_SHORTCUT_COUNT {
         return 0;
@@ -329,9 +321,9 @@ pub const MAX_PICKER_ITEMS: usize = 28;
 #[cfg(test)]
 #[repr(C)]
 struct PickerScratch {
-    icons: [&'static [u8; 8]; MAX_PICKER_ITEMS],
     ids: [u16; MAX_PICKER_ITEMS],
-    labels: [ShortString; MAX_PICKER_ITEMS],
+    packed: [u8; 512],
+    packed_len: usize,
     count: usize,
 }
 
@@ -350,19 +342,24 @@ fn picker_scratch() -> &'static mut PickerScratch {
 }
 
 #[cfg(test)]
-#[inline(never)]
-fn push_entry(id: u16, icon: &'static [u8; 8], title: &str, suffix: &str) {
+fn push_entry(id: u16, _icon: &'static [u8; 8], title: &str, suffix: &str) {
     let ps = picker_scratch();
     let n = ps.count;
     if n < MAX_PICKER_ITEMS {
-        ps.ids[n] = id;
-        ps.icons[n] = icon;
-        format_label_into(&mut ps.labels[n], title, suffix);
-        ps.count = n + 1;
+        let mut lbl = ShortString::empty();
+        format_label_into(&mut lbl, title, suffix);
+        let bytes = lbl.as_str().as_bytes();
+        if ps.packed_len + bytes.len() + 1 <= ps.packed.len() {
+            ps.ids[n] = id;
+            ps.packed[ps.packed_len..ps.packed_len + bytes.len()].copy_from_slice(bytes);
+            ps.packed[ps.packed_len + bytes.len()] = 0;
+            ps.packed_len += bytes.len() + 1;
+            ps.count = n + 1;
+        }
     }
 }
 
-/// Populate icon-equipped `OptionSheet` inside transient tail scratch (`0 B` static `.bss`).
+/// Populate `OptionSheet` inside transient tail scratch (`0 B` static `.bss`).
 #[cfg(test)]
 pub fn build_picker_sheet(
     title: &'static str,
@@ -371,6 +368,7 @@ pub fn build_picker_sheet(
 ) -> OptionSheet {
     let ps = picker_scratch();
     ps.count = 0;
+    ps.packed_len = 0;
 
     push_entry(
         TARGET_NONE,
@@ -409,9 +407,13 @@ pub fn build_picker_sheet(
             break;
         }
     }
-    OptionSheet::new_dynamic(title, &ps.labels[..n], selected)
-        .with_radio(true)
-        .with_icons(&ps.icons[..n])
+    let packed_str = unsafe { core::str::from_utf8_unchecked(&ps.packed[..ps.packed_len]) };
+    OptionSheet::new(
+        title,
+        gfx::views::SheetOptions::Packed(packed_str),
+        selected,
+    )
+    .with_radio(true)
 }
 
 #[cfg(test)]

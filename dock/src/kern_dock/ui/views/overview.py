@@ -16,7 +16,7 @@ from ...device.link import REBOOT_BOOTLOADER, REBOOT_FIRMWARE, REBOOT_RECOVERY
 from ...render.handset.catalog import radio_model
 from ...system.icons import make_radio_image
 from ..runtime import DockRuntime
-from ..widgets.util import battery_icon_name, fmt_duration, set_pill
+from ..widgets.util import battery_icon_name, fmt_duration, set_pill, wrap_actions
 
 
 class OverviewView:
@@ -70,7 +70,8 @@ class OverviewView:
         self.usb_list.add_css_class("boxed-list")
         off_box.append(self.usb_list)
 
-        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10, halign=Gtk.Align.CENTER)
+        btns = wrap_actions(align=0.5)
+        btns.set_halign(Gtk.Align.CENTER)
         demo_b = Gtk.Button(label="Demo Radio")
         demo_b.add_css_class("pill")
         demo_b.add_css_class("suggested-action")
@@ -235,8 +236,7 @@ class OverviewView:
         self.sec_group.add(self.policy_exp)
 
         self.power_row = Adw.ActionRow(title="Power")
-        seg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
-        seg.add_css_class("linked")
+        seg = wrap_actions()
         self._reboot_btns: dict[int, Gtk.Button] = {}
         for mode, label in (
             (REBOOT_FIRMWARE, "Restart"),

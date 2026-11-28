@@ -22,9 +22,9 @@ u32 leaf2_entry(u32 op, const KrxApiTable* api, void* param) {
     u8 vec_ok = 0u;
     u32 vidpid = st->ui.probe_bl(bl_str, &app_kb, &vec_ok);
 
-    u16 mv  = st->ui.pwr_get(api, SUB_IO_POWER_BATT_MV);
-    u16 pct = st->ui.pwr_get(api, SUB_IO_POWER_BATT_PCT);
-    u16 chg = st->ui.pwr_get(api, SUB_IO_POWER_CHARGING);
+    u16 mv  = st->ui.prop_get(api, KRX_PROP_BATT_MV);
+    u16 pct = st->ui.prop_get(api, KRX_PROP_BATT_PCT);
+    u16 chg = st->ui.prop_get(api, KRX_PROP_CHARGING);
 
     static const char KEYS[] =
         "Bootloader\0Firmware\0App Flash\0Vectors\0Battery\0Calib\0"

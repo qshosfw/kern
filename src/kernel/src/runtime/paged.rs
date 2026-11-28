@@ -1,9 +1,8 @@
-//! KRX Demand-Paged Native Subsystem (KRX-ABI 2.5.0 Chapter 7).
+//! KRX Demand-Paged Native Subsystem (`P1 v2` Streamed Virtual Code Cache & `P0` Leaf Overlays).
 //!
-//! Implements the normative fixed-window overlay cache (`FixedWindowCache`),
-//! `SectionBlockMap` (`0x0005`) parser, LRU victim selection with `.krx.pinned`
-//! immunity, and the block-relative shadow return stack (`ShadowReturnStack`)
-//! for LR-thunking across overlay evictions on Cortex-M0+ (no MMU).
+//! Implements the unlimited-size `StreamedWindowCache` (`<= 384 KiB`), `SectionBlockMap`
+//! (`0x0005`) parser, Clock/LRU victim selection with `.krx.pinned` immunity, and the
+//! `PageReturnFrame` shadow return stack (`ShadowReturnStack`) on Cortex-M0+ (no MMU).
 
 use super::image::{BlockEntry, LeafContext, LeafContinuation, LeafEntry};
 
@@ -13,6 +12,13 @@ pub const BLOCK_FLAG_PINNED: u8 = 1 << 0;
 pub const BLOCK_FLAG_RT: u8 = 1 << 1;
 /// Block flag: sequential prefetch hint for next block
 pub const BLOCK_FLAG_HINT_NEXT: u8 = 1 << 2;
+/// Block flag: backwards-safe in-place LZSS compressed code page (`P1 v2`)
+pub const BLOCK_FLAG_LZSS: u8 = 1 << 3;
+
+/// Maximum KernFS v2.1 per-file size (`12 L1 roots * 128 pages * 256 B = 384 KiB`).
+pub const MAX_STREAMED_IMAGE_BYTES: u32 = 384 * 1024;
+/// Sentinel indicating an empty cache way in `StreamedWindowCache`.
+pub const EMPTY_PAGE_ID: u16 = 0xFFFF;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PagedError {
@@ -58,203 +64,221 @@ impl BlockEntry {
     }
 }
 
-/// Residency metadata for a single fixed-window cache slot in SRAM.
+/// 4-byte return frame for `P1 v2` unlimited-size paged calls (`u16` `caller_page_id` up to `768+` pages).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CacheSlotMeta {
-    pub resident_block: Option<u8>,
-    pub pinned: bool,
-    pub last_access_tick: u16,
+#[repr(C, align(4))]
+pub struct PageReturnFrame {
+    pub caller_page_id: u16,
+    pub return_offset: u16,
 }
 
-impl CacheSlotMeta {
+const _: () = {
+    assert!(core::mem::size_of::<PageReturnFrame>() == 4);
+    assert!(core::mem::align_of::<PageReturnFrame>() == 4);
+};
+
+impl PageReturnFrame {
     pub const fn empty() -> Self {
         Self {
-            resident_block: None,
-            pinned: false,
-            last_access_tick: 0,
+            caller_page_id: 0,
+            return_offset: 0,
         }
     }
 }
 
-/// Normative Fixed-Window Overlay Cache Controller (KRX-ABI 2.5.0 Section 7.1).
+/// 8-byte ($2^3$) cache way metadata for `StreamedWindowCache` (`P1 v2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CacheWayMeta {
+    pub resident_page: u16,
+    pub loaded_size: u16,
+    pub last_access_tick: u16,
+    pub flags: u8,
+    pub _pad: u8,
+}
+
+const _: () = assert!(core::mem::size_of::<CacheWayMeta>() == 8);
+
+impl CacheWayMeta {
+    pub const fn empty() -> Self {
+        Self {
+            resident_page: EMPTY_PAGE_ID,
+            loaded_size: 0,
+            last_access_tick: 0,
+            flags: 0,
+            _pad: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn is_empty(&self) -> bool {
+        self.resident_page == EMPTY_PAGE_ID
+    }
+
+    #[inline(always)]
+    pub const fn is_pinned(&self) -> bool {
+        (self.flags & BLOCK_FLAG_PINNED) != 0
+    }
+}
+
+/// Transient page descriptor resolved on a `P1 v2` cache miss (zero SRAM array cost).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct StreamedPageDesc {
+    pub flash_offset: u32,
+    pub page_id: u16,
+    pub raw_size: u16,
+    pub exec_size: u16,
+    pub flags: u8,
+    pub _pad: u8,
+}
+
+/// Unlimited-Size `P1 v2` Streamed Virtual Code Cache Controller (up to `384 KiB` / `768` pages).
 ///
-/// Manages 1 or 2 fixed-window cache slots (`512 B` or `1024 B` per slot)
-/// at a single fixed cache VMA in the application arena.
+/// Stores metadata ONLY for the `MAX_SLOTS` SRAM cache ways (`8 x 8 B = 64 B`), eliminating
+/// fixed `BlockEntry` arrays in RAM so any `.krx` fitting on `KernFS` executes with constant RAM.
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub struct FixedWindowCache<const MAX_BLOCKS: usize = 16, const MAX_SLOTS: usize = 4> {
-    pub active_slots: u8,
-    pub block_count: u8,
-    pub page_size: u16,
+pub struct StreamedWindowCache<const MAX_SLOTS: usize = 8> {
+    pub code_flash_offset: u32,
+    pub code_total_size: u32,
+    pub block_map_flash_offset: u32,
+    pub page_count: u16,
+    pub cache_base_off: u16,
+    pub rt_pin_mask: u16,
     pub access_clock: u16,
     pub fault_count: u16,
     pub hit_count: u16,
-    pub slots: [CacheSlotMeta; MAX_SLOTS],
-    pub blocks: [BlockEntry; MAX_BLOCKS],
+    pub active_slots: u8,
+    pub page_shift: u8,
+    pub ways: [CacheWayMeta; MAX_SLOTS],
 }
 
-impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> Default
-    for FixedWindowCache<MAX_BLOCKS, MAX_SLOTS>
-{
+impl<const MAX_SLOTS: usize> Default for StreamedWindowCache<MAX_SLOTS> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(target_endian = "little")]
-#[inline]
-fn copy_record_table<T: Copy>(body: &[u8], dst: &mut [T]) -> u8 {
-    let sz = core::mem::size_of::<T>();
-    let count = (body.len() / sz).min(dst.len());
-    if count > 0 {
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                body.as_ptr(),
-                dst.as_mut_ptr().cast::<u8>(),
-                count * sz,
-            );
-        }
-    }
-    count as u8
-}
-
-impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCKS, MAX_SLOTS> {
+impl<const MAX_SLOTS: usize> StreamedWindowCache<MAX_SLOTS> {
     pub const fn new() -> Self {
         Self {
-            page_size: 1024,
-            active_slots: 2,
-            block_count: 0,
-            blocks: [const { BlockEntry::empty() }; MAX_BLOCKS],
-            slots: [const { CacheSlotMeta::empty() }; MAX_SLOTS],
+            code_flash_offset: 0,
+            code_total_size: 0,
+            block_map_flash_offset: 0,
+            page_count: 0,
+            cache_base_off: 0,
+            rt_pin_mask: 0,
             access_clock: 0,
             fault_count: 0,
             hit_count: 0,
+            active_slots: 4,
+            page_shift: 9,
+            ways: [const { CacheWayMeta::empty() }; MAX_SLOTS],
         }
     }
 
-    pub fn reset(&mut self) {
-        self.page_size = 1024;
-        self.active_slots = 2;
-        self.block_count = 0;
-        self.slots = [const { CacheSlotMeta::empty() }; MAX_SLOTS];
-        self.access_clock = 0;
-        self.fault_count = 0;
-        self.hit_count = 0;
+    #[inline(always)]
+    pub const fn page_size(&self) -> u16 {
+        1u16 << self.page_shift
     }
 
-    /// Configure the fixed-window cache from `SectionExecution` and optional `SectionBlockMap (0x0005)`.
-    /// If no explicit `BlockMap` section is present, partitions the payload into uniform `page_size` blocks.
-    #[inline(never)]
+    /// Byte offset of way `slot_idx` inside Zone B (`cache_base_off + (slot_idx << page_shift)`).
+    #[inline(always)]
+    pub const fn slot_byte_offset(&self, slot_idx: usize) -> usize {
+        (self.cache_base_off as usize) + (slot_idx << self.page_shift)
+    }
+
     pub fn configure(
         &mut self,
         page_size: u16,
-        cache_blocks: u8,
-        payload_flash_offset: u32,
-        payload_size: u32,
-        block_map_body: Option<&[u8]>,
+        requested_slots: u8,
+        avail_cache_bytes: usize,
+        cache_base_off: u16,
+        rt_pin_mask: u16,
+        code_flash_offset: u32,
+        code_total_size: u32,
+        block_map_flash_offset: u32,
+        block_map_count: u16,
     ) {
-        self.slots = [const { CacheSlotMeta::empty() }; MAX_SLOTS];
+        self.ways = [const { CacheWayMeta::empty() }; MAX_SLOTS];
         self.access_clock = 0;
         self.fault_count = 0;
         self.hit_count = 0;
-        let eff_page = if page_size == 512 || page_size == 1024 {
-            page_size
+        self.cache_base_off = cache_base_off;
+        self.rt_pin_mask = rt_pin_mask;
+        self.code_flash_offset = code_flash_offset;
+        self.code_total_size = code_total_size.min(MAX_STREAMED_IMAGE_BYTES);
+
+        let shift: u8 = if page_size == 512 { 9 } else { 10 };
+        self.page_shift = shift;
+        let max_by_ram = (avail_cache_bytes >> shift).min(MAX_SLOTS);
+        let def_slots = if requested_slots == 0 {
+            max_by_ram
         } else {
-            1024
+            (requested_slots as usize).min(max_by_ram)
         };
-        self.page_size = eff_page;
-        self.active_slots = cache_blocks.clamp(1, MAX_SLOTS as u8);
-        self.block_count = 0;
+        self.active_slots = def_slots.max(1).min(MAX_SLOTS) as u8;
 
-        if let Some(body) = block_map_body {
-            #[cfg(target_endian = "little")]
-            {
-                self.block_count = copy_record_table(body, &mut self.blocks);
-            }
-            #[cfg(not(target_endian = "little"))]
-            for (dst, chunk) in self
-                .blocks
-                .iter_mut()
-                .zip(body.chunks_exact(BlockEntry::SIZE))
-            {
-                if let Some(entry) = BlockEntry::parse(chunk) {
-                    *dst = entry;
-                    self.block_count += 1;
-                }
-            }
-        }
-
-        if self.block_count == 0 && payload_size > 0 {
-            let step = eff_page as u32;
-            let mut rem = payload_size;
-            let mut cur_off = payload_flash_offset;
-            for (idx, dst) in self.blocks.iter_mut().enumerate() {
-                if rem == 0 {
-                    break;
-                }
-                let chunk = rem.min(step) as u16;
-                *dst = BlockEntry {
-                    block_id: idx as u8,
-                    flags: 0,
-                    size: chunk,
-                    flash_offset: cur_off,
-                };
-                cur_off += chunk as u32;
-                rem -= chunk as u32;
-                self.block_count += 1;
-            }
+        if block_map_flash_offset != 0 && block_map_count > 0 {
+            self.block_map_flash_offset = block_map_flash_offset;
+            self.page_count = block_map_count;
+        } else {
+            self.block_map_flash_offset = 0;
+            let mask = (1u32 << shift) - 1;
+            self.page_count = ((self.code_total_size + mask) >> shift) as u16;
         }
     }
 
-    /// Lookup a block descriptor by `block_id`.
-    #[inline(never)]
-    pub fn get_block(&self, block_id: u8) -> Option<BlockEntry> {
-        let count = (self.block_count as usize).min(MAX_BLOCKS);
-        let mut i = 0;
-        while i < count {
-            if self.blocks[i].block_id == block_id {
-                return Some(self.blocks[i]);
+    /// Zero-I/O fast cache-hit probe (`O(active_slots)` over `u16` resident tags).
+    #[inline(always)]
+    pub fn probe_hit(&mut self, page_id: u16) -> Option<(usize, u16, u8)> {
+        let limit = (self.active_slots as usize).min(MAX_SLOTS);
+        let mut s = 0;
+        while s < limit {
+            if self.ways[s].resident_page == page_id {
+                self.access_clock = self.access_clock.wrapping_add(1);
+                self.ways[s].last_access_tick = self.access_clock;
+                self.hit_count = self.hit_count.saturating_add(1);
+                return Some((s, self.ways[s].loaded_size, self.ways[s].flags));
             }
-            i += 1;
+            s += 1;
         }
         None
     }
 
-    /// Shared cache slot lookup/allocation core: returns `(slot_index, is_hit, block_entry)`.
-    /// When `allow_evict` is `false` (prefetch), only an empty slot is used and hits/full return `Err`.
-    #[inline(never)]
-    fn lookup_or_alloc_slot(
+    /// Resolve page descriptor and allocate a cache way on miss (or opportunistic prefetch when `!allow_evict`).
+    pub fn alloc_way_for_miss<F>(
         &mut self,
-        block_id: u8,
+        page_id: u16,
         allow_evict: bool,
-    ) -> Result<(usize, bool, BlockEntry), PagedError> {
-        let entry = self.get_block(block_id).ok_or(PagedError::InvalidBlockId)?;
-        if allow_evict {
-            self.access_clock = self.access_clock.wrapping_add(1);
+        mut read_block_entry: F,
+    ) -> Result<(usize, StreamedPageDesc), PagedError>
+    where
+        F: FnMut(u32) -> Option<BlockEntry>,
+    {
+        if page_id >= self.page_count {
+            return Err(PagedError::InvalidBlockId);
         }
-        let slot_limit = (self.active_slots as usize).min(MAX_SLOTS);
-
+        let limit = (self.active_slots as usize).min(MAX_SLOTS);
         let mut victim = MAX_SLOTS;
         let mut oldest_age: u16 = 0;
         let mut has_empty = false;
         let mut s = 0;
-
-        while s < slot_limit {
-            let slot = &mut self.slots[s];
-            if slot.resident_block == Some(block_id) {
-                if !allow_evict {
-                    return Err(PagedError::NoUnpinnedSlotAvailable);
-                }
-                slot.last_access_tick = self.access_clock;
-                self.hit_count = self.hit_count.saturating_add(1);
-                return Ok((s, true, entry));
+        while s < limit {
+            let way = &self.ways[s];
+            if way.resident_page == page_id {
+                return Err(PagedError::NoUnpinnedSlotAvailable);
             }
             if !has_empty {
-                if slot.resident_block.is_none() {
+                if way.is_empty() {
                     victim = s;
                     has_empty = true;
-                } else if allow_evict && !slot.pinned {
-                    let age = self.access_clock.wrapping_sub(slot.last_access_tick);
+                } else if allow_evict && !way.is_pinned() {
+                    let age = self
+                        .access_clock
+                        .wrapping_add(1)
+                        .wrapping_sub(way.last_access_tick);
                     if victim == MAX_SLOTS || age >= oldest_age {
                         oldest_age = age;
                         victim = s;
@@ -263,71 +287,70 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
             }
             s += 1;
         }
-
-        if victim >= slot_limit {
+        if victim >= limit {
             return Err(PagedError::NoUnpinnedSlotAvailable);
         }
-        self.slots[victim] = CacheSlotMeta {
-            resident_block: Some(block_id),
-            pinned: entry.is_pinned(),
-            last_access_tick: self.access_clock,
+
+        let page_bytes = 1u16 << self.page_shift;
+        let desc = if self.block_map_flash_offset == 0 {
+            let rel = (page_id as u32) << self.page_shift;
+            let raw_sz = self
+                .code_total_size
+                .saturating_sub(rel)
+                .min(page_bytes as u32) as u16;
+            let pinned = if page_id < 16 && (self.rt_pin_mask & (1u16 << page_id)) != 0 {
+                BLOCK_FLAG_PINNED
+            } else {
+                0
+            };
+            StreamedPageDesc {
+                flash_offset: self.code_flash_offset + rel,
+                page_id,
+                raw_size: raw_sz,
+                exec_size: raw_sz,
+                flags: pinned,
+                _pad: 0,
+            }
+        } else {
+            let entry_off = self.block_map_flash_offset + ((page_id as u32) << 3);
+            let entry = read_block_entry(entry_off).ok_or(PagedError::StorageReadFailed)?;
+            let mut flags = entry.flags;
+            if page_id < 16 && (self.rt_pin_mask & (1u16 << page_id)) != 0 {
+                flags |= BLOCK_FLAG_PINNED;
+            }
+            let exec_size = if (flags & BLOCK_FLAG_LZSS) != 0 {
+                page_bytes
+            } else {
+                entry.size.min(page_bytes)
+            };
+            StreamedPageDesc {
+                flash_offset: entry.flash_offset,
+                page_id,
+                raw_size: entry.size.min(page_bytes),
+                exec_size,
+                flags,
+                _pad: 0,
+            }
         };
+
         if allow_evict {
+            self.access_clock = self.access_clock.wrapping_add(1);
             self.fault_count = self.fault_count.saturating_add(1);
         }
-        Ok((victim, false, entry))
+        self.ways[victim] = CacheWayMeta {
+            resident_page: page_id,
+            loaded_size: desc.exec_size,
+            last_access_tick: self.access_clock,
+            flags: desc.flags,
+            _pad: 0,
+        };
+        Ok((victim, desc))
     }
 
-    /// Resolve a block in the cache or select a victim slot for page-in.
-    /// Returns `(slot_index, is_cache_hit, block_entry)`.
     #[inline(always)]
-    pub fn resolve_or_select_slot(
-        &mut self,
-        block_id: u8,
-    ) -> Result<(usize, bool, BlockEntry), PagedError> {
-        self.lookup_or_alloc_slot(block_id, true)
-    }
-
-    /// Byte offset of `slot_idx` relative to the start of the fixed-window cache VMA.
-    #[inline(always)]
-    pub const fn slot_byte_offset(&self, slot_idx: usize) -> usize {
-        if self.page_size == 512 {
-            slot_idx << 9
-        } else {
-            slot_idx << 10
-        }
-    }
-
-    /// Opportunistically select an empty cache slot for sequential prefetch of `next_id`.
-    /// Never evicts a resident slot.
-    #[inline(always)]
-    pub fn prepare_prefetch_next(&mut self, block_id: u8) -> Option<(usize, BlockEntry)> {
-        let next_id = block_id.checked_add(1)?;
-        let (slot, _, entry) = self.lookup_or_alloc_slot(next_id, false).ok()?;
-        Some((slot, entry))
-    }
-}
-
-/// Shadow return frame for LR-thunking across paged block calls (KRX-ABI 2.5.0 Section 7.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, align(4))]
-pub struct ReturnFrame {
-    pub caller_block_id: u8,
-    pub caller_slot: u8,
-    pub return_offset: u16,
-}
-
-const _: () = {
-    assert!(core::mem::size_of::<ReturnFrame>() == 4);
-    assert!(core::mem::align_of::<ReturnFrame>() == 4);
-};
-
-impl ReturnFrame {
-    pub const fn empty() -> Self {
-        Self {
-            caller_block_id: 0,
-            caller_slot: 0,
-            return_offset: 0,
+    pub fn invalidate_way(&mut self, slot_idx: usize) {
+        if slot_idx < MAX_SLOTS {
+            self.ways[slot_idx] = CacheWayMeta::empty();
         }
     }
 }
@@ -335,30 +358,36 @@ impl ReturnFrame {
 /// Bounded zero-allocation Shadow Return Stack for demand-paged return safety.
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub struct ShadowReturnStack<const DEPTH: usize = 8> {
+pub struct ShadowReturnStack<const DEPTH: usize = 8, F: Copy = PageReturnFrame> {
     pub sp: usize,
-    pub frames: [ReturnFrame; DEPTH],
+    pub frames: [F; DEPTH],
 }
 
-impl<const DEPTH: usize> Default for ShadowReturnStack<DEPTH> {
+impl<const DEPTH: usize> Default for ShadowReturnStack<DEPTH, PageReturnFrame> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
+impl<const DEPTH: usize> ShadowReturnStack<DEPTH, PageReturnFrame> {
     pub const fn new() -> Self {
         Self {
             sp: 0,
-            frames: [const { ReturnFrame::empty() }; DEPTH],
+            frames: [const { PageReturnFrame::empty() }; DEPTH],
         }
     }
 
+    pub const fn new_paged() -> Self {
+        Self::new()
+    }
+}
+
+impl<const DEPTH: usize, F: Copy> ShadowReturnStack<DEPTH, F> {
     pub fn clear(&mut self) {
         self.sp = 0;
     }
 
-    pub fn push(&mut self, frame: ReturnFrame) -> Result<(), PagedError> {
+    pub fn push(&mut self, frame: F) -> Result<(), PagedError> {
         if self.sp >= DEPTH {
             return Err(PagedError::ShadowStackOverflow);
         }
@@ -367,7 +396,7 @@ impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
         Ok(())
     }
 
-    pub fn pop(&mut self) -> Result<ReturnFrame, PagedError> {
+    pub fn pop(&mut self) -> Result<F, PagedError> {
         if self.sp == 0 {
             return Err(PagedError::ShadowStackUnderflow);
         }
@@ -723,41 +752,10 @@ mod tests {
     use crate::runtime::FLAG_LEAF_RT;
 
     #[test]
-    fn test_fixed_window_cache_lru_and_pinned() {
-        let mut cache = FixedWindowCache::<8, 2>::new();
-        cache.configure(512, 2, 128, 2048, None);
-        assert_eq!(cache.block_count, 4);
-
-        // Pin block 0
-        cache.blocks[0].flags = BLOCK_FLAG_PINNED;
-
-        // Fault in block 0 -> slot 0 (pinned)
-        let (s0, hit0, _) = cache.resolve_or_select_slot(0).unwrap();
-        assert_eq!((s0, hit0), (0, false));
-
-        // Fault in block 1 -> slot 1 (unpinned)
-        let (s1, hit1, _) = cache.resolve_or_select_slot(1).unwrap();
-        assert_eq!((s1, hit1), (1, false));
-
-        // Access block 0 again -> cache hit on slot 0
-        let (s0_hit, hit0_again, _) = cache.resolve_or_select_slot(0).unwrap();
-        assert_eq!((s0_hit, hit0_again), (0, true));
-
-        // Fault in block 2 -> must evict slot 1 because slot 0 is PINNED
-        let (s2, hit2, _) = cache.resolve_or_select_slot(2).unwrap();
-        assert_eq!((s2, hit2), (1, false));
-        assert_eq!(cache.slots[0].resident_block, Some(0));
-        assert_eq!(cache.slots[1].resident_block, Some(2));
-        assert_eq!(cache.fault_count, 3);
-        assert_eq!(cache.hit_count, 1);
-    }
-
-    #[test]
     fn test_shadow_return_stack_lr_thunk() {
         let mut stk = ShadowReturnStack::<4>::new();
-        let frame = ReturnFrame {
-            caller_block_id: 1,
-            caller_slot: 0,
+        let frame = PageReturnFrame {
+            caller_page_id: 1,
             return_offset: 0x0048,
         };
         assert_eq!(stk.push(frame), Ok(()));
@@ -767,60 +765,46 @@ mod tests {
 
     #[test]
     fn test_paged_nested_call_and_return_thunk_eviction() {
-        let mut cache = FixedWindowCache::<8, 2>::new();
-        // 4 blocks of 512B each
-        cache.configure(512, 2, 0, 2048, None);
+        let mut cache = StreamedWindowCache::<8>::new();
+        cache.configure(512, 2, 1024, 0, 0, 0, 2048, 0, 0);
         let mut shadow_stack = ShadowReturnStack::<8>::new();
 
-        // 1. App starts in Block 0 (resident in Slot 0)
-        let (s0, _, _) = cache.resolve_or_select_slot(0).unwrap();
+        let (s0, _) = cache.alloc_way_for_miss(0, true, |_| None).unwrap();
         assert_eq!(s0, 0);
 
-        // 2. Block 0 calls function in Block 1 (returns to Block 0 offset 0x0020)
         shadow_stack
-            .push(ReturnFrame {
-                caller_block_id: 0,
-                caller_slot: s0 as u8,
+            .push(PageReturnFrame {
+                caller_page_id: 0,
                 return_offset: 0x0020,
             })
             .unwrap();
-        let (s1, hit1, _) = cache.resolve_or_select_slot(1).unwrap();
-        assert_eq!((s1, hit1), (1, false)); // Slot 1 populated
+        let (s1, _) = cache.alloc_way_for_miss(1, true, |_| None).unwrap();
+        assert_eq!(s1, 1);
 
-        // 3. Block 1 calls function in Block 2 (returns to Block 1 offset 0x0050)
         shadow_stack
-            .push(ReturnFrame {
-                caller_block_id: 1,
-                caller_slot: s1 as u8,
+            .push(PageReturnFrame {
+                caller_page_id: 1,
                 return_offset: 0x0050,
             })
             .unwrap();
-        // Eviction happens! Block 0 was LRU, so Block 2 evicts Slot 0!
-        let (s2, hit2, _) = cache.resolve_or_select_slot(2).unwrap();
-        assert_eq!((s2, hit2), (0, false));
-        assert_eq!(cache.slots[0].resident_block, Some(2));
-        assert_eq!(cache.slots[1].resident_block, Some(1));
+        let (s2, _) = cache.alloc_way_for_miss(2, true, |_| None).unwrap();
+        assert_eq!(s2, 0);
+        assert_eq!(cache.ways[0].resident_page, 2);
+        assert_eq!(cache.ways[1].resident_page, 1);
 
-        // 4. Block 2 returns: pop shadow stack -> resumes Block 1
         let frame1 = shadow_stack.pop().unwrap();
-        assert_eq!(frame1.caller_block_id, 1);
+        assert_eq!(frame1.caller_page_id, 1);
         assert_eq!(frame1.return_offset, 0x0050);
-        // Block 1 is STILL resident in Slot 1 -> Cache Hit!
-        let (s1_res, hit1_res, _) = cache
-            .resolve_or_select_slot(frame1.caller_block_id)
-            .unwrap();
-        assert_eq!((s1_res, hit1_res), (1, true));
+        assert_eq!(cache.probe_hit(frame1.caller_page_id).unwrap().0, 1);
 
-        // 5. Block 1 returns: pop shadow stack -> resumes Block 0
         let frame0 = shadow_stack.pop().unwrap();
-        assert_eq!(frame0.caller_block_id, 0);
+        assert_eq!(frame0.caller_page_id, 0);
         assert_eq!(frame0.return_offset, 0x0020);
-        // Block 0 was EVICTED! -> Cache Miss, faults back in!
-        let (s0_res, hit0_res, _) = cache
-            .resolve_or_select_slot(frame0.caller_block_id)
+        assert!(cache.probe_hit(frame0.caller_page_id).is_none());
+        let (s0_res, _) = cache
+            .alloc_way_for_miss(frame0.caller_page_id, true, |_| None)
             .unwrap();
-        assert_eq!((s0_res, hit0_res), (0, false));
-        assert_eq!(cache.slots[0].resident_block, Some(0));
+        assert_eq!(cache.ways[s0_res].resident_page, 0);
     }
 
     #[test]
@@ -1027,24 +1011,53 @@ mod tests {
     }
 
     #[test]
-    fn fixed_window_cache_prefetches_hint_next_into_free_slot_only() {
-        let mut cache: FixedWindowCache<8, 2> = FixedWindowCache::new();
-        cache.configure(1024, 2, 0x100, 3072, None);
-        cache.blocks[0].flags |= BLOCK_FLAG_HINT_NEXT;
+    fn streamed_window_cache_addresses_384kib_768_pages_with_constant_sram() {
+        // 8-way cache metadata + header stays <= 96 bytes while addressing 768 x 512 B = 384 KiB!
+        assert!(core::mem::size_of::<StreamedWindowCache<8>>() <= 96);
 
-        // Fault block 0 into slot 0 -> slot 1 is free, so block 1 prefetches cleanly
-        let (s0, hit0, _) = cache.resolve_or_select_slot(0).unwrap();
-        assert_eq!((s0, hit0), (0, false));
-        let (pf_slot, pf_entry) = cache.prepare_prefetch_next(0).unwrap();
-        assert_eq!(pf_slot, 1);
-        assert_eq!(pf_entry.block_id, 1);
+        let mut cache = StreamedWindowCache::<8>::new();
+        cache.configure(
+            512,
+            6,
+            3072,
+            512,         // 512 B permanent resident prefix (.data/.bss/.got)
+            0b0000_0001, // Pin page 0
+            0x0200,
+            MAX_STREAMED_IMAGE_BYTES,
+            0,
+            0,
+        );
+        assert_eq!(cache.page_count, 768);
+        assert_eq!(cache.active_slots, 6);
+        assert_eq!(cache.slot_byte_offset(0), 512);
+        assert_eq!(cache.slot_byte_offset(5), 512 + 5 * 512);
 
-        // Accessing block 1 is now a zero-fault cache hit!
-        let (s1, hit1, _) = cache.resolve_or_select_slot(1).unwrap();
-        assert_eq!((s1, hit1), (1, true));
+        // Fault page 0 (pinned) and high page 767 (near 384 KiB ceiling, > u8::MAX!)
+        let (w0, d0) = cache.alloc_way_for_miss(0, true, |_| None).unwrap();
+        assert_eq!(w0, 0);
+        assert_eq!(d0.flash_offset, 0x0200);
+        assert_ne!(d0.flags & BLOCK_FLAG_PINNED, 0);
 
-        // When no free slot exists, prefetch refuses to evict resident blocks
-        cache.blocks[1].flags |= BLOCK_FLAG_HINT_NEXT;
-        assert!(cache.prepare_prefetch_next(1).is_none());
+        let (w_hi, d_hi) = cache.alloc_way_for_miss(767, true, |_| None).unwrap();
+        assert_eq!(w_hi, 1);
+        assert_eq!(d_hi.flash_offset, 0x0200 + 767 * 512);
+        assert_eq!(d_hi.exec_size, 512);
+
+        // Hit on high page 767 with zero Flash reads
+        let (hit_way, loaded_sz, _) = cache.probe_hit(767).expect("767 must hit");
+        assert_eq!((hit_way, loaded_sz), (1, 512));
+
+        // Encode & decode Vfp32 for page 767 offset 0x01AC
+        let vfp = ::abi::Vfp32::encode_paged(767, 0x01AC);
+        assert!(vfp.is_virtual());
+        assert_eq!(vfp.page_id(), 767);
+        assert_eq!(vfp.offset(), 0x01AC);
+
+        // Fill remaining ways 2..6 and verify page 0 stays pinned on eviction
+        for p in [100u16, 200, 300, 400, 500] {
+            let _ = cache.alloc_way_for_miss(p, true, |_| None).unwrap();
+        }
+        assert_eq!(cache.ways[0].resident_page, 0);
+        assert!(cache.probe_hit(500).is_some());
     }
 }

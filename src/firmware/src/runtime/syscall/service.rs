@@ -1,21 +1,25 @@
-//! System, Process, Service Broker & IPC System Call Dispatchers
-//! (`Op::Sys*` 0x0, `Op::Proc*` 0x1, `Op::Ipc*` 0x2).
+//! Unified System, Property/Telemetry, Process & IPC System Call Handlers
+//! (`Op::Sys*` 0x0, `Op::Proc*` 0x1, `Op::Ipc` 0x2).
+//!
+//! `op_sys_prop` (`0x00..=0xFE`) serves as the single scalar state/telemetry/control bus
+//! shared across KRX packages (`kern_call`) and RigWire (`services::wire`).
 
-use super::{parse_str, ptr_slice, slice_or_empty};
-use kernel::ipc::{IpcChannel, KrxIpcMessage, ipc_msg_type, ipc_target};
+#[cfg(feature = "passcode")]
+use super::slice_or_empty;
+use super::{parse_str, ptr_ref, ptr_ref_mut, ptr_slice, ptr_slice_mut};
+use kernel::ipc::{IpcChannel, KrxIpcMessage};
 use kernel::proc::abi::{
     KRX_ABI_VERSION, KRX_QS1_INVALID, KRX_QS1_UNVERIFIED, KRX_SYS_INFO_FLAG_CALIB_VALID,
-    KRX_SYS_INFO_FLAG_HAS_CERT, KRX_SYS_INFO_FLAG_RDP_PROTECTED, KrxIpcSendReq, KrxProcInfo,
-    KrxSysInfo,
+    KRX_SYS_INFO_FLAG_HAS_CERT, KRX_SYS_INFO_FLAG_RDP_PROTECTED, KrxProcInfo, KrxSysInfo,
 };
 pub use kernel::proc::service_registry::ServiceRegistry;
+use kernel::service::PowerService;
 
 pub static mut SERVICE_REGISTRY: ServiceRegistry<2> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
 
 static mut PENDING_LAUNCH: utils::format::InlineStr<31> = utils::format::InlineStr::new();
 
-/// Consume a deferred `.krx`/`.mod` package path queued by `PROC_CTL_LAUNCH_PKG`.
 pub fn take_pending_launch_path() -> Option<&'static str> {
     unsafe {
         let p = &mut *core::ptr::addr_of_mut!(PENDING_LAUNCH);
@@ -31,17 +35,14 @@ pub fn take_pending_launch_path() -> Option<&'static str> {
     }
 }
 
-#[inline(never)]
 pub fn ipc_channel_mut() -> &'static mut IpcChannel<2> {
     unsafe { &mut *core::ptr::addr_of_mut!(KERNEL_IPC_CHANNEL) }
 }
 
-#[inline(never)]
 pub fn service_registry_mut() -> &'static mut ServiceRegistry<2> {
     unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_REGISTRY) }
 }
 
-#[inline(never)]
 pub fn active_caller_pid() -> u8 {
     if let Some(bg) = super::super::background::BgManager::active_bg_slot() {
         return bg.pid.0;
@@ -59,7 +60,6 @@ pub fn active_caller_pid() -> u8 {
     }
 }
 
-#[inline(never)]
 fn post_sys_event(target: u8, command: u8, arg: u16) {
     crate::system::enqueue_event(kernel::event::Event::Sys(kernel::ipc::SysEvent {
         target,
@@ -74,17 +74,6 @@ fn post_shortcut(sc: crate::apps::Shortcut) {
     post_sys_event(ev.target, ev.command, ev.arg);
 }
 
-#[inline(never)]
-fn find_proc_by_ptr(name: *const u8, len: u8) -> u8 {
-    if let Some(name_str) = unsafe { parse_str(name, (len as usize).min(16)) } {
-        if let Some(pcb) = crate::orchestrator::proc_table_mut().find_by_name(name_str) {
-            return pcb.pid.0;
-        }
-    }
-    0
-}
-
-#[inline(never)]
 fn active_slot_scan(target: u8) -> (u8, Option<&'static kernel::proc::Pcb>) {
     let mut count = 0u8;
     for slot in crate::orchestrator::proc_table().slots.iter() {
@@ -101,19 +90,16 @@ fn active_slot_scan(target: u8) -> (u8, Option<&'static kernel::proc::Pcb>) {
     (count, None)
 }
 
-#[inline(never)]
 fn copy_cstr(dst: &mut [u8], src: &[u8]) {
     let n = src.len().min(dst.len().saturating_sub(1));
     unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), n) };
 }
 
-#[inline(never)]
 unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
-    if !out_info.is_aligned() {
+    let Some(out) = (unsafe { ptr_ref_mut(out_info) }) else {
         return 1;
-    }
-    unsafe { core::ptr::write_bytes(out_info, 0, 1) };
-    let out = unsafe { &mut *out_info };
+    };
+    unsafe { core::ptr::write_bytes(out as *mut KrxSysInfo, 0, 1) };
 
     out.flash_kb = py32_hal::uid::SystemInfo::flash_size_kb();
     out.sram_kb = 16;
@@ -123,12 +109,7 @@ unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
     if crate::calibration_mut().is_valid() {
         out.flags |= KRX_SYS_INFO_FLAG_CALIB_VALID;
     }
-    #[cfg(not(test))]
-    let model = crate::master_config_ref().system.model_str().as_bytes();
-    #[cfg(test)]
-    let model = super::active_ctx_opt().map_or(b"UV-K1".as_slice(), |ctx| {
-        ctx.config.system.model_str().as_bytes()
-    });
+    let model = crate::services::config().system.model_str().as_bytes();
     bsp::uid::fill_device_identity(&mut out.mac, &mut out.serial);
     out.mcu_uid = bsp::uid::read_mcu_uid();
 
@@ -163,21 +144,13 @@ unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
     0
 }
 
-#[inline(never)]
 fn post_event_id(event_id: u32) -> usize {
     let ev = kernel::ipc::SysEvent {
         target: (event_id >> 16) as u8,
         command: (event_id & 0xFF) as u8,
         arg: ((event_id >> 8) & 0xFF) as u16,
     };
-    #[cfg(not(test))]
-    {
-        usize::from(crate::kern_hw().ipc_queue.try_push(ev).is_err())
-    }
-    #[cfg(test)]
-    {
-        super::active_ctx_opt().map_or(1, |ctx| usize::from(!ctx.post_event(ev)))
-    }
+    usize::from(!crate::services::post_event(ev))
 }
 
 #[cfg_attr(feature = "passcode", inline(never))]
@@ -194,19 +167,8 @@ unsafe fn dispatch_sys_sec(sub: u8, a1: usize, a2: usize) -> usize {
     #[cfg(feature = "passcode")]
     {
         use ::abi::{SEC_FLAG_AVAILABLE, sub::sys_sec};
-        #[cfg(not(test))]
-        let (fs, ps) = (crate::kern_fs(), unsafe {
-            &mut *core::ptr::addr_of_mut!(crate::PASSCODE_STATE)
-        });
-        #[cfg(test)]
-        let Some(ctx) = super::active_ctx_opt() else {
-            return if sub == sys_sec::STATUS { 0 } else { 1 };
-        };
-        #[cfg(test)]
-        let (fs, ps) = (&mut *ctx.storage, unsafe {
-            &mut *core::ptr::addr_of_mut!(crate::PASSCODE_STATE)
-        });
-
+        let fs = crate::services::storage_mut();
+        let ps = unsafe { &mut *core::ptr::addr_of_mut!(crate::PASSCODE_STATE) };
         #[cfg(not(test))]
         let progress = Some(crate::boot::security::lcd_verify_progress_hook(
             &mut crate::kern_hw().lcd,
@@ -268,308 +230,313 @@ unsafe fn dispatch_sys_sec(sub: u8, a1: usize, a2: usize) -> usize {
     }
 }
 
-#[inline(never)]
-pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::{idx as op, sub::sys_query};
-    match idx {
-        op::SysInfo => unsafe { fill_sys_info(a0 as *mut KrxSysInfo) },
-        op::SysQuery => match a0 as u8 {
-            sys_query::OS_VERSION => KRX_ABI_VERSION as usize,
-            sys_query::STACK_FREE => {
-                kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16 as usize
-            }
-            sys_query::CPU_HZ => py32_hal::rcc::sysclk_hz() as usize,
-            sys_query::DEVICE_UID => {
-                let out = a1 as *mut u8;
-                if !out.is_null() {
-                    let uid = bsp::uid::read_mcu_uid();
-                    unsafe { core::ptr::copy_nonoverlapping(uid.as_ptr(), out, 12) };
-                    0
-                } else {
-                    1
-                }
-            }
-            sys_query::RAND32 => {
-                #[cfg(not(test))]
-                let noise = crate::kern_hw()
-                    .radio
-                    .read_reg(drivers::bk4829::registers::REG_NOISE_VAL)
-                    as u32;
-                #[cfg(test)]
-                let noise = super::active_ctx_opt().map_or(0, |ctx| {
-                    ctx.radio
-                        .read_reg(drivers::bk4829::registers::REG_NOISE_VAL)
-                        as u32
-                });
-                let seed = py32_hal::delay::millis() ^ (noise << 16);
-                crypto::crc::CrcEngine::crc32(&seed.to_le_bytes()) as usize
-            }
-            sys_query::CRC32 | sys_query::CRC16 => {
-                let Some(s) = (unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }) else {
-                    return 0;
-                };
-                if a0 as u8 == sys_query::CRC32 {
-                    crypto::crc::CrcEngine::crc32(s) as usize
-                } else {
-                    crypto::crc::CrcEngine::crc16_ccitt(s) as usize
-                }
-            }
-            _ => 0,
-        },
-        // Unsigned divide; optional remainder written to `a2`. A zero divisor
-        // yields quotient 0 and remainder `n` instead of trapping.
-        op::SysDiv => {
-            let n = a0 as u32;
-            let d = a1 as u32;
-            let (q, r) = if d == 0 { (0, n) } else { (n / d, n % d) };
-            let rem_out = a2 as *mut u32;
-            if !rem_out.is_null() {
-                unsafe { *rem_out = r };
-            }
-            q as usize
+// ── Unified Property & Live Telemetry/Control Bus (`0x00..=0xFE`) ─────────────
+
+fn required_live_cap(id: u8) -> Option<::abi::Cap> {
+    use ::abi::{Cap, prop};
+    match id {
+        prop::KEY_F_ACTIVE | prop::KEY_LOCKED => Some(Cap::Keypad),
+        prop::AUD_PATH..=prop::AUD_CAPTURING => Some(Cap::AudioOutput),
+        prop::MODAL_STATE..=prop::TRAY_ICON => Some(Cap::DisplayDirect),
+        prop::RF_FREQ..=0xFE => Some(Cap::RadioRx),
+        _ => None,
+    }
+}
+
+/// Read any live scalar (`0xC0..=0xFE`) without redundant per-domain boilerplate.
+pub fn live_prop_get(id: u8) -> usize {
+    use ::abi::prop;
+    let p = crate::services::power();
+    match id {
+        prop::OS_VERSION => KRX_ABI_VERSION as usize,
+        prop::TICKS_MS => py32_hal::delay::millis() as usize,
+        prop::CPU_HZ => py32_hal::rcc::sysclk_hz() as usize,
+        prop::STACK_FREE => kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16 as usize,
+        prop::RAND32 => {
+            let (_, radio) = crate::services::state_and_radio();
+            let noise = radio.read_reg(drivers::bk4829::registers::REG_NOISE_VAL) as u32;
+            let seed = py32_hal::delay::millis() ^ (noise << 16);
+            crypto::crc::CrcEngine::crc32(&seed.to_le_bytes()) as usize
         }
-        op::SysReboot => {
-            kernel::power::PowerControl::reboot_with(kernel::power::RebootMode::from_u8(a0 as u8));
-        }
-        // SysEvent: 0=post_event(a1), 1=publish_event(topic=a1 as u16, len=(a1>>16) as u8, data=a2)
-        op::SysEvent => {
-            if a0 == 0 {
-                post_event_id(a1 as u32)
-            } else {
-                let data = a2 as *const u8;
-                let len = (a1 >> 16) as u8;
-                let b0 = if !data.is_null() && len > 0 {
-                    unsafe { *data as u32 }
-                } else {
-                    0
-                };
-                let topic = a1 as u16;
-                let ev = ((topic & 0xFF) as u32) | (b0 << 8) | (((topic >> 8) as u32) << 16);
-                post_event_id(ev)
+        prop::BATT_MV => p.battery_voltage_mv() as usize,
+        prop::BATT_PCT => p.battery_percentage() as usize,
+        prop::BATT_MA => p.battery_current_ma() as usize,
+        prop::BATT_TYPE => p.battery_type() as usize,
+        prop::BATT_ADC => p.raw_battery_adc() as usize,
+        prop::MCU_TEMP => p.mcu_temperature_deci_c() as u16 as usize,
+        prop::CHARGING => usize::from(p.is_charging),
+        prop::BATT_LOW => usize::from(p.is_low()),
+        prop::BATT_CRIT => usize::from(p.is_critical()),
+        prop::FLASHLIGHT => bsp::pins::FLASHLIGHT.is_high() as usize,
+        prop::KEY_F_ACTIVE => crate::kern_hw().orchestrator.is_f_active() as usize,
+        prop::KEY_LOCKED => crate::kern_hw().orchestrator.is_keypad_locked() as usize,
+        prop::USB_CONNECTED => {
+            #[cfg(feature = "usb")]
+            {
+                crate::kern_hw().usb.is_connected() as usize
             }
+            #[cfg(not(feature = "usb"))]
+            0
         }
-        op::PropGet | op::PropSet | op::PrefSet => {
-            #[cfg(not(test))]
-            let config = Some(crate::master_config());
-            #[cfg(test)]
-            let config = super::active_ctx_opt().map(|ctx| &mut *ctx.config);
-            let Some(config) = config else {
-                return 0;
-            };
-            let id = a0 as u8;
-            if idx == op::PropGet {
-                return config.prop_get(id) as usize;
-            }
-            if idx == op::PrefSet {
-                return usize::from(!config.prop_set(id, a1 as u8));
-            }
-            let granted = crate::runtime::native_runner::active_native_caps();
-            let allowed = ::abi::prop::CONTROL_CAP
-                .get((id >> 5) as usize)
-                .is_some_and(|&cap| granted.contains(cap));
-            usize::from(!(allowed && config.control_set(id, a1 as u8)))
+        prop::AUD_PLAYING => crate::kern_hw().audio.is_active() as usize,
+        prop::AUD_MIC_LEVEL => {
+            let (_, radio) = crate::services::state_and_radio();
+            radio.read_reg(drivers::bk4829::registers::REG_AUDIO_AMP) as usize
         }
-        op::SysFlush => {
-            use ::abi::sub::sys_flush;
-            #[cfg(not(test))]
-            let (cfg, fs) = (crate::master_config(), crate::kern_fs());
-            #[cfg(test)]
-            let Some(ctx) = super::active_ctx_opt() else {
-                return usize::from(a0 == sys_flush::RESET as usize);
-            };
-            #[cfg(test)]
-            let (cfg, fs) = (&mut *ctx.config, &mut *ctx.storage);
-            match a0 as u8 {
-                sys_flush::RELOAD => {
-                    cfg.reload_from_storage(fs);
-                    0
-                }
-                sys_flush::RESET => {
-                    if !super::has_cap(::abi::Cap::Preferences) {
-                        return 1;
-                    }
-                    usize::from(cfg.reset_all_to_defaults(fs).is_err())
-                }
-                _ => usize::from(cfg.flush_dirty(fs).is_err()),
-            }
+        prop::AUD_CAPTURING => crate::audio_capture_mut().is_capturing() as usize,
+        prop::MODAL_STATE => {
+            let m = crate::orchestrator::compositor::active_modal_mut();
+            (m.is_active() as usize) | ((m.is_animating() as usize) << 1)
         }
-        op::SysSec => unsafe { dispatch_sys_sec(a0 as u8, a1, a2) },
+        prop::SELF_PID => active_caller_pid() as usize,
+        prop::PROC_COUNT => active_slot_scan(u8::MAX).0 as usize,
+        prop::RF_FREQ..=0xFE => super::radio::radio_prop_get(id),
         _ => 0,
     }
 }
 
-fn proc_kill(pid: u8) -> u8 {
-    let is_fg = crate::orchestrator::proc_table()
-        .find(kernel::proc::Pid(pid))
-        .is_some_and(|p| p.state == kernel::proc::ProcState::Running);
-    if !crate::orchestrator::reap_pid_resources(pid) {
-        return 1;
+/// Write any live control (`0xC0..=0xFE`); returns `0` on success (or status value where specified).
+pub fn live_prop_set(id: u8, val: usize) -> usize {
+    use ::abi::prop;
+    match id {
+        prop::BL_WAKE => {
+            crate::services::wake_display();
+            0
+        }
+        prop::FLASHLIGHT => {
+            let high = if val >= 2 {
+                !bsp::pins::FLASHLIGHT.is_high()
+            } else {
+                val != 0
+            };
+            if high {
+                bsp::pins::FLASHLIGHT.set_high();
+            } else {
+                bsp::pins::FLASHLIGHT.set_low();
+            }
+            0
+        }
+        prop::KEY_LOCKED => {
+            let orch = &mut crate::kern_hw().orchestrator;
+            if val >= 2 || (val != 0) != orch.is_keypad_locked() {
+                orch.toggle_keypad_lock();
+            }
+            0
+        }
+        prop::AUD_PATH => {
+            let aud = &mut crate::kern_hw().audio;
+            if val != 0 {
+                aud.enable();
+            } else {
+                aud.disable();
+            }
+            0
+        }
+        prop::MODAL_STATE => {
+            if val == 0 {
+                crate::orchestrator::sink_enter_keys();
+                crate::orchestrator::compositor::active_modal_mut().close();
+            }
+            0
+        }
+        prop::MODAL_HOLD_MS => {
+            crate::orchestrator::compositor::active_modal_mut().set_hold_ms(val as u16);
+            0
+        }
+        prop::TRAY_ICON => super::ui::set_tray_icon(val as u8) as usize,
+        prop::RF_FREQ..=0xFE => super::radio::radio_prop_set(id, val),
+        _ => ::abi::Status::Unsupported.to_raw(),
     }
-    if is_fg {
-        post_shortcut(crate::apps::Shortcut::CloseApp);
-    }
-    0
 }
 
-#[inline(never)]
-unsafe fn proc_ctl_query(op: u8, target: u8, buf: *mut u8, len: u16) -> u8 {
-    use kernel::proc::Pid;
-    use kernel::proc::abi::*;
-    if buf.is_null() || len < 16 {
-        return 1;
-    }
-    if op == PROC_CTL_IPC_ENTRY {
-        let Some(m) = ipc_channel_mut().peek_at(target as usize) else {
-            return 1;
+pub unsafe fn op_sys_prop(a0: usize, a1: usize, _a2: usize) -> usize {
+    use ::abi::{prop, sub::sys_prop};
+    let id = a0 as u8;
+    let mode = (a0 >> 8) as u8;
+    if id >= 0xC0 {
+        if let Some(cap) = required_live_cap(id)
+            && !super::has_cap(cap)
+        {
+            return ::abi::Status::PermissionDenied.to_raw();
+        }
+        if mode != sys_prop::GET
+            && id == prop::RF_TX
+            && a1 != 0
+            && !super::has_cap(::abi::Cap::RadioTx)
+        {
+            return super::radio::RF_TX_DENIED;
+        }
+        return match mode {
+            sys_prop::GET => live_prop_get(id),
+            sys_prop::SET => live_prop_set(id, a1),
+            _ => ::abi::Status::InvalidArg.to_raw(),
         };
-        unsafe { core::ptr::copy_nonoverlapping(m as *const KrxIpcMessage as *const u8, buf, 16) };
-        return 0;
     }
-    let mut w = [0u32; 4];
-    match op {
-        PROC_CTL_SYS_OVERVIEW => {
-            w[0] = (kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32 & 0xFFFF)
-                | ((kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32) << 16);
-            w[1] = kernel::sys::SystemDiagnostics::ram_static_used_bytes() as u32;
+
+    let cfg = crate::services::config_mut();
+    let val = a1 as u8;
+    match mode {
+        sys_prop::GET => cfg.prop_get(id) as usize,
+        sys_prop::SET => {
+            let granted = crate::runtime::native_runner::active_native_caps();
+            let allowed = prop::CONTROL_CAP
+                .get((id >> 5) as usize)
+                .is_some_and(|&cap| granted.contains(cap));
+            usize::from(!(allowed && cfg.control_set(id, val)))
         }
-        PROC_CTL_LEASE_ENTRY => {
-            let Some(l) = crate::orchestrator::lease_manager().entry(target as usize) else {
-                return 1;
-            };
-            w[0] = (l.kind.map_or(0, |k| k as u32)) | ((l.owner.0 as u32) << 8);
-            w[1] = l.acquired_tick;
-            w[2] = l.timeout_ms;
+        sys_prop::PREF => {
+            if !super::has_cap(::abi::Cap::Preferences) {
+                return ::abi::Status::PermissionDenied.to_raw();
+            }
+            usize::from(!cfg.prop_set(id, val))
         }
-        PROC_CTL_SVC_ENTRY => {
-            let Some(e) = service_registry_mut()
-                .entries
-                .get(target as usize)
-                .filter(|e| e.is_active())
-            else {
-                return 1;
-            };
-            w[0] = (e.interface_id as u32) | ((e.abi_version as u32) << 16);
-            w[1] = (e.provider_pid.0 as u32)
-                | ((e.pinned as u32) << 8)
-                | ((e.client_count as u32) << 16);
-            w[2] = e.vtable_ptr as u32;
-        }
-        PROC_CTL_PROC_EXT => {
-            let Some(pcb) = crate::orchestrator::proc_table().find(Pid(target)) else {
-                return 1;
-            };
-            w[0] = pcb.caps.raw();
-            w[1] = (pcb.restart_budget as u32) | ((pcb.stack_cost as u32) << 8);
-            w[2] = pcb.compressed_bytes as u32;
-            w[3] = pcb.ledger.ipc_events;
-        }
-        _ => return 1,
+        _ => ::abi::Status::InvalidArg.to_raw(),
     }
-    unsafe { core::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, buf, 16) };
-    0
 }
 
-#[inline(never)]
-unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
-    use kernel::proc::abi::*;
-    use kernel::proc::{LeaseKind, Pid, ProcState};
-
-    let op = op_and_id as u8;
-    let target = (op_and_id >> 8) as u8;
-
-    if op >= 0x80 {
-        return unsafe { proc_ctl_query(op, target, buf, len) };
-    }
-    if !super::has_cap(::abi::Cap::TaskControl) {
-        return 2;
-    }
-    let table = crate::orchestrator::proc_table_mut();
-    match op {
-        PROC_CTL_KILL => return proc_kill(target),
-        PROC_CTL_REVOKE_LEASE => {
-            return LeaseKind::from_u8(target).map_or(1, |lk| {
-                u8::from(!crate::orchestrator::lease_manager_mut().revoke_kind(lk))
-            });
-        }
-        PROC_CTL_RESET_STATS => {
-            for slot in &mut table.slots {
-                slot.ledger.slice_overruns = 0;
-                slot.ledger.fault_count = 0;
+pub unsafe fn op_sys_query(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::sys_query;
+    match a0 as u8 {
+        sys_query::INFO => unsafe { fill_sys_info(a1 as *mut KrxSysInfo) },
+        sys_query::DEVICE_UID => {
+            if let Some(dst) = unsafe { ptr_slice_mut(a1 as *mut u8, 12) } {
+                dst.copy_from_slice(&bsp::uid::read_mcu_uid());
+                0
+            } else {
+                1
             }
-            return 0;
         }
-        ::abi::PROC_CTL_LAUNCH_PKG => {
-            let plen = target as usize;
-            if plen == 0 || plen > 31 {
-                return 1;
+        sys_query::CRC32 | sys_query::CRC16 => {
+            let Some(s) = (unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }) else {
+                return 0;
+            };
+            if a0 as u8 == sys_query::CRC32 {
+                crypto::crc::CrcEngine::crc32(s) as usize
+            } else {
+                crypto::crc::CrcEngine::crc16_ccitt(s) as usize
             }
-            let Some(path) = (unsafe { parse_str(buf, plen) }) else {
+        }
+        sys_query::RTC_GET => {
+            let Some(dst) = (unsafe { ptr_slice_mut(a1 as *mut u8, 7) }) else {
                 return 1;
             };
-            if !path.starts_with("/apps/") {
+            let mut rem = crate::services::power().uptime_secs;
+            let mut d = 1u8;
+            let mut h = 0u8;
+            while rem >= 3600 {
+                rem -= 3600;
+                h += 1;
+                if h == 24 {
+                    h = 0;
+                    d = if d == 28 { 1 } else { d + 1 };
+                }
+            }
+            let (m, s) = utils::math::div60_u16(rem as u16);
+            dst.copy_from_slice(&[0xEA, 0x07, 1, d, h, m as u8, s]);
+            0
+        }
+        sys_query::FLUSH => usize::from(
+            crate::services::config_mut()
+                .flush_dirty(crate::services::storage_mut())
+                .is_err(),
+        ),
+        sys_query::RELOAD => {
+            crate::services::config_mut().reload_from_storage(crate::services::storage_mut());
+            0
+        }
+        sys_query::RESET => {
+            if !super::has_cap(::abi::Cap::Preferences) {
                 return 1;
             }
-            unsafe { (*core::ptr::addr_of_mut!(PENDING_LAUNCH)).set(path) };
-            post_shortcut(crate::apps::Shortcut::LaunchPendingPkg);
-            return 0;
+            usize::from(
+                crate::services::config_mut()
+                    .reset_all_to_defaults(crate::services::storage_mut())
+                    .is_err(),
+            )
         }
-        _ => {}
+        _ => 1,
     }
-    let Some(pcb) = table.find_mut(Pid(target)) else {
+}
+
+pub unsafe fn op_sys_ctl(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::sys_ctl;
+    match a0 as u8 {
+        sys_ctl::DELAY_MS => {
+            let mut rem = a1 as u32;
+            while rem > 0 {
+                let step = rem.min(50);
+                bsp::Board::wdt_feed();
+                py32_hal::delay::delay_ms(step);
+                rem -= step;
+            }
+            0
+        }
+        sys_ctl::DELAY_US => {
+            py32_hal::delay::delay_us(a1 as u32);
+            0
+        }
+        sys_ctl::EVENT => {
+            if ((a0 >> 8) & 0xFF) == 0 {
+                post_event_id(a1 as u32)
+            } else {
+                let len = (a1 >> 16) as u8;
+                let b0 = if len > 0 {
+                    unsafe { ptr_slice(a2 as *const u8, 1) }.map_or(0, |s| s[0] as u32)
+                } else {
+                    0
+                };
+                let topic = a1 as u16;
+                post_event_id(((topic & 0xFF) as u32) | (b0 << 8) | (((topic >> 8) as u32) << 16))
+            }
+        }
+        sys_ctl::REBOOT => {
+            if !super::has_cap(::abi::Cap::PowerManage) {
+                return ::abi::Status::PermissionDenied.to_raw();
+            }
+            kernel::power::PowerControl::reboot_with(kernel::power::RebootMode::from_u8(a1 as u8));
+        }
+        _ => ::abi::Status::Unsupported.to_raw(),
+    }
+}
+
+pub unsafe fn op_sys_div(a0: usize, a1: usize, a2: usize) -> usize {
+    let (q, r) = py32_hal::div::udivmod(a0 as u32, a1 as u32);
+    if a2 != 0
+        && (a2 & 3) == 0
+        && let Some(dst) = unsafe { ptr_slice_mut(a2 as *mut u8, 4) }
+    {
+        dst.copy_from_slice(&r.to_ne_bytes());
+    }
+    q as usize
+}
+
+pub unsafe fn op_sys_sec(a0: usize, a1: usize, a2: usize) -> usize {
+    unsafe { dispatch_sys_sec(a0 as u8, a1, a2) }
+}
+
+// ── Lean Process, Service & Execution Dispatch (`Op::ProcCtl`, `Op::ProcExec`) ──
+
+unsafe fn fill_proc_info(index: u8, out_info: *mut KrxProcInfo) -> usize {
+    let Some(info) = (unsafe { ptr_ref_mut(out_info) }) else {
         return 1;
     };
-    match op {
-        PROC_CTL_SET_STATE => {
-            if target == 1 || target == 4 || (target <= 4 && arg >= 2) {
-                return 1;
-            }
-            pcb.set_state(match arg {
-                1 => ProcState::Suspended,
-                2 => ProcState::Stopped,
-                _ if target <= 4 => ProcState::ServiceIdle,
-                _ => ProcState::Running,
-            });
-        }
-        PROC_CTL_SET_PRIORITY => {
-            let Some(prio) = kernel::sched::Priority::from_u8(arg as u8) else {
-                return 1;
-            };
-            pcb.priority = prio;
-        }
-        PROC_CTL_FOCUS_APP => {
-            if pcb.app_id >= crate::AppRegistry::app_count() {
-                return 1;
-            }
-            post_shortcut(crate::apps::Shortcut::LaunchApp(pcb.app_id as u8));
-        }
-        _ => return 1,
-    }
-    0
-}
-
-#[inline(never)]
-unsafe fn fill_proc_info(index: u8, out_info: *mut KrxProcInfo) -> usize {
-    if !out_info.is_aligned() {
-        return 1;
-    }
     let (_, Some(slot)) = active_slot_scan(index) else {
         return 1;
     };
     unsafe {
-        core::ptr::write_bytes(out_info, 0, 1);
-        let info = &mut *out_info;
+        core::ptr::write_bytes(info as *mut KrxProcInfo, 0, 1);
         info.pid = slot.pid.0;
-        info.app_id = slot.app_id as u8;
+        info.app_id = slot.app_id;
         info.state = slot.state as u8;
         info.priority = slot.priority as u8;
         info.memory_bytes = slot.mem_bytes;
         let src = slot.name.as_bytes();
         let len = src.len().min(info.name.len());
         core::ptr::copy_nonoverlapping(src.as_ptr(), info.name.as_mut_ptr(), len);
-        info.runtime_ticks = slot.ledger.cpu_ticks;
         info.exec_type = slot.exec_type as u8;
 
-        let is_core = slot.pid.0 <= 4 || slot.app_id >= 0xF0;
+        let is_core = slot.app_id as usize == crate::apps::APP_ID_LAUNCHER
+            || slot.exec_type == kernel::proc::ExecType::StaticFirmware;
         let mut pflags = if is_core {
             kernel::proc::abi::KRX_PROC_FLAG_PERSISTENT
         } else {
@@ -584,182 +551,164 @@ unsafe fn fill_proc_info(index: u8, out_info: *mut KrxProcInfo) -> usize {
             pflags |= kernel::proc::abi::KRX_PROC_FLAG_HAS_LEASE;
         }
         info.flags = pflags;
-        info.stack_watermark = slot.ledger.stack_watermark;
-        info.ipc_events = slot.ledger.ipc_events.min(u16::MAX as u32) as u16;
-        info.page_faults = slot.ledger.page_faults.min(255) as u8;
-        info.slice_overruns = slot.ledger.slice_overruns;
-        info.hibernations = slot.ledger.hibernations;
-        info.fault_count = slot.ledger.fault_count;
+        info.stack_watermark = slot.health.stack_watermark_bytes();
+        info.page_faults = slot.health.page_faults.min(255) as u8;
+        info.fault_count = slot.health.faults;
     }
     0
 }
 
-#[inline(never)]
-pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    #[cfg(feature = "krx_paged")]
-    use ::abi::sub::proc_paged;
-    use ::abi::{idx as op, sub::proc_svc};
-    match idx {
-        op::ProcSelf => active_caller_pid() as usize,
-        op::ProcFind => find_proc_by_ptr(a0 as *const u8, a1 as u8) as usize,
-        op::ProcCount => active_slot_scan(u8::MAX).0 as usize,
-        op::ProcInfo => unsafe { fill_proc_info(a0 as u8, a1 as *mut KrxProcInfo) },
-        op::ProcCtl => unsafe {
-            proc_ctl(a0 as u16, a1 as u32, a2 as *mut u8, (a0 >> 16) as u16) as usize
-        },
-        op::ProcLeaf => super::super::native_runner::krx_leaf_call(a0 as u8, a1 as u32) as usize,
-        #[cfg(feature = "krx_paged")]
-        op::ProcPaged => match a0 as u8 {
-            proc_paged::CALL => {
-                super::super::native_runner::krx_call_paged(a1 as u8, (a1 >> 16) as u16, a2 as u16)
+pub unsafe fn op_proc_ctl(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::proc_ctl;
+    use kernel::proc::{LeaseKind, Pid};
+
+    let sub = a0 as u8;
+    let target = (a0 >> 8) as u8;
+    match sub {
+        proc_ctl::INFO => unsafe { fill_proc_info(target, a1 as *mut KrxProcInfo) },
+        proc_ctl::MEM => {
+            let slot = super::super::native_runner::slot_ref();
+            if !slot.is_loaded {
+                return 1;
             }
-            proc_paged::RETURN => super::super::native_runner::krx_return_thunk(),
-            proc_paged::FAULT => super::super::native_runner::krx_page_fault(a1 as u8, a2 as u16),
-            _ => 0,
-        },
-        op::ProcLease => {
-            let Some(kind) = kernel::proc::LeaseKind::from_u8(a0 as u8) else {
+            let Some(out_desc) =
+                (unsafe { ptr_ref_mut(a1 as *mut kernel::proc::MemoryRegionDescriptor) })
+            else {
                 return 1;
             };
-            let pid = kernel::proc::Pid(active_caller_pid());
+            if let Some(rk) = kernel::proc::RegionKind::from_u8(target)
+                && let Some(desc) = slot.query_region(rk)
+            {
+                *out_desc = desc;
+                0
+            } else {
+                1
+            }
+        }
+        proc_ctl::LEASE => {
+            let Some(kind) = LeaseKind::from_u8(target & 0x7F) else {
+                return 1;
+            };
+            let pid = Pid(active_caller_pid());
             let mgr = crate::orchestrator::lease_manager_mut();
-            let res = if (a0 >> 8) != 0 {
+            let res = if (target & 0x80) != 0 {
                 mgr.acquire(pid, kind, a1 as u32, py32_hal::delay::millis())
             } else {
                 mgr.release(pid, kind)
             };
             usize::from(res.is_err())
         }
-        op::ProcMem => {
-            let out_desc = a1 as *mut kernel::proc::MemoryRegionDescriptor;
-            let slot = super::super::native_runner::slot_ref();
-            if !out_desc.is_aligned() || !slot.is_loaded {
-                return 1;
-            }
-            if let Some(rk) = kernel::proc::RegionKind::from_u8(a0 as u8)
-                && let Some(desc) = slot.query_region(rk)
+        proc_ctl::FIND => {
+            if let Some(name_str) = unsafe { parse_str(a1 as *const u8, (target as usize).min(16)) }
+                && let Some(pcb) = crate::orchestrator::proc_table_mut().find_by_name(name_str)
             {
-                unsafe { *out_desc = desc };
-                return 0;
+                return pcb.pid.0 as usize;
             }
-            1
+            0
         }
-        op::ProcSvc => {
-            let sub = a0 as u8;
+        proc_ctl::SVC_REG | proc_ctl::SVC_RES | proc_ctl::SVC_REL => {
             let iface = (a0 >> 8) as u16;
             let reg = service_registry_mut();
             match sub {
-                proc_svc::REGISTER => usize::from(!reg.register(
+                proc_ctl::SVC_REG => usize::from(!reg.register(
                     iface,
                     a1 as u16,
-                    kernel::proc::Pid(active_caller_pid()),
+                    Pid(active_caller_pid()),
                     a2,
                     false,
                 )),
-                proc_svc::RESOLVE => reg.resolve(iface, a1 as u16).unwrap_or(0),
-                proc_svc::RELEASE => usize::from(!reg.release(iface)),
-                _ => 1,
+                proc_ctl::SVC_RES => reg.resolve(iface, a1 as u16).unwrap_or(0),
+                _ => usize::from(!reg.release(iface)),
             }
         }
-        _ => 0,
+        proc_ctl::KILL => {
+            if !super::has_cap(::abi::Cap::TaskControl) {
+                return 2;
+            }
+            let is_fg = crate::orchestrator::proc_table()
+                .find(Pid(target))
+                .is_some_and(|p| p.state == kernel::proc::ProcState::Running);
+            if !crate::orchestrator::reap_pid_resources(target) {
+                return 1;
+            }
+            if is_fg {
+                post_shortcut(crate::apps::Shortcut::CloseApp);
+            }
+            0
+        }
+        proc_ctl::LAUNCH_PKG => {
+            if !super::has_cap(::abi::Cap::TaskControl) {
+                return 2;
+            }
+            let plen = target as usize;
+            if plen == 0 || plen > 31 {
+                return 1;
+            }
+            let Some(path) = (unsafe { parse_str(a1 as *const u8, plen) }) else {
+                return 1;
+            };
+            if !path.starts_with("/apps/") {
+                return 1;
+            }
+            unsafe { (*core::ptr::addr_of_mut!(PENDING_LAUNCH)).set(path) };
+            post_shortcut(crate::apps::Shortcut::LaunchPendingPkg);
+            0
+        }
+        _ => 1,
     }
 }
 
-#[inline(never)]
-unsafe fn ipc_send_msg(msg: *const KrxIpcMessage) -> u8 {
-    let m = unsafe { &*msg };
-    let sender_pid = if m.sender_pid == 0 {
-        active_caller_pid()
-    } else {
-        m.sender_pid
-    };
-    if ipc_channel_mut().send_from(m, sender_pid) {
-        if let Some(pcb) =
-            crate::orchestrator::proc_table_mut().find_mut(kernel::proc::Pid(m.target_pid))
-        {
-            pcb.ledger.record_ipc();
+pub unsafe fn op_proc_exec(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::proc_exec;
+    let sub = a0 as u8;
+    if sub == proc_exec::LEAF {
+        return super::super::native_runner::krx_leaf_call((a0 >> 8) as u8, a1 as u32) as usize;
+    }
+    #[cfg(feature = "krx_paged")]
+    {
+        match sub {
+            proc_exec::PAGED_CALL => {
+                super::super::native_runner::krx_call_paged(a1 as u16, (a1 >> 16) as u16, a2 as u16)
+            }
+            proc_exec::PAGED_RET => super::super::native_runner::krx_return_thunk(),
+            proc_exec::PAGED_FAULT => {
+                super::super::native_runner::krx_page_fault(a1 as u16, a2 as u16)
+            }
+            proc_exec::CALL_VFP => super::super::native_runner::krx_call_vfp(a1 as u32, a2 as u16),
+            _ => 0,
         }
-        post_sys_event(m.target_pid, (m.msg_type & 0xFF) as u8, m.seq);
+    }
+    #[cfg(not(feature = "krx_paged"))]
+    {
+        let _ = (a1, a2);
         0
-    } else {
-        1
     }
 }
 
-#[inline(never)]
-unsafe fn ipc_recv_msg(out_msg: *mut KrxIpcMessage) -> u8 {
-    let receiver_pid = active_caller_pid();
-    u8::from(!ipc_channel_mut().poll_into(receiver_pid, unsafe { &mut *out_msg }))
-}
-
-#[inline(never)]
-unsafe fn ipc_send_raw(pids_type: u32, flags_and_seq: u32, ptr: *const u8, len: u8) -> u8 {
-    let slice = unsafe { slice_or_empty(ptr, (len as usize).min(24)) };
-    let mut msg = KrxIpcMessage::new(
-        pids_type as u8,
-        (pids_type >> 8) as u8,
-        (pids_type >> 16) as u16,
-        slice,
-    );
-    if flags_and_seq != 0 {
-        msg.flags = (flags_and_seq >> 16) as u8;
-        msg.seq = flags_and_seq as u16;
-    }
-    unsafe { ipc_send_msg(&msg) }
-}
-
-#[inline(never)]
-pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::idx as op;
-    match idx {
-        op::IpcSend => unsafe { ipc_send_msg(a0 as *const KrxIpcMessage) as usize },
-        op::IpcRecv => unsafe { ipc_recv_msg(a0 as *mut KrxIpcMessage) as usize },
-        op::IpcReply => {
-            let req_msg = unsafe { &*(a0 as *const KrxIpcMessage) };
-            let pids_type = (req_msg.target_pid as u32)
-                | ((req_msg.sender_pid as u32) << 8)
-                | ((req_msg.msg_type as u32) << 16);
-            let f_seq = (req_msg.seq as u32) | ((kernel::ipc::ipc_flags::REPLY as u32) << 16);
-            unsafe { ipc_send_raw(pids_type, f_seq, a1 as *const u8, a2 as u8) as usize }
-        }
-        op::IpcPoll => {
-            let out_buf = a0 as *mut u8;
-            let max_len = a1 as u8;
-            if max_len == 0 {
-                return 0xFF;
-            }
-            let mut msg = core::mem::MaybeUninit::<KrxIpcMessage>::uninit();
-            if unsafe { ipc_recv_msg(msg.as_mut_ptr()) } == 0 {
-                let msg = unsafe { msg.assume_init_ref() };
-                let copy_len = (msg.payload_len as usize).min(max_len as usize);
-                unsafe {
-                    core::ptr::copy_nonoverlapping(msg.payload.as_ptr(), out_buf, copy_len);
-                }
-                copy_len
+pub unsafe fn op_ipc(a0: usize, a1: usize, _a2: usize) -> usize {
+    use ::abi::sub::ipc;
+    match a0 as u8 {
+        ipc::SEND => {
+            let Some(m) = (unsafe { ptr_ref(a1 as *const KrxIpcMessage) }) else {
+                return 1;
+            };
+            let sender_pid = if m.sender_pid == 0 {
+                active_caller_pid()
             } else {
-                0xFF
+                m.sender_pid
+            };
+            if ipc_channel_mut().send_from(m, sender_pid) {
+                post_sys_event(m.target_pid, (m.msg_type & 0xFF) as u8, m.seq);
+                0
+            } else {
+                1
             }
         }
-        op::IpcSendStr => {
-            let r = unsafe { &*(a0 as *const KrxIpcSendReq) };
-            let target_pid =
-                if let Some(slice) = unsafe { ptr_slice(r.target, r.target_len as usize) } {
-                    if slice == b"*" || slice == b"ALL" {
-                        ipc_target::BROADCAST
-                    } else {
-                        let pid = find_proc_by_ptr(r.target, r.target_len);
-                        if pid == 0 {
-                            return 1;
-                        }
-                        pid
-                    }
-                } else {
-                    ipc_target::FOREGROUND_APP
-                };
-            let pids_type = (active_caller_pid() as u32)
-                | ((target_pid as u32) << 8)
-                | ((ipc_msg_type::APP_DATA_TRANSFER as u32) << 16);
-            unsafe { ipc_send_raw(pids_type, 0, r.msg, r.msg_len) as usize }
+        ipc::RECV => {
+            let Some(out) = (unsafe { ptr_ref_mut(a1 as *mut KrxIpcMessage) }) else {
+                return 1;
+            };
+            usize::from(!ipc_channel_mut().poll_into(active_caller_pid(), out))
         }
         _ => 1,
     }
@@ -768,52 +717,48 @@ pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::abi::{Cap, CapabilitySet, Op, sub};
 
     #[test]
     fn proc_ctl_launch_pkg_bounds_and_prefix() {
-        // Clear any leftover pending path
         let _ = take_pending_launch_path();
-
-        // Grant TaskControl capability to the active native runner slot
         crate::runtime::native_runner::init_native_slot();
         let slot = crate::runtime::native_runner::slot_mut();
         slot.is_loaded = true;
-        slot.caps = ::abi::CapabilitySet::empty().with(::abi::Cap::TaskControl);
+        slot.caps = CapabilitySet::empty().with(Cap::TaskControl);
 
-        // 0-byte path rejected
         let empty = b"";
-        let rc = unsafe {
-            proc_ctl(
-                ::abi::PROC_CTL_LAUNCH_PKG as u16,
-                0,
-                empty.as_ptr() as *mut u8,
-                0,
-            )
-        };
-        assert_eq!(rc, 1);
+        assert_eq!(
+            unsafe {
+                op_proc_ctl(
+                    sub::proc_ctl::LAUNCH_PKG as usize,
+                    empty.as_ptr() as usize,
+                    0,
+                )
+            },
+            1
+        );
         assert!(take_pending_launch_path().is_none());
 
-        // 32-byte path (> 31 max) rejected without panicking
         let too_long = b"/apps/abcdefghijklmnopqrstuvwxyz";
-        assert_eq!(too_long.len(), 32);
-        let op_and_id = (::abi::PROC_CTL_LAUNCH_PKG as u16) | ((too_long.len() as u16) << 8);
-        let rc = unsafe { proc_ctl(op_and_id, 0, too_long.as_ptr() as *mut u8, 32) };
-        assert_eq!(rc, 1);
+        let a0 = (sub::proc_ctl::LAUNCH_PKG as usize) | (too_long.len() << 8);
+        assert_eq!(unsafe { op_proc_ctl(a0, too_long.as_ptr() as usize, 0) }, 1);
         assert!(take_pending_launch_path().is_none());
 
-        // Non-/apps/ prefix rejected
         let bad_prefix = b"/user/settings.krx";
-        let op_and_id = (::abi::PROC_CTL_LAUNCH_PKG as u16) | ((bad_prefix.len() as u16) << 8);
-        let rc = unsafe { proc_ctl(op_and_id, 0, bad_prefix.as_ptr() as *mut u8, 18) };
-        assert_eq!(rc, 1);
+        let a0 = (sub::proc_ctl::LAUNCH_PKG as usize) | (bad_prefix.len() << 8);
+        assert_eq!(
+            unsafe { op_proc_ctl(a0, bad_prefix.as_ptr() as usize, 0) },
+            1
+        );
         assert!(take_pending_launch_path().is_none());
 
-        // 31-byte valid /apps/ path accepted and consumed once
         let max_valid = b"/apps/abcdefghijklmnopqrstu.krx";
-        assert_eq!(max_valid.len(), 31);
-        let op_and_id = (::abi::PROC_CTL_LAUNCH_PKG as u16) | ((max_valid.len() as u16) << 8);
-        let rc = unsafe { proc_ctl(op_and_id, 0, max_valid.as_ptr() as *mut u8, 31) };
-        assert_eq!(rc, 0);
+        let a0 = (sub::proc_ctl::LAUNCH_PKG as usize) | (max_valid.len() << 8);
+        assert_eq!(
+            unsafe { op_proc_ctl(a0, max_valid.as_ptr() as usize, 0) },
+            0
+        );
         assert_eq!(
             take_pending_launch_path(),
             Some("/apps/abcdefghijklmnopqrstu.krx")
@@ -823,31 +768,27 @@ mod tests {
     }
 
     #[test]
-    fn sys_flush_reset_and_sys_sec_enforce_preferences_cap() {
-        use ::abi::{Cap, CapabilitySet, Op, sub};
+    fn sys_query_reset_and_sys_sec_enforce_preferences_cap() {
         crate::runtime::native_runner::init_native_slot();
         let slot = crate::runtime::native_runner::slot_mut();
         slot.is_loaded = true;
         slot.caps = CapabilitySet::empty();
 
-        // Op::SysSec requires Cap::Preferences at dispatch boundary (returns 0 when denied)
         assert_eq!(
             ::abi::missing_caps(Op::SysSec.id(), slot.caps.raw()),
             Some(1u32 << Cap::Preferences.bit())
         );
-        // Op::SysFlush(RESET) requires Cap::Preferences inside dispatcher (returns 1 when denied)
         assert_eq!(
             unsafe {
                 crate::runtime::syscall::kern_call(
-                    Op::SysFlush.u32_id(),
-                    sub::sys_flush::RESET as usize,
+                    Op::SysQuery.u32_id(),
+                    sub::sys_query::RESET as usize,
                     0,
                     0,
                 )
             },
             1
         );
-        // With Cap::Preferences, missing_caps passes for Op::SysSec
         slot.caps = CapabilitySet::empty().with(Cap::Preferences);
         assert_eq!(
             ::abi::missing_caps(Op::SysSec.id(), slot.caps.raw()),

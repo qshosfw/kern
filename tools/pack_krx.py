@@ -11,8 +11,74 @@ import struct
 import sys
 import zlib
 
-KRX_MAGIC = bytes([0xC0, 0xDE, 0x01, 0xFE])
+KRX_IDENT = bytes([0xC0, 0xDE, 0x01, 0xFE])
 FORMAT_VERSION = 0x05  # 2.5.0
+KRX_SEAL_KEY = b"KERN-KRX-SEAL-V2"
+KRX_SEAL_DOMAIN = b"KRX-SEAL-V1"
+PRIVILEGED_CAP_NAMES = ("FACTORY_CALIB", "RAW_PERIPHERAL", "STORAGE_ADMIN")
+
+
+def _ascon_permute(s: list[int], rounds: int) -> None:
+    x0, x1, x2, x3, x4 = s
+    m = 0xFFFFFFFFFFFFFFFF
+    for r in range(12 - rounds, 12):
+        x2 ^= 0xF0 - r * 0x0F
+        x0 ^= x4
+        x4 ^= x3
+        x2 ^= x1
+        t0 = x0 ^ ((~x1 & m) & x2)
+        t1 = x1 ^ ((~x2 & m) & x3)
+        t2 = x2 ^ ((~x3 & m) & x4)
+        t3 = x3 ^ ((~x4 & m) & x0)
+        t4 = x4 ^ ((~x0 & m) & x1)
+        x1 = t1 ^ t0
+        x0 = t0 ^ t4
+        x3 = t3 ^ t2
+        x2 = (~t2) & m
+        x4 = t4
+        x0 ^= ((x0 >> 19) | ((x0 << 45) & m)) ^ ((x0 >> 28) | ((x0 << 36) & m))
+        x1 ^= ((x1 >> 61) | ((x1 << 3) & m)) ^ ((x1 >> 39) | ((x1 << 25) & m))
+        x2 ^= ((x2 >> 1) | ((x2 << 63) & m)) ^ ((x2 >> 6) | ((x2 << 58) & m))
+        x3 ^= ((x3 >> 10) | ((x3 << 54) & m)) ^ ((x3 >> 17) | ((x3 << 47) & m))
+        x4 ^= ((x4 >> 7) | ((x4 << 57) & m)) ^ ((x4 >> 41) | ((x4 << 23) & m))
+    s[0], s[1], s[2], s[3], s[4] = x0, x1, x2, x3, x4
+
+
+def compute_ascon128_mac(key: bytes, nonce: bytes, aad: bytes, msg: bytes) -> bytes:
+    """Bit-exact NIST SP 800-232 Ascon-128 MAC matching `crypto::ascon::Ascon128::compute_mac`."""
+    k0 = int.from_bytes(key[:8], "big")
+    k1 = int.from_bytes(key[8:16], "big")
+    n0 = int.from_bytes(nonce[:8], "big")
+    n1 = int.from_bytes(nonce[8:16], "big")
+    s = [0x80400C0600000000, k0, k1, n0, n1]
+    _ascon_permute(s, 12)
+    s[3] ^= k0
+    s[4] ^= k1
+    if aad:
+        for i in range(0, len(aad) - (len(aad) % 8), 8):
+            s[0] ^= int.from_bytes(aad[i : i + 8], "big")
+            _ascon_permute(s, 6)
+        rem_ad = aad[(len(aad) // 8) * 8 :]
+        pad_ad = bytearray(8)
+        pad_ad[: len(rem_ad)] = rem_ad
+        pad_ad[len(rem_ad)] = 0x80
+        s[0] ^= int.from_bytes(pad_ad, "big")
+        _ascon_permute(s, 6)
+    s[4] ^= 1
+    for i in range(0, len(msg) - (len(msg) % 8), 8):
+        s[0] ^= int.from_bytes(msg[i : i + 8], "big")
+        _ascon_permute(s, 6)
+    rem_m = msg[(len(msg) // 8) * 8 :]
+    pad_m = bytearray(8)
+    pad_m[: len(rem_m)] = rem_m
+    pad_m[len(rem_m)] = 0x80
+    s[0] ^= int.from_bytes(pad_m, "big")
+    s[1] ^= k0
+    s[2] ^= k1
+    _ascon_permute(s, 12)
+    s[3] ^= k0
+    s[4] ^= k1
+    return s[3].to_bytes(8, "big") + s[4].to_bytes(8, "big")
 
 # KRX Classes
 CLASS_NATIVE = 0
@@ -171,6 +237,8 @@ class KrxPackageBuilder:
         self.cfg_bytes = 16
         self.settings = []
         self.assets = bytearray()
+        self.sign = False
+        self.seal_key = KRX_SEAL_KEY
 
     def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0), icon_asset: int = 1):
         self.name = name
@@ -324,8 +392,17 @@ class KrxPackageBuilder:
             sec_sizes.append(4 + len(self.service_exports) * 16)
         if self.actions:
             sec_sizes.append(4 + len(self.actions) * 16)
+        priv_mask = 0
+        cap_tbl = sdk_names("KRX_CAP")
+        for pname in PRIVILEGED_CAP_NAMES:
+            if pname in cap_tbl:
+                priv_mask |= cap_tbl[pname]
+        need_seal = self.sign or ((self.caps & priv_mask) != 0)
+
         if self.settings:
             sec_sizes.append(4 + 16 + len(self.settings) * 16)
+        if need_seal:
+            sec_sizes.append(4 + 32)
         if self.assets:
             sec_sizes.append(4 + len(self.assets))
 
@@ -496,12 +573,31 @@ class KrxPackageBuilder:
             assert len(act_body) % 16 == 0
             sections.append((SEC_ACTIONS, act_body))
 
+        # 9b. Cryptographic Capability & Payload Seal (`SEC_SEAL = 0x0008`, 32 bytes)
+        payload_crc = zlib.crc32(self.payload) & 0xFFFFFFFF
+        if need_seal:
+            seal_prefix = struct.pack(
+                "<BBHIIHBB",
+                1,                  # version
+                1,                  # alg = Ascon-128-MAC
+                0,                  # flags
+                self.caps,
+                payload_crc,
+                self.min_abi,
+                self.exec_type,
+                self.profile,
+            )
+            assert len(seal_prefix) == 16
+            nonce = self.name.encode("utf-8")[:16].ljust(16, b"\x00")
+            seal_tag = compute_ascon128_mac(self.seal_key, nonce, KRX_SEAL_DOMAIN, seal_prefix)
+            sections.append((SEC_SEAL, seal_prefix + seal_tag))
+
         # 10. Assets Section (if present, self-contained package icons & bitmaps)
         if self.assets:
             sections.append((SEC_ASSETS, bytes(self.assets)))
 
         # Calculate section headers offset
-        # Preamble is 24 bytes (KRX_MAGIC..link_base)
+        # Preamble is 24 bytes (KRX_IDENT..link_base)
         preamble_len = 24
         sec_header_len = 0
         for sec_id, sec_body in sections:
@@ -534,11 +630,10 @@ class KrxPackageBuilder:
 
         header_content = encoded_sections + string_pool + (b"\x00" * hdr_pad)
         header_crc = zlib.crc32(header_content) & 0xFFFFFFFF
-        payload_crc = zlib.crc32(self.payload) & 0xFFFFFFFF
 
         # Build 24-byte Preamble
         preamble = bytearray()
-        preamble.extend(KRX_MAGIC)
+        preamble.extend(KRX_IDENT)
         preamble.append(self.app_class)
         preamble.append(FORMAT_VERSION)
         preamble.extend(struct.pack("<H", len(sections)))
@@ -557,8 +652,8 @@ def verify_package(package_bytes: bytes) -> dict:
     """Rigorous pre-flight verification of a packed KRX binary."""
     if len(package_bytes) < 24:
         raise ValueError("Package is shorter than normative preamble size (24 B)")
-    if package_bytes[:4] != KRX_MAGIC:
-        raise ValueError(f"Invalid KRX magic: {package_bytes[:4].hex()}")
+    if package_bytes[:4] != KRX_IDENT:
+        raise ValueError(f"Invalid KRX format identifier: {package_bytes[:4].hex()}")
 
     app_class = package_bytes[4]
     version = package_bytes[5]
@@ -667,6 +762,7 @@ def main():
         default=[],
         help="Declare app setting: <offset>:<toggle|choice|range>:<def>:<min>:<max>:<step>:<label>[:aux]",
     )
+    parser.add_argument("--sign", action="store_true", help="Emit Ascon-128 SEC_SEAL section")
     parser.add_argument("--verify", action="store_true", help="Print detailed verification report")
 
     args = parser.parse_args()
@@ -690,6 +786,7 @@ def main():
     app_class, profile_code = profile_map[args.profile]
     builder = KrxPackageBuilder(args.name, app_class, profile_code)
     builder.auto_page = args.auto_page
+    builder.sign = args.sign
 
     ver_parts = [int(p) for p in args.version.split(".")[:3]]
     while len(ver_parts) < 3:

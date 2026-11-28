@@ -53,3 +53,20 @@ def set_pill(pill: Any, text: str, kind: str | None) -> None:
             pill.remove_css_class(c)
     if kind:
         pill.add_css_class(kind)
+
+
+def wrap_actions(*buttons: Any, align: float = 1.0) -> Any:
+    """
+    Row suffix / button cluster that flows onto extra lines in narrow (phone) windows instead of
+    forcing the whole page wider: minimum width is the widest button, natural width is one line.
+    """
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Adw", "1")
+    from gi.repository import Adw, Gtk
+
+    box = Adw.WrapBox(child_spacing=6, line_spacing=6, align=align, valign=Gtk.Align.CENTER)
+    for b in buttons:
+        box.append(b)
+    return box

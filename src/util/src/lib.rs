@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod bytes;
+pub mod codec;
 pub mod dsp;
 pub mod format;
 pub mod gsm7;

@@ -5,10 +5,7 @@
 //! shared transient SRAM execution arena (`NATIVE_SLOT`), linked against the
 //! modular capability VTables (`syscall`) and delta relocation engine (`apply_relocs`).
 
-#[cfg(test)]
-use super::syscall::ACTIVE_CTX;
 use super::syscall::NATIVE_API_TABLE;
-use crate::services::SysContext;
 use ::abi::CapabilitySet;
 use gfx::Canvas;
 use kernel::app::{EventResult, ModalResult, StatusBarConfig};
@@ -17,7 +14,10 @@ use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
 use kernel::runtime::paged::StreamingLeafState;
 #[cfg(feature = "krx_paged")]
-use kernel::runtime::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
+use kernel::runtime::paged::{
+    BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_LZSS, PageReturnFrame, ShadowReturnStack, StreamedPageDesc,
+    StreamedWindowCache,
+};
 use kernel::runtime::reloc::apply_relocs;
 use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
@@ -40,11 +40,11 @@ pub(crate) fn p0_overlay_size(exec: &SectionExecution) -> usize {
 #[cfg(feature = "krx_paged")]
 #[repr(C)]
 pub(crate) struct PagedWindowState {
-    pub(crate) cache: FixedWindowCache<10, 4>,
-    pub(crate) shadow_stack: ShadowReturnStack<8>,
+    pub(crate) cache: StreamedWindowCache<8>,
+    pub(crate) shadow_stack: ShadowReturnStack<16, PageReturnFrame>,
 }
 
-/// Mutually exclusive overlay state: P1 uses `window` (fixed-window cache + shadow return stack),
+/// Mutually exclusive overlay state: P1 v2 uses `window` (unlimited-size streamed cache + 16-deep shadow stack),
 /// P0 uses `leaf` (24 B streaming flash-backed leaf state, supporting up to 255 leaves).
 #[repr(C)]
 pub(crate) union PagedOverlay {
@@ -59,10 +59,11 @@ pub(crate) struct NativeExecSlot {
     pub(crate) is_loaded: bool,
     pub(crate) is_paged: bool,
     pub(crate) profile: KrxProfile,
-    pub(crate) current_block: u8,
+    pub(crate) current_page: u16,
     pub(crate) current_slot: u8,
-    pub(crate) code_size: u16,
     pub(crate) status_bar_has_custom: bool,
+    pub(crate) code_size: u16,
+    pub(crate) pkg_ino: u16,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) pending_start_arg: u32,
@@ -73,13 +74,14 @@ pub(crate) struct NativeExecSlot {
 }
 
 impl NativeExecSlot {
-    #[inline(always)]
+    #[inline]
     pub(crate) fn pkg_path_str(&self) -> &str {
         let len = self.pkg_path.len as usize;
         if len > self.pkg_path.buf.len() {
             return "";
         }
-        utils::format::ascii_str(&self.pkg_path.buf[..len]).unwrap_or("")
+        let bytes = unsafe { core::slice::from_raw_parts(self.pkg_path.buf.as_ptr(), len) };
+        utils::format::ascii_str(bytes).unwrap_or("")
     }
 
     #[inline(always)]
@@ -87,7 +89,6 @@ impl NativeExecSlot {
         self.pkg_path.set(path);
     }
 
-    #[inline(never)]
     pub(crate) fn query_region(&self, rk: RegionKind) -> Option<MemoryRegionDescriptor> {
         let zone_a_off = crate::data::arena::zone_a_used_bytes();
         let load_base = crate::data::arena::zone_b_base_ptr() as u32;
@@ -137,8 +138,7 @@ impl NativeExecSlot {
     }
 
     #[cfg(feature = "krx_paged")]
-    #[inline(never)]
-    fn window_mut(&mut self) -> Option<&mut PagedWindowState> {
+    pub(crate) fn window_mut(&mut self) -> Option<&mut PagedWindowState> {
         if self.is_loaded && self.is_paged && !self.profile.is_structured_paged() {
             Some(unsafe { &mut *self.overlay.window })
         } else {
@@ -174,7 +174,6 @@ pub fn is_leaf_dispatching() -> bool {
         && unsafe { (*slot.overlay.leaf).is_dispatching }
 }
 
-#[inline(never)]
 pub fn invalidate_leaf_cache() {
     if let Some(leaf) = slot_mut().leaf_mut() {
         if !leaf.is_dispatching {
@@ -201,12 +200,10 @@ pub(crate) fn slot_ref() -> &'static NativeExecSlot {
     slot_mut()
 }
 
-#[inline(never)]
 pub(crate) fn slot_mut() -> &'static mut NativeExecSlot {
     unsafe { (*core::ptr::addr_of_mut!(NATIVE_SLOT)).assume_init_mut() }
 }
 
-#[inline(never)]
 pub fn active_native_app_name() -> &'static str {
     if slot_ref().is_loaded {
         super::loader::dynamic_app_name()
@@ -215,7 +212,6 @@ pub fn active_native_app_name() -> &'static str {
     }
 }
 
-#[inline(never)]
 pub fn active_native_caps() -> CapabilitySet {
     if let Some(bg) = super::background::BgManager::active_bg_slot() {
         return bg.caps;
@@ -238,23 +234,24 @@ pub(crate) fn flush_instruction_pipeline() {
     }
 }
 
-#[inline(never)]
+fn read_slot_pkg_bytes(
+    storage: &mut crate::services::SystemStorage,
+    offset: usize,
+    dst: &mut [u8],
+) -> bool {
+    let slot = slot_ref();
+    if slot.pkg_ino >= 2 {
+        storage.read_ino_at(slot.pkg_ino, offset, dst) == Ok(dst.len())
+    } else {
+        let path_copy = slot.pkg_path;
+        storage.read_file_at(path_copy.as_str(), offset, dst) == Ok(dst.len())
+    }
+}
+
 fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bool {
     let ok = unsafe {
-        let path = slot_ref().pkg_path_str();
         let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
-        #[cfg(not(test))]
-        {
-            read_file_region(crate::kern_fs(), path, flash_offset, dst)
-        }
-        #[cfg(test)]
-        {
-            if !ACTIVE_CTX.is_null() {
-                read_file_region((*ACTIVE_CTX).storage, path, flash_offset, dst)
-            } else {
-                false
-            }
-        }
+        read_slot_pkg_bytes(crate::kern_fs(), flash_offset, dst)
     };
     if ok {
         flush_instruction_pipeline();
@@ -263,100 +260,145 @@ fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bo
 }
 
 #[cfg(feature = "krx_paged")]
-#[inline(never)]
-fn stream_paged_slot(
-    slot_off: usize,
-    page_size: usize,
-    entry: &kernel::runtime::BlockEntry,
-) -> bool {
-    let read_len = (entry.size as usize).min(page_size);
-    if slot_off + read_len > crate::data::arena::zone_b_cache_bytes() {
-        return false;
+fn read_block_entry_from_pkg(entry_off: u32) -> Option<kernel::runtime::BlockEntry> {
+    let mut raw = [0u8; kernel::runtime::BlockEntry::SIZE];
+    if read_active_pkg_region(entry_off as usize, raw.as_mut_ptr() as usize, raw.len()) {
+        kernel::runtime::BlockEntry::parse(&raw)
+    } else {
+        None
     }
-    let vma = crate::data::arena::zone_b_base_ptr() as usize + slot_off;
-    read_active_pkg_region(entry.flash_offset as usize, vma, read_len)
 }
 
-/// Normative Demand-Paged Block Fault Handler (`krx_page_fault`, KRX-ABI 2.5.0 Section 7.2).
-///
-/// Resolves `block_id` in the fixed-window cache (`slot.cache`). On a cache miss,
-/// streams the block from `slot.pkg_path` in KernFS into the selected cache slot,
-/// executes `DSB; ISB`, tallies the page fault in the process ledger, and returns
-/// the executable Thumb-1 target address (`(slot_vma + func_offset) | 1`).
 #[cfg(feature = "krx_paged")]
-#[inline(never)]
-pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
+fn stream_paged_way(slot_byte_off: usize, page_size: usize, desc: &StreamedPageDesc) -> bool {
+    let raw_len = (desc.raw_size as usize).min(page_size);
+    if raw_len == 0 || slot_byte_off + page_size > crate::data::arena::TRANSIENT_ARENA_BYTES {
+        return false;
+    }
+    let slot_vma = crate::data::arena::zone_b_base_ptr() as usize + slot_byte_off;
+    if (desc.flags & BLOCK_FLAG_LZSS) != 0 {
+        let comp_off = page_size - raw_len;
+        if !read_active_pkg_region(desc.flash_offset as usize, slot_vma + comp_off, raw_len) {
+            return false;
+        }
+        let slot_slice = unsafe { core::slice::from_raw_parts_mut(slot_vma as *mut u8, page_size) };
+        let ok = utils::codec::lzss_decompress_inplace(slot_slice, comp_off, page_size).is_ok();
+        if ok {
+            flush_instruction_pipeline();
+        }
+        ok
+    } else {
+        read_active_pkg_region(desc.flash_offset as usize, slot_vma, raw_len)
+    }
+}
+
+#[cfg(feature = "krx_paged")]
+fn fault_in_way(page_id: u16, is_demand: bool) -> Option<(usize, StreamedPageDesc)> {
     let slot = slot_mut();
     let slot_pid = slot.pid;
+    let win = slot.window_mut()?;
+    let page_size = win.cache.page_size() as usize;
+    let (s, desc) = win
+        .cache
+        .alloc_way_for_miss(page_id, is_demand, read_block_entry_from_pkg)
+        .ok()?;
+    let slot_byte_off = win.cache.slot_byte_offset(s);
+    if !stream_paged_way(slot_byte_off, page_size, &desc) {
+        if let Some(w) = slot_mut().window_mut() {
+            w.cache.invalidate_way(s);
+        }
+        return None;
+    }
+    if is_demand && let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot_pid) {
+        pcb.health.record_page_fault();
+    }
+    Some((s, desc))
+}
+
+/// Unlimited-Size `P1 v2` Demand-Paged Fault & Cache Hit Handler (supports up to `768` pages = `384 KiB`).
+///
+/// Cache hits (`>97%` of cross-page calls) resolve in zero Flash reads via `probe_hit`.
+/// Cache misses stream directly from `PY25Q16` via `ExtentStreamer` + `DMA1_Ch3` (`SPI2` @ 24 MHz),
+/// optionally expanding `BLOCK_FLAG_LZSS` pages in-place in zero extra RAM.
+#[cfg(feature = "krx_paged")]
+#[inline(never)]
+pub fn krx_page_fault(page_id: u16, func_offset: u16) -> usize {
+    let slot = slot_mut();
     let entry_fallback = slot.entry_point;
     let Some(win) = slot.window_mut() else {
         return entry_fallback;
     };
 
-    let Ok((slot_idx, is_hit, block_entry)) = win.cache.resolve_or_select_slot(block_id) else {
-        return 0;
+    let (slot_idx, loaded_size) = if let Some((s, sz, _)) = win.cache.probe_hit(page_id) {
+        (s, sz)
+    } else {
+        let Some((s, desc)) = fault_in_way(page_id, true) else {
+            return 0;
+        };
+        if (desc.flags & BLOCK_FLAG_HINT_NEXT) != 0
+            && let Some(next_id) = page_id.checked_add(1)
+        {
+            let _ = fault_in_way(next_id, false);
+        }
+        (s, desc.exec_size)
     };
 
-    // Bounds check func_offset against declared block size
-    if func_offset >= block_entry.size {
+    if func_offset >= loaded_size {
         return 0;
     }
 
-    let slot_byte_off = win.cache.slot_byte_offset(slot_idx);
-    let page_size = win.cache.page_size as usize;
-
-    if !is_hit {
-        if !stream_paged_slot(slot_byte_off, page_size, &block_entry) {
-            return 0;
-        }
-        if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot_pid) {
-            pcb.ledger.record_page_fault();
-        }
-        if (block_entry.flags & kernel::runtime::paged::BLOCK_FLAG_HINT_NEXT) != 0
-            && let Some((pf_slot, pf_entry)) = win.cache.prepare_prefetch_next(block_id)
-        {
-            let _ = stream_paged_slot(win.cache.slot_byte_offset(pf_slot), page_size, &pf_entry);
-        }
-    }
-
-    slot.current_block = block_id;
+    let slot = slot_mut();
+    let slot_byte_off = unsafe { (*slot.overlay.window).cache.slot_byte_offset(slot_idx) };
+    slot.current_page = page_id;
     slot.current_slot = slot_idx as u8;
     let slot_vma = crate::data::arena::zone_b_base_ptr() as usize + slot_byte_off;
     (slot_vma + (func_offset as usize)) | 1
 }
 
-/// Cross-block PLT call helper with LR-thunking shadow stack push (KRX-ABI 2.5.0 Section 7.2).
+/// Cross-page `P1 v2` call helper with 16-deep LR-thunking shadow stack push (`u16` `target_page_id`).
 #[cfg(feature = "krx_paged")]
 #[inline(never)]
-pub fn krx_call_paged(target_block_id: u8, target_offset: u16, return_offset: u16) -> usize {
+pub fn krx_call_paged(target_page_id: u16, target_offset: u16, return_offset: u16) -> usize {
     let slot = slot_mut();
-    let caller_block_id = slot.current_block;
-    let caller_slot = slot.current_slot;
+    let caller_page_id = slot.current_page;
     let Some(win) = slot.window_mut() else {
         return 0;
     };
     if win
         .shadow_stack
-        .push(ReturnFrame {
-            caller_block_id,
-            caller_slot,
+        .push(PageReturnFrame {
+            caller_page_id,
             return_offset,
         })
         .is_err()
     {
         return 0;
     }
-    let target_addr = krx_page_fault(target_block_id, target_offset);
-    if target_addr == 0 {
-        if let Some(w) = slot_mut().window_mut() {
-            let _ = w.shadow_stack.pop();
-        }
+    let target_addr = krx_page_fault(target_page_id, target_offset);
+    if target_addr == 0
+        && let Some(w) = slot_mut().window_mut()
+    {
+        let _ = w.shadow_stack.pop();
     }
     target_addr
 }
 
-/// Normative OS Return-Thunk (`krx_return_thunk`, KRX-ABI 2.5.0 Section 7.2).
-/// Restores caller's block into the fixed-window cache if it was evicted while the callee ran.
+/// Resolve or invoke a `Vfp32` Virtual Function Pointer across resident or evicted pages (`P1 v2`).
+#[cfg(feature = "krx_paged")]
+pub fn krx_call_vfp(raw_vfp: u32, return_offset: u16) -> usize {
+    let vfp = ::abi::Vfp32(raw_vfp);
+    if !vfp.is_virtual() {
+        return (raw_vfp as usize) | 1;
+    }
+    if return_offset == 0xFFFF {
+        krx_page_fault(vfp.page_id(), vfp.offset())
+    } else {
+        krx_call_paged(vfp.page_id(), vfp.offset(), return_offset)
+    }
+}
+
+/// Normative OS Return-Thunk (`krx_return_thunk`, `P1 v2`).
+/// Restores caller's page into the streamed virtual code cache if evicted while the callee ran.
 #[cfg(feature = "krx_paged")]
 pub fn krx_return_thunk() -> usize {
     let Some(win) = slot_mut().window_mut() else {
@@ -365,7 +407,7 @@ pub fn krx_return_thunk() -> usize {
     let Ok(frame) = win.shadow_stack.pop() else {
         return 0;
     };
-    krx_page_fault(frame.caller_block_id, frame.return_offset)
+    krx_page_fault(frame.caller_page_id, frame.return_offset)
 }
 
 /// Loads and validates a P0 leaf into `overlay_vma` in its own stack frame so `LeafEntry`,
@@ -447,7 +489,7 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     0xFFFF_FFFF
 }
 
-/// Read an asset slice from the currently loaded KRX package on KernFS.
+/// Read an asset slice from the currently loaded KRX package on KernFS via `ExtentStreamer`.
 pub fn read_active_pkg_asset(
     storage: &mut crate::services::SystemStorage,
     offset: u32,
@@ -457,20 +499,11 @@ pub fn read_active_pkg_asset(
     if !slot.is_loaded || slot.pkg_path.is_empty() || dst.is_empty() {
         return Err(());
     }
-    if read_file_region(storage, slot.pkg_path_str(), offset as usize, dst) {
+    if read_slot_pkg_bytes(storage, offset as usize, dst) {
         Ok(dst.len())
     } else {
         Err(())
     }
-}
-
-fn read_file_region(
-    storage: &mut crate::services::SystemStorage,
-    path: &str,
-    offset: usize,
-    dst: &mut [u8],
-) -> bool {
-    storage.read_file_at(path, offset, dst).is_ok()
 }
 
 pub(crate) fn apply_package_relocs_at(
@@ -557,120 +590,15 @@ pub(crate) fn bind_krx_payload_at(
     Ok((entry_thumb, got_base))
 }
 
-/// Loads a pre-validated Native (`KrxClass::Native`) or Paged (`KrxClass::Paged`) binary from flash
-/// into Zone B of the execution arena, applies delta relocations, and binds `CapImports` into the GOT.
-#[inline(never)]
-pub fn load_native_from_storage(
-    path: &str,
-    payload_len: usize,
-    hdr_base_ptr: *const u8,
-    summary: &KrxSummary<'_>,
-    pid: kernel::proc::Pid,
-) -> Result<(), KrxLaunchError> {
-    #[cfg(feature = "krx_paged")]
-    let preamble = &summary.preamble;
-    let exec = summary.exec().ok_or(KrxLaunchError::MissingExecution)?;
-    let aux = &summary.aux;
-    let caps = summary.caps;
-
-    let zone_a_off = crate::data::arena::zone_a_used_bytes();
-    let max_arena_bytes = crate::data::arena::TRANSIENT_ARENA_BYTES.saturating_sub(zone_a_off);
-    let load_base = (unsafe { arena_base_ptr().add(zone_a_off) }) as u32;
-    let profile = summary.profile(exec);
-    let is_paged = matches!(
-        profile,
-        KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
-    );
-
-    init_native_slot();
-    let (entry_thumb, got_base) = bind_krx_payload_at(
-        zone_a_off,
-        max_arena_bytes,
-        payload_len,
-        summary,
-        exec,
-        pid,
-        is_paged,
-    )?;
-
-    let slot = slot_mut();
-    slot.pid = pid;
-    slot.is_paged = is_paged;
-    slot.set_pkg_path(path);
-    let is_p0 = profile.is_structured_paged();
-    let overlay_size = p0_overlay_size(exec) as u32;
-    let overlay_vma = load_base + (max_arena_bytes as u32 - overlay_size);
-
-    if is_p0 {
-        let leaf_mgr = unsafe { &mut *slot.overlay.leaf };
-        let (tbl_off, cnt) = match aux.leaf_map {
-            Some(map) => (
-                (map.as_ptr() as usize).saturating_sub(hdr_base_ptr as usize) as u32,
-                (map.len() / kernel::runtime::LeafEntry::SIZE).min(255) as u8,
-            ),
-            None => (0, 0),
-        };
-        leaf_mgr.configure(overlay_vma, overlay_size as u16, tbl_off, cnt);
-    } else if is_paged {
-        #[cfg(feature = "krx_paged")]
-        {
-            let win = unsafe { &mut *slot.overlay.window };
-            win.shadow_stack.clear();
-            let pay_size = if exec.payload_size > 0 {
-                exec.payload_size
-            } else {
-                payload_len as u32
-            };
-            win.cache.configure(
-                exec.page_size,
-                exec.cache_blocks,
-                preamble.header_len as u32,
-                pay_size,
-                aux.block_map,
-            );
-            if win.cache.block_count > 0 {
-                win.cache.access_clock = 1;
-                win.cache.slots[0] = kernel::runtime::paged::CacheSlotMeta {
-                    resident_block: Some(0),
-                    pinned: win.cache.blocks[0].is_pinned(),
-                    last_access_tick: 1,
-                };
-            }
-        }
-    }
-
-    slot.got_base = got_base;
-    slot.profile = profile;
-    let code_limit = max_arena_bytes as u32 - if is_p0 { overlay_size } else { 0 };
-    #[cfg(feature = "krx_paged")]
-    let code_size = if is_paged && !is_p0 {
-        let win = unsafe { &*slot.overlay.window };
-        (win.cache.active_slots as u32 * win.cache.page_size as u32)
-            .min(crate::data::arena::zone_b_cache_bytes() as u32)
-    } else if exec.got_offset > 0 {
-        (exec.got_offset as u32).min(code_limit)
-    } else {
-        (payload_len as u32).min(code_limit)
-    };
-    #[cfg(not(feature = "krx_paged"))]
-    let code_size = if exec.got_offset > 0 {
-        (exec.got_offset as u32).min(code_limit)
-    } else {
-        (payload_len as u32).min(code_limit)
-    };
-    slot.code_size = code_size as u16;
-    slot.entry_point = entry_thumb;
-    slot.caps = caps;
-    unsafe {
-        LIVE_API_TABLE = KrxApiTable::with_call(caps.raw(), super::syscall::kern_call);
-    }
-    slot.is_loaded = true;
-    super::fault::note_loaded_pkg(pid, path);
-    Ok(())
-}
-
 /// Active guest API table populated once at package load (avoids per-call stack temporaries).
 static mut LIVE_API_TABLE: KrxApiTable = KrxApiTable::with_call(0, super::syscall::kern_call);
+
+#[inline(always)]
+pub(crate) fn set_live_api_caps(caps_raw: u32) {
+    unsafe {
+        LIVE_API_TABLE = KrxApiTable::with_call(caps_raw, super::syscall::kern_call);
+    }
+}
 
 /// Invokes a Native or Paged Thumb-1 entry point with the guest GOT base register (r9) bound.
 /// Validates Thumb alignment, arena memory bounds, and stack margin before branching.
@@ -728,7 +656,7 @@ pub unsafe fn invoke_krx_native(
 }
 
 #[inline(never)]
-unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'_, '_>, param: *const ()) -> u32 {
+unsafe fn invoke_guest(op: u32, param: *const ()) -> u32 {
     let slot = slot_ref();
     if !slot.is_loaded || slot.entry_point == 0 {
         return 0xFFFF_FFFF;
@@ -739,10 +667,6 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'_, '_>, param: *const ()) 
         if !kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
             kernel::sys::SystemDiagnostics::paint_stack();
         }
-        #[cfg(test)]
-        {
-            ACTIVE_CTX = ctx as *mut SysContext<'static, 'static>;
-        }
         let res = invoke_krx_native(
             slot.entry_point,
             slot.got_base,
@@ -750,10 +674,6 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'_, '_>, param: *const ()) 
             &raw const NATIVE_API_TABLE,
             param,
         );
-        #[cfg(test)]
-        {
-            ACTIVE_CTX = core::ptr::null_mut();
-        }
         if !kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
             kernel::sys::SystemDiagnostics::paint_stack();
             super::fault::raise_contract_fault(
@@ -763,9 +683,7 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'_, '_>, param: *const ()) 
             );
         }
         if res == kernel::runtime::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
-            if !ctx.is_null() {
-                super::fault::finish_fault_cleanup(&mut *ctx);
-            }
+            super::fault::finish_fault_cleanup();
             return 0xFFFF_FFFF;
         }
         res
@@ -804,12 +722,11 @@ fn take_pending_start_arg() -> u32 {
 #[inline(always)]
 pub fn active_pkg_matches(path: &str) -> bool {
     let slot = slot_ref();
-    slot.is_loaded && slot.pkg_path_str() == path
+    slot.is_loaded && slot.pkg_path.as_bytes() == path.as_bytes()
 }
 
-pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventResult {
+pub fn dispatch_action(action_id: u16) -> EventResult {
     dispatch_krx_event(
-        ctx as *mut _,
         kernel::proc::abi::KRX_EV_IPC,
         0,
         kernel::proc::abi::KRX_IPC_ACTION_FLAG,
@@ -817,15 +734,15 @@ pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventRes
     )
 }
 
-pub unsafe fn native_on_start(ctx: &mut SysContext<'_, '_>) {
+pub unsafe fn native_on_start() {
     let arg = take_pending_start_arg();
-    let res = unsafe { invoke_guest(KRX_OP_START, ctx as *mut _, arg as usize as *const ()) };
+    let res = unsafe { invoke_guest(KRX_OP_START, arg as usize as *const ()) };
     if res == 0xFFFF_FFFF {
         slot_mut().is_loaded = false;
     }
 }
 
-pub unsafe fn native_on_event(ctx: &mut SysContext<'_, '_>, ev: &Event) -> EventResult {
+pub unsafe fn native_on_event(ev: &Event) -> EventResult {
     let (kind, key, flags, payload) = match ev {
         Event::Key { code, state } => {
             let s_val = match state {
@@ -836,7 +753,7 @@ pub unsafe fn native_on_event(ctx: &mut SysContext<'_, '_>, ev: &Event) -> Event
             (KRX_EV_KEY, *code as u8, 0, s_val)
         }
         Event::Encoder(dir) => (KRX_EV_ENCODER, 0, 0, *dir as u32),
-        Event::Tick => (KRX_EV_TICK, 0, 0, gfx::gui::repeater::tick_dt_ms() as u32),
+        Event::Tick => (KRX_EV_TICK, 0, 0, gfx::views::repeater::tick_dt_ms() as u32),
         Event::Bus(bus_ev) => (
             KRX_EV_BUS,
             bus_ev.event_id,
@@ -853,17 +770,10 @@ pub unsafe fn native_on_event(ctx: &mut SysContext<'_, '_>, ev: &Event) -> Event
         ),
         _ => return EventResult::Ignored,
     };
-    dispatch_krx_event(ctx as *mut _, kind, key, flags, payload)
+    dispatch_krx_event(kind, key, flags, payload)
 }
 
-#[inline(never)]
-fn dispatch_krx_event(
-    ctx: *mut SysContext<'_, '_>,
-    kind: u8,
-    key: u8,
-    flags: u8,
-    payload: u32,
-) -> EventResult {
+fn dispatch_krx_event(kind: u8, key: u8, flags: u8, payload: u32) -> EventResult {
     let krx_ev = KrxEvent {
         kind,
         key,
@@ -871,7 +781,7 @@ fn dispatch_krx_event(
         reserved: 0,
         payload,
     };
-    let res = unsafe { invoke_guest(KRX_OP_EVENT, ctx, &krx_ev as *const _ as *const ()) };
+    let res = unsafe { invoke_guest(KRX_OP_EVENT, &krx_ev as *const _ as *const ()) };
     if res != 0 && res != 0xFFFF_FFFF {
         EventResult::Consumed
     } else {
@@ -879,10 +789,7 @@ fn dispatch_krx_event(
     }
 }
 
-pub unsafe fn native_on_modal_result(
-    ctx: &mut SysContext<'_, '_>,
-    r: &ModalResult<'_>,
-) -> EventResult {
+pub unsafe fn native_on_modal_result(r: &ModalResult<'_>) -> EventResult {
     let (tag, flags, payload) = match r {
         ModalResult::Dismissed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_DISMISSED, 0),
         ModalResult::Confirmed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CONFIRMED, 0),
@@ -906,16 +813,9 @@ pub unsafe fn native_on_modal_result(
         ),
         ModalResult::Canceled(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CANCELED, 0),
     };
-    dispatch_krx_event(
-        ctx as *mut _,
-        kernel::proc::abi::KRX_EV_MODAL,
-        tag,
-        flags,
-        payload,
-    )
+    dispatch_krx_event(kernel::proc::abi::KRX_EV_MODAL, tag, flags, payload)
 }
 
-#[inline(never)]
 fn c_str_to_str(buf: &[u8]) -> Option<&str> {
     let mut len = 0;
     while len < buf.len() && buf[len] != 0 {
@@ -987,7 +887,6 @@ pub(crate) fn decode_status_glyph(
     }
 }
 
-#[inline(never)]
 fn decode_icon_list(
     sb: &kernel::proc::abi::KrxStatusBar,
     icons: &[u8],
@@ -1005,7 +904,6 @@ fn decode_icon_list(
     n as u8
 }
 
-#[inline(never)]
 pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     let slot = slot_mut();
     if sb.is_null() {
@@ -1026,7 +924,6 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     }
 }
 
-#[inline(never)]
 pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
     if !out_sb.is_null() {
         let slot = slot_ref();
@@ -1045,55 +942,54 @@ pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
     }
 }
 
-pub unsafe fn native_on_render(
-    _canvas: &mut Canvas,
-    ctx: &SysContext<'_, '_>,
-    status_bar: &mut StatusBarConfig<'_>,
-) {
-    unsafe {
-        invoke_guest(KRX_OP_RENDER, ctx as *const _ as *mut _, core::ptr::null());
-    }
+pub unsafe fn native_on_render(_canvas: &mut Canvas, status_bar: &mut StatusBarConfig<'_>) {
+    unsafe { invoke_guest(KRX_OP_RENDER, core::ptr::null()) };
     apply_slot_status_bar(slot_ref(), status_bar);
 }
 
-pub(crate) fn teardown_slot_and_hw(
-    ctx: &mut SysContext<'_, '_>,
-    pid: kernel::proc::Pid,
-    persist_tray: bool,
-) {
+pub(crate) fn teardown_slot_and_hw(pid: kernel::proc::Pid, persist_tray: bool) {
     let slot = slot_mut();
     crate::audio_capture_mut().stop_capture();
-    ctx.config.release_controls();
+    let cfg = crate::master_config();
+    cfg.release_controls();
     if pid.0 != 0 {
         super::syscall::ipc_channel_mut().purge_pid(pid.0);
+        super::syscall::service_registry_mut().unbind_provider(pid);
         if !persist_tray {
             crate::orchestrator::status_tray_mut().clear_icon(pid);
         }
-        let client_id = kernel::service::radio::ClientId::for_krx_pid(pid.0);
-        ctx.state.coord.release_client_lock(ctx.radio, client_id);
+        #[cfg(not(test))]
+        {
+            let client_id = kernel::service::radio::ClientId::for_krx_pid(pid.0);
+            crate::radio_state()
+                .coord
+                .release_client_lock(&mut crate::kern_hw().radio, client_id);
+        }
     }
-    if ctx.state.coord.is_transmitting {
-        ctx.state.coord.request_ptt_stop(ctx.radio);
+    #[cfg(not(test))]
+    if crate::radio_state().coord.is_transmitting {
+        crate::radio_state()
+            .coord
+            .request_ptt_stop(&mut crate::kern_hw().radio);
     }
     slot.is_loaded = false;
     slot.entry_point = 0;
     slot.status_bar_has_custom = false;
     slot.pkg_path.clear();
+    #[cfg(feature = "filesystem")]
+    crate::services::lang::unbind_app();
     super::fault::clear_loaded_pkg();
 }
 
-pub unsafe fn native_on_exit(ctx: &mut SysContext<'_, '_>) {
+pub unsafe fn native_on_exit() {
     let slot = slot_mut();
     let pid = slot.pid;
     if slot.is_loaded && slot.entry_point != 0 {
-        unsafe {
-            invoke_guest(KRX_OP_EXIT, ctx as *mut _, core::ptr::null());
-        }
-        super::syscall::service_registry_mut().unbind_provider(pid);
+        unsafe { invoke_guest(KRX_OP_EXIT, core::ptr::null()) };
     }
     let persist_tray = slot.status_bar_has_custom
         && (slot.status_bar.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0;
-    teardown_slot_and_hw(ctx, pid, persist_tray);
+    teardown_slot_and_hw(pid, persist_tray);
 }
 
 #[cfg(test)]
@@ -1103,11 +999,7 @@ mod tests {
 
     #[test]
     fn query_region_matches_memory_map_layout_for_native_and_p0() {
-        super::super::background::BgManager::reset();
-        let load_base = arena_base_ptr() as u32;
-        let max_arena = (NATIVE_EXEC_BUFFER_WORDS * 4) as u32;
         let overlay_size = 1024u32;
-        let overlay_vma = load_base + max_arena - overlay_size;
 
         for (profile, is_paged, code_size, got_off) in [
             (KrxProfile::N1NativePic, false, 1200u16, 1200u32),
@@ -1115,6 +1007,12 @@ mod tests {
             (KrxProfile::P0StructuredPaged, true, 2048u16, 2048u32),
             (KrxProfile::P1TransparentPaged, true, 4096u16, 0u32),
         ] {
+            super::super::background::BgManager::reset();
+            let load_base = crate::data::arena::zone_b_base_ptr() as u32;
+            let max_arena = crate::data::arena::TRANSIENT_ARENA_BYTES
+                .saturating_sub(crate::data::arena::zone_a_used_bytes())
+                as u32;
+            let overlay_vma = load_base + max_arena - overlay_size;
             init_native_slot();
             let slot = slot_mut();
             slot.profile = profile;

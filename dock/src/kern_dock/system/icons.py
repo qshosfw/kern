@@ -1,4 +1,4 @@
-"""Bespoke GTK4 radio icons and dynamic state-tinted ARGB32 tray pixmaps."""
+"""Bespoke GTK4 radio icons and monochrome symbolic ARGB32 tray pixmaps."""
 
 from __future__ import annotations
 
@@ -49,73 +49,50 @@ def make_radio_image(size: int = 16, *, color: bool = False) -> Any:
         return img
 
 
-_STATE_BADGE_RGB: dict[str, tuple[float, float, float] | None] = {
-    "offline": None,
-    "online": (0.20, 0.86, 0.48),
-    "headless": (0.22, 0.74, 0.97),
+# Tray status emblems: only states the user must notice get a coloured dot (GNOME emblem style);
+# "offline" dims the glyph, everything else shows the plain monochrome symbolic glyph.
+_STATE_BADGE_RGB: dict[str, tuple[float, float, float]] = {
     "dfu": (0.96, 0.62, 0.08),
-    "tx": (0.96, 0.26, 0.26),
-    "hardened": (0.68, 0.54, 0.98),
+    "tx": (0.88, 0.11, 0.14),
 }
 
 
-def make_tray_argb_pixmap(size: int = 32, *, state: str = "offline") -> tuple[int, int, bytes]:
+def make_tray_argb_pixmap(size: int = 22, *, state: str = "offline") -> tuple[int, int, bytes]:
     """
-    Render a crisp Cairo handheld transceiver icon with an optional live status badge
+    Render the monochrome ``org.kernos.Dock-symbolic`` glyph (16 px grid, same geometry as the SVG)
     in big-endian ARGB32 bytes as required by ``org.kde.StatusNotifierItem.IconPixmap``.
     """
     import cairo
 
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
     cr = cairo.Context(surf)
-    s = float(size) / 32.0
-    cr.scale(s, s)
+    cr.scale(size / 16.0, size / 16.0)
+    alpha = 0.55 if state == "offline" else 1.0
+    cr.set_source_rgba(0.96, 0.96, 0.96, alpha)
 
-    # Antenna
-    round_rect(cr, 8.2, 2.0, 4.2, 8.6, 2.0)
-    cr.set_source_rgba(0.92, 0.94, 0.97, 0.95)
+    # Antenna, volume knob, side PTT
+    for x, y, w, h, r in ((4.0, 0.8, 2.2, 4.4, 1.1), (10.0, 2.6, 2.5, 2.6, 0.7), (1.5, 6.8, 1.2, 3.8, 0.6)):
+        round_rect(cr, x, y, w, h, r)
+        cr.fill()
+
+    # Body with screen + keypad cut-outs (even-odd, matches the SVG path)
+    cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+    round_rect(cr, 2.5, 4.8, 11.0, 10.4, 1.7)
+    cr.rectangle(4.8, 6.8, 6.4, 3.3)
+    for cx in (5.2, 8.0, 10.8):
+        cr.new_sub_path()
+        cr.arc(cx, 12.05, 0.75, 0, 6.2831853)
     cr.fill()
 
-    # Volume knob
-    round_rect(cr, 19.6, 5.2, 4.8, 5.4, 1.4)
-    cr.set_source_rgba(0.32, 0.68, 1.0, 0.95)
-    cr.fill()
-
-    # Left PTT paddle
-    round_rect(cr, 3.6, 13.0, 2.6, 7.6, 1.2)
-    cr.set_source_rgba(0.32, 0.68, 1.0, 0.92)
-    cr.fill()
-
-    # Main handset silhouette
-    round_rect(cr, 6.8, 9.6, 18.4, 20.4, 3.6)
-    cr.set_source_rgba(0.92, 0.94, 0.97, 0.96)
-    cr.fill()
-
-    # LCD screen cutout
-    round_rect(cr, 9.2, 12.2, 13.6, 8.2, 1.4)
-    if state == "offline":
-        cr.set_source_rgba(0.16, 0.18, 0.22, 0.96)
-    elif state == "dfu":
-        cr.set_source_rgba(0.96, 0.62, 0.08, 0.96)
-    else:
-        cr.set_source_rgba(0.18, 0.24, 0.42, 0.96)
-    cr.fill()
-
-    # Crisp keypad dots
-    cr.set_source_rgba(0.16, 0.18, 0.22, 0.92)
-    for row in (22.6, 25.8):
-        for col in (10.4, 14.6, 18.8):
-            round_rect(cr, col, row, 2.8, 2.0, 0.7)
-            cr.fill()
-
-    # Live status dot in bottom-right corner
     badge = _STATE_BADGE_RGB.get(state)
     if badge is not None:
-        cr.arc(25.2, 25.2, 5.4, 0, 6.2831853)
-        cr.set_source_rgba(0.08, 0.09, 0.11, 0.96)
+        cr.set_fill_rule(cairo.FILL_RULE_WINDING)
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        cr.arc(12.8, 12.8, 3.6, 0, 6.2831853)
         cr.fill()
-        cr.arc(25.2, 25.2, 3.8, 0, 6.2831853)
-        cr.set_source_rgba(badge[0], badge[1], badge[2], 1.0)
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.arc(12.8, 12.8, 2.6, 0, 6.2831853)
+        cr.set_source_rgb(*badge)
         cr.fill()
 
     surf.flush()

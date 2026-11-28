@@ -51,67 +51,8 @@ impl Adc {
         Self
     }
 
-    /// Read a raw 12-bit conversion value (0 - 4095) for the specified channel.
-    #[inline(never)]
-    pub fn read_channel(&self, channel: u8) -> u16 {
-        unsafe {
-            // 1. Ensure ADC is powered ON with SWSTART trigger selected
-            let mut cr2 = adc::ADC_CR2.read_volatile();
-            if (cr2 & adc::CR2_ADON) == 0 {
-                cr2 |= adc::CR2_ADON | adc::CR2_EXTSEL_SWSTART;
-                adc::ADC_CR2.write_volatile(cr2);
-                crate::delay::delay_us(150);
-            }
-
-            // 2. Configure sequence: single conversion on specified channel (Rank 1 in SQR3)
-            adc::ADC_SQR1.write_volatile(0);
-            adc::ADC_SQR3.write_volatile((channel as u32) & 0x1F);
-
-            // 3. Configure internal sensor path for TempSensor (Ch 16) or VREFINT (Ch 17)
-            if channel >= 16 {
-                cr2 |= adc::CR2_TSVREFE;
-                adc::ADC_CR2.write_volatile(cr2);
-                crate::delay::delay_us(20); // Internal reference buffer stabilization
-            }
-
-            // 4. Pre-clear any stale EOC/EOS flag in SR before starting new conversion
-            adc::ADC_SR.write_volatile(!adc::SR_EOC);
-
-            // Analog multiplexer settling delay (10us)
-            crate::delay::delay_us(10);
-
-            // 5. Start conversion: set SWSTART and EXTTRIG
-            adc::ADC_CR2.write_volatile(cr2 | adc::CR2_EXTTRIG | adc::CR2_SWSTART);
-
-            // 6. Poll for End Of Conversion (EOC in SR)
-            let mut timeout = 50_000;
-            while (adc::ADC_SR.read_volatile() & adc::SR_EOC) == 0 && timeout > 0 {
-                timeout -= 1;
-            }
-
-            if timeout == 0 {
-                if channel >= 16 {
-                    adc::ADC_CR2.write_volatile(cr2 & !adc::CR2_TSVREFE);
-                }
-                return 0;
-            }
-
-            // 7. Read 12-bit conversion result from DR (reading DR clears EOC)
-            let data = (adc::ADC_DR.read_volatile() & 0x0FFF) as u16;
-
-            // 8. Explicitly clear EOC flag in SR (rc_w0: write 0 to EOC) and release TSVREFE
-            adc::ADC_SR.write_volatile(!adc::SR_EOC);
-            if channel >= 16 {
-                adc::ADC_CR2.write_volatile(cr2 & !adc::CR2_TSVREFE);
-            }
-
-            data
-        }
-    }
-
     /// Power down ADC1 analog bias (`ADON = 0`, `TSVREFE = 0`) to eliminate ~150-300 uA
-    /// standby leakage during STOP or idle periods. `read_channel()` powers it back on lazily.
-    #[inline(never)]
+    /// standby leakage during STOP or idle periods. `sample_injected_telemetry()` powers it back on lazily.
     pub fn power_down() {
         unsafe {
             if (pac::rcc::RCC_APB2ENR.read_volatile() & pac::rcc::APB2ENR_ADC1) != 0 {
@@ -119,18 +60,6 @@ impl Adc {
                 adc::ADC_CR2.write_volatile(cr2 & !(adc::CR2_ADON | adc::CR2_TSVREFE));
             }
         }
-    }
-
-    /// Read a software-averaged 12-bit ADC value across `samples` iterations (rounded down to power of 2).
-    #[inline(never)]
-    pub fn read_channel_averaged(&self, channel: u8, samples: u8) -> u16 {
-        let shift = 7u32.saturating_sub(samples.max(1).leading_zeros());
-        let count = 1u8 << shift;
-        let mut sum = 0u32;
-        for _ in 0..count {
-            sum += self.read_channel(channel) as u32;
-        }
-        (sum >> shift) as u16
     }
 
     /// Configure single-channel analog watchdog thresholds (12-bit counts).
@@ -168,58 +97,90 @@ impl Adc {
         unsafe { (adc::ADC_JDR1.read_volatile() & 0x0FFF) as u16 }
     }
 
-    /// Read internal VREFINT (Channel 17 on PY32F071) and return calculated VDDA voltage in millivolts.
-    pub fn read_vref_mv(&self) -> u16 {
-        let v_raw = self.read_channel_averaged(17, 8);
+    fn vref_raw_to_mv(v_raw: u16) -> u16 {
         if v_raw == 0 {
-            return 3300;
+            3300
+        } else {
+            crate::div::udiv(VREFINT_MV as u32 * 4095, v_raw as u32) as u16
         }
-        ((VREFINT_MV as u32 * 4095) / v_raw as u32) as u16
     }
 
-    /// Read internal temperature sensor (Channel 16 on PY32F071).
-    /// Returns temperature in deci-Celsius (e.g. 250 = 25.0°C).
-    pub fn read_mcu_temp_deci_c(&self, vdda_mv: u16) -> i16 {
+    fn temp_raw_to_deci_c(ts_raw: u16, vdda_mv: u16) -> i16 {
         unsafe {
-            // Validate VDDA reference: if out of range, assume typical 3.3V
             let vdda = if vdda_mv < 1800 || vdda_mv > 3800 {
                 3300u32
             } else {
                 vdda_mv as u32
             };
-
-            // 1. Primary factory calibration at 0x1FFF_3228 (30°C) and 0x1FFF_3230 (105°C)
             let c1 = TS_CAL1.read_volatile() as u32;
             let c2 = TS_CAL2.read_volatile() as u32;
-
-            // 8-sample software average for high thermal resolution
-            let ts_data = self.read_channel_averaged(16, 8) as u32;
-
-            // Normalize raw counts to 3.3V factory calibration baseline:
-            // (vdda * 0x4F70) >> 26 == vdda / 3300 in 32-bit math (exact across 1800..=3800 mV)
+            let ts_data = ts_raw as u32;
             let ts_data_norm = (ts_data * ((vdda * 0x4F70) >> 12)) >> 14;
 
             let deci_c = if c1 >= 200 && c1 <= 3800 && c2 <= 4000 && c2 >= c1 + 50 {
-                // Two-point linear interpolation between 30°C (300 dC) and 105°C (1050 dC):
-                // delta_T = 1050 - 300 = 750 deci-Celsius
                 let cal_span = c2 - c1;
-                let delta = ((ts_data_norm.abs_diff(c1) * 750) / cal_span) as i16;
+                let delta = crate::div::udiv(ts_data_norm.abs_diff(c1) * 750, cal_span) as i16;
                 if ts_data_norm >= c1 {
                     300 + delta
                 } else {
                     300 - delta
                 }
             } else {
-                // Unprogrammed fallback to typical silicon values:
-                // V_30 = 0.75V (750 mV), Slope = 2.5 mV/°C (4 deci-°C per mV)
-                // mv = (ts_data * vdda) / 4095 via 32-bit (prod + (prod >> 12)) >> 12
                 let prod = ts_data * vdda;
                 let mv = (prod + (prod >> 12)) >> 12;
                 300 + ((mv as i32 - 750) * 4) as i16
             };
-
-            // Clamp to physical silicon operating bounds (-40.0°C to +125.0°C)
             deci_c.clamp(-400, 1250)
+        }
+    }
+
+    /// Sample `(vbat_raw, vdda_mv, mcu_temp_deci_c)` via the hardware Injected Group (`JSQR` -> `JDR1..3`),
+    /// leaving `ADC_SQR1..3` and `ADC_DR` completely untouched so `DMA1_Ch1` regular audio never stalls.
+    pub fn sample_injected_telemetry(&self) -> (u16, u16, i16) {
+        // JL = 2 (3 conversions, left-aligned in JSQR: JSQ2=CH8 VBAT, JSQ3=CH17 VREFINT, JSQ4=CH16 TEMP)
+        const JSQR_TELEMETRY: u32 = (2 << 20) | (8 << 5) | (17 << 10) | (16 << 15);
+        unsafe {
+            let mut cr2 = adc::ADC_CR2.read_volatile();
+            if (cr2 & adc::CR2_ADON) == 0 {
+                cr2 |= adc::CR2_ADON | adc::CR2_EXTSEL_SWSTART;
+                adc::ADC_CR2.write_volatile(cr2);
+                crate::delay::delay_us(150);
+            }
+            if (cr2 & adc::CR2_TSVREFE) == 0 {
+                cr2 |= adc::CR2_TSVREFE;
+                adc::ADC_CR2.write_volatile(cr2);
+                crate::delay::delay_us(20);
+            }
+            let prev_cr1 = adc::ADC_CR1.read_volatile();
+            adc::ADC_CR1.write_volatile(prev_cr1 | adc::CR1_SCAN);
+            adc::ADC_JSQR.write_volatile(JSQR_TELEMETRY);
+
+            let mut vbat_sum = 0u32;
+            let mut vref_last = 0u16;
+            let mut temp_last = 0u16;
+            for _ in 0..4u8 {
+                adc::ADC_SR.write_volatile(!adc::SR_JEOC);
+                adc::ADC_CR2.write_volatile(
+                    cr2 | adc::CR2_JEXTSEL_JSWSTART | adc::CR2_JEXTTRIG | adc::CR2_JSWSTART,
+                );
+                let mut timeout = 50_000u32;
+                while (adc::ADC_SR.read_volatile() & adc::SR_JEOC) == 0 && timeout > 0 {
+                    timeout -= 1;
+                }
+                if timeout == 0 {
+                    break;
+                }
+                vbat_sum += adc::ADC_JDR1.read_volatile() & 0x0FFF;
+                vref_last = (adc::ADC_JDR2.read_volatile() & 0x0FFF) as u16;
+                temp_last = (adc::ADC_JDR3.read_volatile() & 0x0FFF) as u16;
+            }
+            adc::ADC_SR.write_volatile(!adc::SR_JEOC);
+            adc::ADC_CR1.write_volatile(prev_cr1);
+
+            let vbat_raw = (vbat_sum >> 2) as u16;
+            let vdda_mv = Self::vref_raw_to_mv(vref_last);
+            let temp_deci_c = Self::temp_raw_to_deci_c(temp_last, vdda_mv);
+            (vbat_raw, vdda_mv, temp_deci_c)
         }
     }
 }

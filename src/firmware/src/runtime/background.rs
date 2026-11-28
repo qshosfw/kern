@@ -83,7 +83,6 @@ fn slots_ref() -> &'static [BgSlot; MAX_BG_SLOTS] {
     slots_mut()
 }
 
-#[inline(never)]
 fn slots_mut() -> &'static mut [BgSlot; MAX_BG_SLOTS] {
     unsafe { &mut *core::ptr::addr_of_mut!(BG_SLOTS) }
 }
@@ -99,10 +98,11 @@ impl BgManager {
             s.pid = Pid(0);
             s.entry_point = 0;
         }
+        #[cfg(feature = "filesystem")]
+        crate::services::lang::reset_arena_cache();
     }
 
     /// Returns the currently executing Zone A background slot during its start or tick callback.
-    #[inline(never)]
     pub fn active_bg_slot() -> Option<&'static BgSlot> {
         let idx = unsafe { *core::ptr::addr_of!(ACTIVE_BG_IDX) } as usize;
         slots_ref().get(idx).filter(|s| s.active)
@@ -117,7 +117,6 @@ impl BgManager {
 
     /// Byte watermark of Zone A currently reserved by active background tasks (`0` when idle,
     /// always 8-byte aligned and `<= ZONE_A_MAX_BYTES`).
-    #[inline(never)]
     pub fn zone_a_used_bytes() -> usize {
         let mut max_end = 0usize;
         for s in slots_ref() {
@@ -142,7 +141,7 @@ impl BgManager {
             return Err(BgError::InvalidSize);
         }
         let aligned_len = (size_bytes + 7) & !7;
-        let base_off = Self::zone_a_used_bytes();
+        let base_off = crate::data::arena::zone_a_used_bytes();
         if base_off + aligned_len > ZONE_A_MAX_BYTES {
             return Err(BgError::OutOfArena);
         }
@@ -180,7 +179,6 @@ impl BgManager {
     }
 
     /// Stop and release the Zone A slot owned by `pid`.
-    #[inline(never)]
     pub fn stop_pid(pid: Pid) -> bool {
         if pid.0 == 0 {
             return false;
@@ -225,7 +223,6 @@ impl BgManager {
 
     /// Invoke an op (`KRX_OP_START` or `KRX_OP_EVENT`) on a resident Zone A slot with its
     /// own `Pid` and `CapabilitySet` bound for `kern_call`.
-    #[inline(never)]
     pub fn invoke_slot_op(slot_idx: usize, op: u32, param: *const ()) -> u32 {
         let Some(s) = slots_ref().get(slot_idx) else {
             return 0xFFFF_FFFF;
@@ -233,7 +230,8 @@ impl BgManager {
         if !s.active || s.entry_point == 0 {
             return 0xFFFF_FFFF;
         }
-        let api = kernel::proc::abi::KrxApiTable::with_call(s.caps.raw(), super::syscall::kern_call);
+        let api =
+            kernel::proc::abi::KrxApiTable::with_call(s.caps.raw(), super::syscall::kern_call);
         unsafe {
             *core::ptr::addr_of_mut!(ACTIVE_BG_IDX) = slot_idx as u8;
             let res = super::native_runner::invoke_krx_native(
@@ -276,17 +274,10 @@ impl BgManager {
                     &raw const tick_ev as *const (),
                 )
             };
-            if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(pid) {
-                if low_stack {
-                    pcb.ledger.record_slice_overrun();
-                } else {
-                    pcb.ledger.record_event();
-                    if res == kernel::runtime::fault::KRX_FAULT_SENTINEL {
-                        pcb.ledger.record_fault();
-                    }
-                }
-            }
             if !low_stack && res == kernel::runtime::fault::KRX_FAULT_SENTINEL {
+                if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(pid) {
+                    pcb.health.record_fault();
+                }
                 Self::stop_pid(pid);
             }
         }

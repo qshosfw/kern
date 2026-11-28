@@ -21,6 +21,7 @@ pub mod adc;
 pub mod comp;
 pub mod crc;
 pub mod delay;
+pub mod div;
 pub mod dma;
 pub mod exti;
 pub mod flash;

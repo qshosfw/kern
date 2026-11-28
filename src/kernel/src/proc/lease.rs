@@ -136,7 +136,6 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     }
 
     /// Acquires an exclusive timed lease on a resource.
-    #[inline(never)]
     pub fn acquire(
         &mut self,
         owner: Pid,
@@ -170,7 +169,6 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     }
 
     /// Releases a previously acquired lease (`owner.0 == 0` revokes regardless of owner).
-    #[inline(never)]
     pub fn release(&mut self, owner: Pid, kind: LeaseKind) -> Result<(), LeaseError> {
         for slot in self.leases.iter_mut() {
             if slot.kind == Some(kind) {

@@ -12,7 +12,7 @@ authors = ["kern-team"]
 edition_string = "Kern OS"
 chip = "PY32F071xB"
 flash_budget = 120832   # 118 KB (safe margin below 128KB)
-flash_ceiling = 120676  # Ratchet: release flash may only go down; lower after each saving
+flash_ceiling = 120516  # Ratchet: release flash may only go down; lower after each saving
 ram_budget = 16384      # 16 KB SRAM
 
 [target]
@@ -41,11 +41,11 @@ usb_msc_fat = false     # 📁 Virtual FAT16 filesystem (Disabled - prefer CDC p
 filesystem = true       # 📂 KernFS flash filesystem
 secure_fs = false       # 🔒 Ascon-128 encrypted storage
 passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
-app_hibernation = true  # 📦 Two-tier KRX app hibernation (Tier-1 RAM RLE + Tier-2 KernFS /sys/swap/)
+app_hibernation = false # 📦 Two-tier KRX app hibernation (Tier-1 RAM RLE + Tier-2 KernFS /sys/swap/)
 
 [features.runtime]
 krx_native = true       # 🚀 Class N0/N1/P0 Thumb-1 Native & Structured-Leaf Execution
-krx_paged = false        # 📄 Class P1 Transparent Demand-Paged Window Cache with sequential prefetch
+krx_paged = true        # 📄 Class P1 v2 Unlimited-Size Streamed Virtual Code Cache (up to 384 KiB)
 
 [features.provisioning]
 provision_apps = false        # 📱 Mode B: Embed & provision built-in KRX packages (delivered via RigWire / kern flash --assets)

@@ -54,18 +54,15 @@ mod tests {
         assert_eq!(table.granted_caps, 0x1234);
 
         unsafe {
-            assert_eq!(
-                table.invoke(Op::SysQuery, 0, 0, 0),
-                KRX_ABI_VERSION as usize
-            );
-            assert_eq!(table.invoke(Op::SysQuery, 1, 0, 0), 1024);
-            assert_eq!(table.invoke(Op::SysQuery, 2, 0, 0), 48_000_000);
+            assert_eq!(table.prop_get32(::abi::prop::OS_VERSION), KRX_ABI_VERSION);
+            assert_eq!(table.stack_free(), 1024);
+            assert_eq!(table.cpu_hz(), 48_000_000);
             assert_eq!(table.invoke(Op::RfTune, 145_000_000, 1, 12_500), 1);
-            assert_eq!(table.invoke(Op::RfGet, 1, 0, 0) as u32 as i32, -140);
-            assert_eq!(table.invoke(Op::IoPower, 0, 0, 0), 4000);
-            assert_eq!(table.invoke(Op::IoPower, 5, 0, 0), 250);
-            assert_eq!(table.invoke(Op::ProcLeaf, 1, 0, 0), 0xFFFF_FFFF);
-            assert_eq!(table.invoke(Op::IpcPoll, 0, 0, 0), 0xFF);
+            assert_eq!(table.prop_get32(::abi::prop::RF_RSSI) as i32, -140);
+            assert_eq!(table.battery_mv(), 4000);
+            assert_eq!(table.mcu_temp_deci_c(), 250);
+            assert_eq!(table.call_leaf(1, 0), 0xFFFF_FFFF);
+            assert_eq!(table.ipc_poll(&mut []), 0xFF);
             assert_eq!(table.invoke(Op::UiWidget, 0, 0, 0), 1);
         }
     }

@@ -41,7 +41,6 @@ impl KrxSwapHeader {
         }
     }
 
-    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -98,85 +97,4 @@ impl KrxSwapHeader {
     }
 }
 
-/// PackBits Run-Length Encoding (RLE) byte compression.
-///
-/// Encodes runs of 2..128 identical bytes as `[1 - count, byte]` and literal
-/// sequences (broken at the next run of 3) as `[count - 1, bytes...]`.
-#[inline(never)]
-pub fn packbits_compress(src: &[u8], dst: &mut [u8]) -> Result<usize, ()> {
-    let mut r = 0usize;
-    let mut w = 0usize;
-    let slen = src.len();
-    let dlen = dst.len();
-
-    while r < slen {
-        let b = src[r];
-        let mut run = 1usize;
-        while r + run < slen && run < 128 && src[r + run] == b {
-            run += 1;
-        }
-
-        if run >= 2 {
-            if w + 2 > dlen {
-                return Err(());
-            }
-            dst[w] = (257 - run) as u8;
-            dst[w + 1] = b;
-            w += 2;
-            r += run;
-        } else {
-            let start = r;
-            while r < slen
-                && r - start < 128
-                && !(r + 2 < slen && src[r] == src[r + 1] && src[r] == src[r + 2])
-            {
-                r += 1;
-            }
-            let len = r - start;
-            if w + 1 + len > dlen {
-                return Err(());
-            }
-            dst[w] = (len - 1) as u8;
-            w += 1;
-            dst[w..w + len].copy_from_slice(&src[start..r]);
-            w += len;
-        }
-    }
-
-    Ok(w)
-}
-
-/// PackBits Run-Length Encoding (RLE) byte decompression.
-#[inline(never)]
-pub fn packbits_decompress(src: &[u8], dst: &mut [u8]) -> Result<usize, ()> {
-    let mut r = 0usize;
-    let mut w = 0usize;
-    let slen = src.len();
-    let dlen = dst.len();
-
-    while r < slen {
-        let hdr = src[r];
-        r += 1;
-
-        if hdr <= 127 {
-            let n = (hdr as usize) + 1;
-            if r + n > slen || w + n > dlen {
-                return Err(());
-            }
-            dst[w..w + n].copy_from_slice(&src[r..r + n]);
-            r += n;
-            w += n;
-        } else if hdr > 128 {
-            let n = 257 - (hdr as usize);
-            if r >= slen || w + n > dlen {
-                return Err(());
-            }
-            let b = src[r];
-            r += 1;
-            dst[w..w + n].fill(b);
-            w += n;
-        }
-    }
-
-    Ok(w)
-}
+pub use utils::codec::{packbits_compress, packbits_decompress};

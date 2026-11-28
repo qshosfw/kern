@@ -54,7 +54,6 @@ impl Pin {
     }
 
     /// Drive the pin HIGH via the BSRR set bits (lower 16 bits).
-    #[inline(never)]
     pub fn set_high(self) {
         if self.is_none() {
             return;
@@ -66,7 +65,6 @@ impl Pin {
     }
 
     /// Drive the pin LOW via the BSRR reset bits (upper 16 bits).
-    #[inline(never)]
     pub fn set_low(self) {
         if self.is_none() {
             return;
@@ -78,7 +76,6 @@ impl Pin {
     }
 
     /// Read the pin level from the IDR register.
-    #[inline(never)]
     pub fn is_high(self) -> bool {
         if self.is_none() {
             return false;
@@ -96,7 +93,6 @@ impl Pin {
         !self.is_high()
     }
 
-    #[inline(never)]
     fn modify_2bit(self, offset: u32, mode: u32) {
         if self.is_none() {
             return;
@@ -137,7 +133,6 @@ impl Pin {
     ///
     /// Pins 0-7 use AFRL (offset 0x20), pins 8-15 use AFRH (offset 0x24).
     /// Each pin occupies 4 bits.
-    #[inline(never)]
     pub fn set_af(self, af: u32) {
         if self.is_none() {
             return;
@@ -155,7 +150,6 @@ impl Pin {
         });
     }
 
-    #[inline(never)]
     fn configure_out(self, speed: u32, open_drain: bool) {
         if self.is_none() {
             return;
@@ -185,14 +179,12 @@ impl Pin {
     }
 
     /// Configure this pin as input with the given pull configuration.
-    #[inline(never)]
     pub fn configure_input(self, pull: u32) {
         self.set_mode(gpio::MODE_INPUT);
         self.set_pull(pull);
     }
 
     /// Configure this pin as alternate function with the given AF number.
-    #[inline(never)]
     pub fn configure_af(self, af: u32, speed: u32) {
         self.set_af(af);
         self.set_speed(speed);
@@ -200,7 +192,6 @@ impl Pin {
     }
 
     /// Configure this pin as analog (lowest power, used for unused pins).
-    #[inline(never)]
     pub fn configure_analog(self) {
         self.set_mode(gpio::MODE_ANALOG);
         self.set_pull(gpio::PULL_NONE);

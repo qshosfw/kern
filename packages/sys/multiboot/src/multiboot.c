@@ -19,11 +19,7 @@ __attribute__((visibility("hidden"))) extern const u8 mb_root_base[];
 static MbState g_mb;
 
 static void op_emit_badge(const KrxApiTable* api, i16 x, const char* key, const char* lbl) {
-    KrxWidget d;
-    d.p0 = (const u8*)key; d.len0 = krx_strlen(key);
-    d.p1 = (const u8*)lbl; d.len1 = krx_strlen(lbl);
-    d.x = x; d.y = 54; d.a = 0u;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_KEY_BADGE, (u32)&d, 0u);
+    krx_ui_draw_key_badge(api, x, 54, (const u8*)key, (u8)krx_strlen(key), (const u8*)lbl, (u8)krx_strlen(lbl));
 }
 
 static void op_softbar(
@@ -104,8 +100,8 @@ static u16 op_rd_at(const KrxApiTable* api, const char* path, u8 plen, u32 off, 
     return krx_fs_read_at(api, (const u8*)path, plen, off, buf, len);
 }
 
-static u16 op_pwr_get(const KrxApiTable* api, u8 sub) {
-    return krx_pwr_u16(api, sub);
+static u16 op_prop_get(const KrxApiTable* api, u8 prop) {
+    return (u16)krx_prop_get32(api, prop);
 }
 
 static u32 op_crc32_step(u32 crc, const u8* data, u32 len) {
@@ -222,7 +218,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     g_mb.ui.nth_s      = op_nth_s;
     g_mb.ui.fmt_hex32  = op_fmt_hex32;
     g_mb.ui.rd_at      = op_rd_at;
-    g_mb.ui.pwr_get    = op_pwr_get;
+    g_mb.ui.prop_get   = op_prop_get;
     g_mb.ui.crc32_step = op_crc32_step;
     g_mb.ui.probe      = op_probe;
     g_mb.ui.py25_read  = op_py25_read;
@@ -240,7 +236,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         g_mb.exit_code = MB_EXIT_BACK;
         krx_leaf_call(api, MB_LEAF_MENU, (u32)&g_mb);
         if (g_mb.next_leaf == 0u) {
-            if (!g_mb.boot_mode) krx_call(api, OP_SYS_EVENT, 0u, 4u, 0u); /* CloseApp */
+            if (!g_mb.boot_mode) krx_sys_event(api, 4u); /* CloseApp */
             return (int)g_mb.exit_code;
         }
         u8 leaf = g_mb.next_leaf;

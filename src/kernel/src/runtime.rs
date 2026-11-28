@@ -18,17 +18,18 @@ pub use image::{
     ASSET_ICON_8, ASSET_ICON_16, ASSET_ICON_TRAY, AssetDescriptor, BOOT_IDENT, BlockEntry,
     CALIB_IDENT, CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, CapBinding, FLAG_LEAF_PINNED,
     FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, HwClaim, KERNFS_IDENT, KRX_IDENT, KRX_PCB_IDENT,
-    KrxActionDecl, KrxAuxSections, KrxClass, KrxConfigHeader, KrxConfigItem, KrxExecType,
-    KrxIndexEntry, KrxLaunchError, KrxPreamble, KrxProfile, KrxSectionIterator, KrxSummary,
-    LeafContext, LeafContinuation, LeafEntry, SECTION_ACTIONS, SECTION_ASSETS, SECTION_BLOCK_MAP,
-    SECTION_CAP_IMPORTS, SECTION_CONFIG, SECTION_EXECUTION, SECTION_IDENTITY, SECTION_LEAF_MAP,
-    SECTION_SEAL, SECTION_SERVICE_EXPORTS, SECTION_TYPE_LIFECYCLE, SIG_IDENT, SLAB_IDENT,
-    SWAP_IDENT, SectionExecution, SectionHeader, SectionIdentity, SectionType, ServiceExport,
-    find_section,
+    KRX_SEAL_DOMAIN, KRX_SEAL_KEY, KrxActionDecl, KrxAuxSections, KrxClass, KrxConfigHeader,
+    KrxConfigItem, KrxExecType, KrxIndexEntry, KrxLaunchError, KrxPreamble, KrxProfile, KrxSeal,
+    KrxSectionIterator, KrxSummary, LeafContext, LeafContinuation, LeafEntry, PRIVILEGED_CAP_MASK,
+    SECTION_ACTIONS, SECTION_ASSETS, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_CONFIG,
+    SECTION_EXECUTION, SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_SEAL, SECTION_SERVICE_EXPORTS,
+    SECTION_TYPE_LIFECYCLE, SIG_IDENT, SLAB_IDENT, SWAP_IDENT, SectionExecution, SectionHeader,
+    SectionIdentity, SectionType, ServiceExport, find_section,
 };
 pub use paged::{
-    BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheSlotMeta, FixedWindowCache,
-    PagedError, ReturnFrame, ShadowReturnStack, StreamingLeafState, StructuredLeafManager,
+    BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_LZSS, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheWayMeta,
+    EMPTY_PAGE_ID, MAX_STREAMED_IMAGE_BYTES, PageReturnFrame, PagedError, ShadowReturnStack,
+    StreamedPageDesc, StreamedWindowCache, StreamingLeafState, StructuredLeafManager,
 };
 pub use reloc::{RelocError, apply_relocs};
 pub use swap::{KrxSwapHeader, SWAP_FLAG_COMPRESSED_RLE, packbits_compress, packbits_decompress};

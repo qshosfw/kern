@@ -31,14 +31,10 @@ pub enum StorageSecurityStatus {
     EncryptedWithoutEngine { encrypted_files: usize },
 }
 
-const SCAN_DIRS: [&str; 4] = ["/user", "/pref", "/pref/app", "/user/vault"];
-
-/// Counts files marked `ATTR_ENCRYPTED` across user and preference storage directories.
+/// Counts files marked `ATTR_ENCRYPTED` across mounted storage metadata in a single pass.
+#[inline(always)]
 pub fn count_encrypted_files(filesystem: &mut crate::services::SystemStorage) -> usize {
-    SCAN_DIRS
-        .iter()
-        .map(|dir| filesystem.count_encrypted_in_dir(dir))
-        .sum()
+    filesystem.count_encrypted_files()
 }
 
 /// Synchronizes `FileSystemDriver` session key/lock state with the active security tier.
@@ -131,7 +127,7 @@ pub fn write_classified_file(
 /// Formats a human-friendly notification describing why storage access is restricted.
 pub fn format_storage_alert_message(
     status: StorageSecurityStatus,
-    out: &mut heapless::String<168>,
+    out: &mut utils::format::InlineStr<88>,
 ) -> Option<&'static str> {
     out.clear();
     let mut num_buf = [0u8; 12];
@@ -238,7 +234,7 @@ mod tests {
 
     #[test]
     fn storage_alert_formatting_covers_singular_plural_and_unlocked() {
-        let mut msg = heapless::String::<168>::new();
+        let mut msg = utils::format::InlineStr::<88>::new();
         assert!(format_storage_alert_message(StorageSecurityStatus::Plaintext, &mut msg).is_none());
         assert!(
             format_storage_alert_message(StorageSecurityStatus::DeviceBoundActive, &mut msg)

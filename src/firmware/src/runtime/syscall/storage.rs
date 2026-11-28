@@ -1,22 +1,11 @@
 //! Storage & Filesystem System Call Dispatcher (`Op::Fs*`, domain `0x3`).
 
-#[cfg(test)]
-use super::active_ctx_opt;
-use super::{parse_str, parse_user_path, ptr_slice, ptr_slice_mut, str_or_default};
+use super::{parse_str, parse_user_path, ptr_ref, ptr_slice, ptr_slice_mut, str_or_default};
 use kernel::proc::abi::{KrxDirEntry, KrxFsReq};
 
 #[inline(always)]
 fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'static>> {
-    #[cfg(not(test))]
-    {
-        Some(crate::kern_fs())
-    }
-    #[cfg(test)]
-    {
-        active_ctx_opt().map(|ctx| unsafe {
-            &mut *(ctx.storage as *mut crate::services::SystemStorage<'_> as *mut _)
-        })
-    }
+    Some(crate::services::storage_mut())
 }
 
 #[inline(always)]
@@ -74,13 +63,11 @@ fn proc_remove(path: &str) -> Option<u8> {
     Some(0)
 }
 
-#[inline(never)]
 fn parse_non_sys_user_path<'a>(path: *const u8, path_len: u8) -> Option<&'a str> {
     let p_str = unsafe { parse_user_path(path, path_len as usize) }?;
     (utils::path::root_bit(p_str.as_bytes()) != utils::path::ROOT_SYS).then_some(p_str)
 }
 
-#[inline(never)]
 fn file_stat_size(
     st: &mut crate::services::SystemStorage<'static>,
     path: *const u8,
@@ -100,18 +87,19 @@ unsafe fn fs_read_extents(
     path_len: u8,
     dst: &mut [u8],
 ) -> usize {
-    if dst.len() >= 20 && super::has_cap(::abi::Cap::StorageAdmin) {
+    if dst.len() >= 24 && super::has_cap(::abi::Cap::StorageAdmin) {
         if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-            let mut l1 = [0u16; 8];
+            let mut l1 = [0u16; 12];
             if let Ok((depth, sz)) = st.fs.file_extents(path_str, &mut l1) {
+                let roots_bytes = if dst.len() >= 32 { 24 } else { 16 };
                 let p = dst.as_mut_ptr();
                 unsafe {
                     core::ptr::write_bytes(p, 0, 4);
                     *p = depth;
                     core::ptr::copy_nonoverlapping(sz.to_le_bytes().as_ptr(), p.add(4), 4);
-                    core::ptr::copy_nonoverlapping(l1.as_ptr() as *const u8, p.add(8), 16);
+                    core::ptr::copy_nonoverlapping(l1.as_ptr() as *const u8, p.add(8), roots_bytes);
                 }
-                return 20;
+                return 8 + roots_bytes;
             }
         }
     }
@@ -141,7 +129,6 @@ fn fs_read_stats(st: &crate::services::SystemStorage<'static>, dst: &mut [u8]) -
     0
 }
 
-#[inline(never)]
 unsafe fn dispatch_fs_read(
     st: &mut crate::services::SystemStorage<'static>,
     sub: u8,
@@ -149,16 +136,22 @@ unsafe fn dispatch_fs_read(
 ) -> usize {
     use ::abi::sub::fs_read;
     if sub == fs_read::LIST_DIR {
-        let out = r.buf as *mut KrxDirEntry;
         let max = r.len as usize;
         let dir_str = unsafe { str_or_default(r.path, r.path_len as usize, "/") };
-        let dst = if !out.is_null() && max > 0 {
-            unsafe { core::slice::from_raw_parts_mut(out, max) }
+        let mut empty: [KrxDirEntry; 0] = [];
+        let dst = if (r.buf as usize & 3) == 0
+            && let Some(bytes) = unsafe {
+                ptr_slice_mut(
+                    r.buf,
+                    max.saturating_mul(core::mem::size_of::<KrxDirEntry>()),
+                )
+            } {
+            unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut KrxDirEntry, max) }
         } else {
-            &mut []
+            &mut empty[..]
         };
         if let Ok((total, written)) =
-            crate::services::primitives::list_krx_dir_at(st, dir_str, r.offset as usize, dst)
+            crate::services::storage::list_krx_dir_at(st, dir_str, r.offset as usize, dst)
         {
             return if r.extra != 0 { total } else { written };
         }
@@ -180,7 +173,7 @@ unsafe fn dispatch_fs_read(
         }
         fs_read::LOAD_CFG => {
             let name = super::super::native_runner::active_native_app_name();
-            crate::services::primitives::load_app_config(st, name, dst).unwrap_or(0)
+            crate::services::storage::load_app_config(st, name, dst).unwrap_or(0)
         }
         fs_read::ASSET => {
             #[cfg(feature = "krx_native")]
@@ -219,7 +212,6 @@ unsafe fn dispatch_fs_read(
     }
 }
 
-#[inline(never)]
 unsafe fn dispatch_fs_write(
     st: &mut crate::services::SystemStorage<'static>,
     sub: u8,
@@ -254,91 +246,108 @@ unsafe fn dispatch_fs_write(
         }
         fs_write::SAVE_CFG => {
             let name = super::super::native_runner::active_native_app_name();
-            usize::from(crate::services::primitives::save_app_config(st, name, src).is_err())
+            usize::from(crate::services::storage::save_app_config(st, name, src).is_err())
         }
         _ => 1,
     }
 }
 
-#[inline(never)]
-pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::{idx as op, sub::fs_meta};
+pub unsafe fn op_fs_read(a0: usize, a1: usize, _a2: usize) -> usize {
     let Some(st) = active_storage_mut() else {
-        return usize::from(idx != op::FsRead);
+        return 0;
     };
-    match idx {
-        op::FsRead => unsafe { dispatch_fs_read(st, a0 as u8, &*(a1 as *const KrxFsReq)) },
-        op::FsWrite => unsafe { dispatch_fs_write(st, a0 as u8, &*(a1 as *const KrxFsReq)) },
-        op::FsMeta => {
-            let path = a1 as *const u8;
-            let plen = a2 as u8;
-            match a0 as u8 {
-                fs_meta::SIZE | fs_meta::EXISTS => {
-                    let sz = file_stat_size(st, path, plen);
-                    if (a0 as u8) == fs_meta::SIZE {
-                        sz.unwrap_or(0) as usize
-                    } else {
-                        usize::from(sz.is_some())
-                    }
-                }
-                fs_meta::REMOVE | fs_meta::MKDIR => {
-                    let create_dir = (a0 as u8) == fs_meta::MKDIR;
-                    if !create_dir {
-                        if let Some(raw) = unsafe { parse_str(path, plen as usize) } {
-                            if let Some(rc) = proc_remove(raw) {
-                                return rc as usize;
-                            }
-                        }
-                    }
-                    if let Some(p_str) = parse_non_sys_user_path(path, plen) {
-                        let res = if create_dir {
-                            st.create_dir(p_str)
-                        } else {
-                            st.remove(p_str)
-                        };
-                        return usize::from(res.is_err());
-                    }
-                    1
-                }
-                fs_meta::FORMAT => {
-                    let mode = a1 as u8;
-                    let caps = super::super::native_runner::active_native_caps();
-                    if !caps.contains(::abi::Cap::StorageAdmin)
-                        || (mode > 0 && !caps.contains(::abi::Cap::FactoryCalib))
-                    {
-                        return 1;
-                    }
-                    #[cfg(feature = "filesystem")]
-                    {
-                        let calib = crate::calibration_mut();
-                        let res = match mode {
-                            0 | 1 => crate::services::calibration::reformat_storage(
-                                st,
-                                calib.raw_bytes(),
-                                mode == 0,
-                            ),
-                            2 => st.fs.wipe_raw().map_err(|_| ()),
-                            _ => Err(()),
-                        };
-                        usize::from(res.is_err())
-                    }
-                    #[cfg(not(feature = "filesystem"))]
-                    1
-                }
-                _ => 1,
+    let Some(r) = (unsafe { ptr_ref(a1 as *const KrxFsReq) }) else {
+        return 0;
+    };
+    unsafe { dispatch_fs_read(st, a0 as u8, r) }
+}
+
+pub unsafe fn op_fs_write(a0: usize, a1: usize, _a2: usize) -> usize {
+    let Some(st) = active_storage_mut() else {
+        return 1;
+    };
+    let Some(r) = (unsafe { ptr_ref(a1 as *const KrxFsReq) }) else {
+        return 1;
+    };
+    unsafe { dispatch_fs_write(st, a0 as u8, r) }
+}
+
+pub unsafe fn op_fs_meta(a0: usize, a1: usize, a2: usize) -> usize {
+    use ::abi::sub::fs_meta;
+    let Some(st) = active_storage_mut() else {
+        return 1;
+    };
+    let path = a1 as *const u8;
+    let plen = a2 as u8;
+    match a0 as u8 {
+        fs_meta::SIZE | fs_meta::EXISTS => {
+            let sz = file_stat_size(st, path, plen);
+            if (a0 as u8) == fs_meta::SIZE {
+                sz.unwrap_or(0) as usize
+            } else {
+                usize::from(sz.is_some())
             }
         }
-        op::FsRename => {
-            let r = unsafe { &*(a0 as *const KrxFsReq) };
+        fs_meta::REMOVE | fs_meta::MKDIR => {
+            let create_dir = (a0 as u8) == fs_meta::MKDIR;
+            if !create_dir {
+                if let Some(raw) = unsafe { parse_str(path, plen as usize) } {
+                    if let Some(rc) = proc_remove(raw) {
+                        return rc as usize;
+                    }
+                }
+            }
+            if let Some(p_str) = parse_non_sys_user_path(path, plen) {
+                let res = if create_dir {
+                    st.create_dir(p_str)
+                } else {
+                    st.remove(p_str)
+                };
+                return usize::from(res.is_err());
+            }
+            1
+        }
+        fs_meta::FORMAT => {
+            let mode = a1 as u8;
+            let caps = super::super::native_runner::active_native_caps();
+            if !caps.contains(::abi::Cap::StorageAdmin)
+                || (mode > 0 && !caps.contains(::abi::Cap::FactoryCalib))
+            {
+                return 1;
+            }
+            #[cfg(feature = "filesystem")]
+            {
+                let calib = crate::calibration_mut();
+                let res = match mode {
+                    0 | 1 => crate::services::calibration::reformat_storage(
+                        st,
+                        calib.raw_bytes(),
+                        mode == 0,
+                    ),
+                    2 => st.fs.wipe_raw().map_err(|_| ()),
+                    _ => Err(()),
+                };
+                usize::from(res.is_err())
+            }
+            #[cfg(not(feature = "filesystem"))]
+            1
+        }
+        fs_meta::RENAME => {
+            if !super::has_cap(::abi::Cap::StorageWrite) {
+                return ::abi::Status::PermissionDenied.to_raw();
+            }
+            let Some(r) = (unsafe { ptr_ref(a1 as *const KrxFsReq) }) else {
+                return 1;
+            };
             if let (Some(o_str), Some(n_str)) = (
                 parse_non_sys_user_path(r.path, r.path_len),
                 parse_non_sys_user_path(r.buf as *const u8, r.len as u8),
-            ) {
-                if st.rename(o_str, n_str).is_ok() {
-                    return 0;
-                }
+            ) && st.rename(o_str, n_str).is_ok()
+            {
+                0
+            } else {
+                1
             }
-            1
         }
         _ => 1,
     }

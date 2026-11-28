@@ -1,85 +1,80 @@
-//! Lock-Free Inter-Process Communication (IPC) primitives for the Microkernel.
+//! Lock-Free Inter-Process Communication (IPC) & Event Ring Primitives for the Microkernel.
 
-use heapless::spsc::Queue;
+use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU8, Ordering};
 
-/// A lock-free Single-Producer Single-Consumer (SPSC) message queue.
-/// Safe for interrupt contexts and kernel task communication.
-pub struct MessageQueue<T, const N: usize> {
-    queue: Queue<T, N>,
+/// Single-Consumer, ISR-Safe Bounded Ring (`N` must be a power of two `<= 128`).
+///
+/// Replaces `Mutex<RefCell<Deque>>`, `MessageQueue`, and `EventQueue` with one
+/// zero-panic ring buffer: `push` masks interrupts for 4 instructions so ISR and
+/// thread producers never race on `head`, while single-consumer `pop` in thread
+/// mode is 100% lock-free (`Acquire`/`Release`).
+pub struct EventRing<T, const N: usize = 16> {
+    head: AtomicU8,
+    tail: AtomicU8,
+    slots: UnsafeCell<[MaybeUninit<T>; N]>,
 }
 
-impl<T, const N: usize> MessageQueue<T, N> {
+unsafe impl<T: Send, const N: usize> Sync for EventRing<T, N> {}
+
+impl<T: Copy, const N: usize> EventRing<T, N> {
+    const MASK: u8 = {
+        assert!(
+            N > 1 && N <= 128 && N.is_power_of_two(),
+            "EventRing N must be 2^k <= 128"
+        );
+        (N - 1) as u8
+    };
+
     pub const fn new() -> Self {
         Self {
-            queue: Queue::new(),
+            head: AtomicU8::new(0),
+            tail: AtomicU8::new(0),
+            slots: UnsafeCell::new([const { MaybeUninit::uninit() }; N]),
         }
     }
 
-    /// Tries to push an item to the queue. Returns the item if the queue is full.
-    pub fn try_push(&mut self, item: T) -> Result<(), T> {
-        self.queue.enqueue(item)
-    }
-
-    /// Tries to pop an item from the queue.
-    pub fn pop(&mut self) -> Option<T> {
-        self.queue.dequeue()
-    }
-
-    /// Checks if the queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
-    }
-
-    /// Checks if the queue is full.
-    pub fn is_full(&self) -> bool {
-        self.queue.is_full()
-    }
-
-    /// Returns the number of items in the queue.
-    pub fn len(&self) -> usize {
-        self.queue.len()
-    }
-
-    /// Total capacity of the queue.
-    pub const fn capacity(&self) -> usize {
-        N
-    }
-}
-
-pub struct EventQueue<T, const N: usize> {
-    inner: heapless::spsc::Queue<T, N>,
-}
-
-impl<T, const N: usize> EventQueue<T, N> {
-    pub const fn new() -> Self {
-        Self {
-            inner: heapless::spsc::Queue::new(),
+    pub fn push(&self, item: T) -> bool {
+        #[cfg(target_arch = "arm")]
+        {
+            cortex_m::interrupt::free(|_| unsafe { self.push_inner(item) })
+        }
+        #[cfg(not(target_arch = "arm"))]
+        {
+            unsafe { self.push_inner(item) }
         }
     }
 
-    /// Split into producer (for ISRs) and consumer (for main loop).
-    pub fn split(
-        &mut self,
-    ) -> (
-        heapless::spsc::Producer<'_, T, N>,
-        heapless::spsc::Consumer<'_, T, N>,
-    ) {
-        self.inner.split()
+    #[inline(always)]
+    unsafe fn push_inner(&self, item: T) -> bool {
+        let head = self.head.load(Ordering::Relaxed);
+        let next = (head.wrapping_add(1)) & Self::MASK;
+        if next == self.tail.load(Ordering::Acquire) {
+            return false;
+        }
+        unsafe {
+            (*self.slots.get())[head as usize].write(item);
+        }
+        self.head.store(next, Ordering::Release);
+        true
     }
 
-    /// Capacity of the event queue.
-    pub const fn capacity(&self) -> usize {
-        N
+    #[inline(always)]
+    pub fn pop(&self) -> Option<T> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        if tail == self.head.load(Ordering::Acquire) {
+            return None;
+        }
+        let item = unsafe { (*self.slots.get())[tail as usize].assume_init_read() };
+        self.tail
+            .store((tail.wrapping_add(1)) & Self::MASK, Ordering::Release);
+        Some(item)
     }
 
-    /// Number of items currently enqueued.
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Whether queue is empty.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.tail.load(Ordering::Relaxed) == self.head.load(Ordering::Acquire)
     }
 }
 
@@ -170,115 +165,7 @@ pub mod radio_events {
 
 // ── Structured Zero-Heap Microkernel IPC ─────────────────────────────────────
 
-pub mod ipc_flags {
-    pub const NONE: u8 = 0;
-    pub const REPLY: u8 = 1 << 0;
-    pub const URGENT: u8 = 1 << 1;
-    pub const NEED_ACK: u8 = 1 << 2;
-    pub const ERROR: u8 = 1 << 3;
-}
-
-pub mod ipc_target {
-    pub const FOREGROUND_APP: u8 = 0x00;
-    pub const KERNEL: u8 = 0x01;
-    pub const BROADCAST: u8 = 0xFF;
-}
-
-pub mod ipc_msg_type {
-    pub const RAW_DATA: u16 = 0x0000;
-    pub const PING: u16 = 0x0001;
-    pub const PONG: u16 = 0x0002;
-    pub const DAEMON_START: u16 = 0x0010;
-    pub const DAEMON_STOP: u16 = 0x0011;
-    pub const DAEMON_STATUS: u16 = 0x0012;
-    pub const SERVICE_REQUEST: u16 = 0x0020;
-    pub const SERVICE_RESPONSE: u16 = 0x0021;
-    pub const APP_SWITCH: u16 = 0x0030;
-    pub const APP_DATA_TRANSFER: u16 = 0x0031;
-    pub const TELEMETRY_FRAME: u16 = 0x0040;
-}
-
-/// 32-byte zero-heap inter-process communication message (power-of-two $2^5$ layout).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct KrxIpcMessage {
-    /// Originating process PID (0 = Kernel/Supervisor)
-    pub sender_pid: u8,
-    /// Destination process PID (0 = Active Foreground App, 0xFF = Broadcast to all actors)
-    pub target_pid: u8,
-    /// Application/Service message opcode or command identifier
-    pub msg_type: u16,
-    /// Number of active bytes in `payload` (0..=24)
-    pub payload_len: u8,
-    /// IPC status and transaction flags (e.g. `ipc_flags::REPLY`, `ipc_flags::URGENT`)
-    pub flags: u8,
-    /// Correlation sequence number for matching request-reply transactions
-    pub seq: u16,
-    /// Bounded message payload (24 bytes)
-    pub payload: [u8; 24],
-}
-
-const _: () = assert!(core::mem::size_of::<KrxIpcMessage>() == 32);
-
-impl KrxIpcMessage {
-    pub const fn empty() -> Self {
-        Self {
-            sender_pid: 0,
-            target_pid: 0,
-            msg_type: 0,
-            payload_len: 0,
-            flags: 0,
-            seq: 0,
-            payload: [0u8; 24],
-        }
-    }
-
-    #[inline(never)]
-    pub fn new(sender_pid: u8, target_pid: u8, msg_type: u16, payload_data: &[u8]) -> Self {
-        let mut msg = Self::empty();
-        msg.sender_pid = sender_pid;
-        msg.target_pid = target_pid;
-        msg.msg_type = msg_type;
-        let len = payload_data.len().min(24);
-        msg.payload_len = len as u8;
-        let mut i = 0;
-        while i < len {
-            msg.payload[i] = payload_data[i];
-            i += 1;
-        }
-        msg
-    }
-
-    pub fn make_reply_in_place(&mut self, payload_data: &[u8], is_error: bool) {
-        core::mem::swap(&mut self.sender_pid, &mut self.target_pid);
-        let len = payload_data.len().min(24);
-        self.payload_len = len as u8;
-        self.payload[..len].copy_from_slice(&payload_data[..len]);
-        self.payload[len..].fill(0);
-        self.flags = ipc_flags::REPLY | if is_error { ipc_flags::ERROR } else { 0 };
-    }
-
-    pub fn reply_to(&self, payload_data: &[u8], is_error: bool) -> Self {
-        let mut rep = *self;
-        rep.make_reply_in_place(payload_data, is_error);
-        rep
-    }
-
-    #[inline(always)]
-    pub const fn is_reply(&self) -> bool {
-        (self.flags & ipc_flags::REPLY) != 0
-    }
-
-    #[inline(always)]
-    pub const fn is_error(&self) -> bool {
-        (self.flags & ipc_flags::ERROR) != 0
-    }
-
-    #[inline(always)]
-    pub const fn is_broadcast(&self) -> bool {
-        self.target_pid == ipc_target::BROADCAST
-    }
-}
+pub use ::abi::types::{KrxIpcMessage, ipc_flags, ipc_msg_type, ipc_target};
 
 /// Zero-heap multi-process IPC Channel and Message Router (§8.4 / KRX 3.2).
 /// Manages up to N concurrent 32-byte messages in strict FIFO order.

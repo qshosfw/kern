@@ -143,9 +143,7 @@ fn main() {
     println!("cargo:rustc-env=KERN_BUILD_STAMP={}", stamp_display);
     println!(
         "cargo:rustc-env=KERN_ABOUT_TEXT=KERN OS\nBuild: {}\nGit: {}\nTarget: {}",
-        date_str,
-        full_hash,
-        target_label
+        date_str, full_hash, target_label
     );
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=.git/HEAD");

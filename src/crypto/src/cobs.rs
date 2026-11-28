@@ -8,14 +8,13 @@ pub const COBS_DELIMITER: u8 = 0x00;
 pub struct Cobs;
 
 impl Cobs {
-    /// Calculate maximum worst-case encoded length for raw byte length `len`.
+    /// Calculate maximum worst-case encoded length for raw byte length `len` (`<= 65,535`).
     #[inline(always)]
     pub const fn max_encoded_len(len: usize) -> usize {
-        len + (len / 254) + 1
+        len + (((len as u32).wrapping_mul(66_053)) >> 24) as usize + 1
     }
 
     /// Encode `src` into `dst`. Returns encoded byte length on success.
-    #[inline(never)]
     pub fn encode(src: &[u8], dst: &mut [u8]) -> Result<usize, ()> {
         let max_len = Self::max_encoded_len(src.len());
         if dst.len() < max_len {
@@ -54,13 +53,56 @@ impl Cobs {
         Ok(write_idx)
     }
 
+    /// Single-buffer in-place COBS encoder for frames placed at `buf[raw_off..raw_off + raw_len]`.
+    ///
+    /// Requires `raw_off >= 4` and `raw_len <= 508` so `write_idx <= k + 3 < raw_off + k` holds
+    /// at every step `k` (`0..raw_len`), guaranteeing forward COBS encoding never overwrites
+    /// unread source bytes while eliminating a separate raw staging buffer on the stack.
+    pub fn encode_from_offset(buf: &mut [u8], raw_off: usize, raw_len: usize) -> Result<usize, ()> {
+        let max_len = Self::max_encoded_len(raw_len);
+        if raw_off < 4
+            || raw_len > 508
+            || raw_off.saturating_add(raw_len) > buf.len()
+            || buf.len() < max_len
+        {
+            return Err(());
+        }
+        let end = raw_off + raw_len;
+        let mut read_idx = raw_off;
+        let mut write_idx = 1usize;
+        let mut code_idx = 0usize;
+        let mut code: u8 = 1;
+
+        while read_idx < end {
+            let byte = buf[read_idx];
+            read_idx += 1;
+            if byte == 0 {
+                buf[code_idx] = code;
+                code_idx = write_idx;
+                write_idx += 1;
+                code = 1;
+            } else {
+                buf[write_idx] = byte;
+                write_idx += 1;
+                code += 1;
+                if code == 0xFF {
+                    buf[code_idx] = code;
+                    code_idx = write_idx;
+                    write_idx += 1;
+                    code = 1;
+                }
+            }
+        }
+        buf[code_idx] = code;
+        Ok(write_idx)
+    }
+
     /// In-place COBS encoder for frames with `raw_len <= 253`.
     ///
     /// Caller places the `raw_len` unencoded bytes at `buf[1..1 + raw_len]` inside a slice of
     /// length at least `raw_len + 1`. Because `raw_len <= 253`, COBS never emits an `0xFF`
     /// overhead byte, so every non-zero byte stays in place and each `0x00` is overwritten with
     /// the forward distance to the next `0x00` (or end of frame). Returns `raw_len + 1`.
-    #[inline(never)]
     pub fn encode_inplace_short(buf: &mut [u8], raw_len: usize) -> Result<usize, ()> {
         if raw_len > 253 || buf.len() < raw_len + 1 {
             return Err(());
@@ -124,7 +166,6 @@ impl Cobs {
 
     /// In-place COBS decoder. Decodes directly within `buf` in-place.
     /// Invariant: write_idx <= read_idx at all steps.
-    #[inline(never)]
     pub fn decode_inplace(buf: &mut [u8], len: usize) -> Result<usize, ()> {
         let len = len.min(buf.len());
         if len == 0 {
@@ -235,6 +276,21 @@ mod tests {
         }
         let mut too_long = [1u8; 256];
         assert!(Cobs::encode_inplace_short(&mut too_long, 254).is_err());
+
+        // Single-buffer `encode_from_offset` across 0..=290 bytes (including 0xFF block splits)
+        let mut raw290 = [0u8; 290];
+        for (i, b) in raw290.iter_mut().enumerate() {
+            *b = ((i % 251) + 1) as u8;
+        }
+        for len in [0usize, 1, 16, 253, 254, 255, 290] {
+            let mut ref_enc = [0u8; 296];
+            let ref_len = Cobs::encode(&raw290[..len], &mut ref_enc).unwrap();
+            let mut single = [0u8; 296];
+            single[4..4 + len].copy_from_slice(&raw290[..len]);
+            let s_len = Cobs::encode_from_offset(&mut single, 4, len).unwrap();
+            assert_eq!(s_len, ref_len);
+            assert_eq!(&single[..s_len], &ref_enc[..ref_len]);
+        }
     }
 
     #[test]

@@ -60,14 +60,12 @@ pub fn check_reset_cause() {
 }
 
 /// Mark the backup-domain reboot tag before an intentional software reset.
-#[inline(never)]
 pub fn prepare_clean_reboot() {
     backup::update(BackupCrashTag::FLAG_CLEAN_REBOOT, 0);
     crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
 }
 
 /// Reset both `.uninit` crash-loop strike counter and backup-domain strikes after healthy uptime.
-#[inline(never)]
 pub fn clear_crash_strikes() {
     crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
     let mut tag = backup::read();

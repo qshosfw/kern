@@ -28,7 +28,6 @@ impl<B: SpiFlashBus> Py25q16FlashDriver<B> {
         self.release_power_down();
     }
 
-    #[inline(never)]
     fn send_cmd(&mut self, cmd: u8) {
         self.cs_assert();
         self.bus.write_byte(cmd);
@@ -96,7 +95,6 @@ impl<B: SpiFlashBus> Py25q16FlashDriver<B> {
         (self.read_status_reg() & 0x02) != 0
     }
 
-    #[inline(never)]
     fn begin_addr_cmd(&mut self, cmd: u8, addr: u32) {
         self.cs_assert();
         self.bus.write_byte(cmd);

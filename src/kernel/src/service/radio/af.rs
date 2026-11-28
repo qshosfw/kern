@@ -30,15 +30,12 @@ pub struct AfResponse {
     pub tx_3k: i8,
 }
 
-/// Declarative interface for RF baseband audio filtering, mic gain, and tone synthesis.
+/// Declarative interface for RF baseband audio filtering, mic gain, and tone gain.
 pub trait RfAudioPath {
     fn set_af_response(&mut self, response: &AfResponse);
     fn set_mic_gain(&mut self, gain_db: u8);
     fn set_rf_volume(&mut self, level: u8);
     fn set_tone_gain(&mut self, gain: u8);
-    fn play_tone(&mut self, freq_hz: u16, duration_ms: u16);
-    fn play_tone_sequence(&mut self, notes: &[ToneNote]);
-    fn play_tone_sequence_with_gain(&mut self, notes: &[ToneNote], gain: u8);
     /// Mute or unmute the baseband audio output path (speaker/earpiece).
     fn mute_audio(&mut self, mute: bool) {
         self.set_rf_volume(if mute { 0 } else { 5 });

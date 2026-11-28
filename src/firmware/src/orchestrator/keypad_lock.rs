@@ -3,9 +3,9 @@
 //! Provides keypad lock protection, sticky F-key toggles, hold-to-sleep / hold-to-close,
 //! and springy bottom-sheet overlays synchronized with the system menu aesthetic.
 
-use gfx::fonts::tomthumb::FONT as TOMTHUMB;
-use gfx::gui::animation::{HoldProgress, TransitionProgress};
-use gfx::{Canvas, Color, icons::Icon, text};
+use gfx::Canvas;
+use gfx::icons::Icon;
+use gfx::views::{HoldProgress, TransitionProgress};
 use kernel::event::{Event, KeyCode, KeyState};
 
 const TOAST_DURATION_MS: u16 = 1800;
@@ -166,7 +166,6 @@ impl KeypadLockManager {
         }
     }
 
-    #[inline(never)]
     fn show_toast(&mut self, toast: LockToast) {
         self.toast = toast;
         self.toast_remaining_ms = TOAST_DURATION_MS;
@@ -190,7 +189,6 @@ impl KeypadLockManager {
         self.inactivity_ms = 0;
     }
 
-    #[inline(never)]
     fn clear_hold_flags(&mut self) {
         self.held_code = None;
         self.delay_elapsed_ms = 0;
@@ -198,7 +196,6 @@ impl KeypadLockManager {
         self.is_long_press_triggered = false;
     }
 
-    #[inline(never)]
     pub fn reset_hold_tracking(&mut self) {
         self.clear_hold_flags();
         self.hold_ui_open = false;
@@ -211,13 +208,11 @@ impl KeypadLockManager {
     }
 
     /// Stop advancing hold and let the progress bar springily rewind to 0 before closing.
-    #[inline(never)]
     fn release_active_hold(&mut self) {
         self.clear_hold_flags();
         self.hold.active = false;
     }
 
-    #[inline(never)]
     fn clear_hold_overlay(&mut self, reset_anim: bool) {
         self.hold.reset();
         self.hold.required_ms = 0;
@@ -227,7 +222,6 @@ impl KeypadLockManager {
         }
     }
 
-    #[inline(never)]
     fn finish_hold_release(&mut self) -> bool {
         let was_long_press = self.is_long_press_triggered;
         let had_started_hold = self.hold_ui_open;
@@ -239,7 +233,6 @@ impl KeypadLockManager {
         was_long_press || had_started_hold
     }
 
-    #[inline(never)]
     fn begin_hold(&mut self, code: KeyCode, start_ms: u16, kind: HoldKind) {
         self.clear_hold_flags();
         self.held_code = Some(code);
@@ -255,7 +248,6 @@ impl KeypadLockManager {
 
     /// Process system events, hold-to-lock/unlock/sleep gestures, sticky F-key timeouts, and auto-lock.
     /// Returns `true` if the event was consumed/intercepted by the lock manager.
-    #[inline(never)]
     pub fn handle_event(
         &mut self,
         event: &Event,
@@ -466,7 +458,6 @@ impl KeypadLockManager {
         }
     }
 
-    #[inline(never)]
     fn render_overlay_active(&self, canvas: &mut Canvas) {
         let y_offset = self.sheet_anim.slide_offset(SHEET_H);
         if y_offset >= SHEET_H as i8 {
@@ -486,49 +477,18 @@ impl KeypadLockManager {
         };
         let title = utils::format::nth_cstr(&HOLD_STRINGS, t_idx);
         let msg = utils::format::nth_cstr(&HOLD_STRINGS, m_idx);
-
-        let sheet_y = 64i16 - SHEET_H as i16 + y_offset as i16;
-        gfx::widgets::draw_sheet_slide_up(canvas, title, SHEET_H, y_offset);
-
-        if self.sheet_anim.progress() < 8 {
-            return;
-        }
-
-        if show_bar {
-            gfx::icons::draw_icon(canvas, 6, sheet_y + 11, icon, Color::Fill);
-            text::draw_str(canvas, 17, sheet_y + 17, msg, &TOMTHUMB, Color::Fill);
-            gfx::widgets::draw_progress_bar(
-                canvas,
-                4,
-                sheet_y + 23,
-                120,
-                6,
-                self.hold.percent(),
-                true,
-            );
-        } else if show_hint {
-            draw_unlock_hint(canvas, 64, sheet_y + 18);
-        } else {
-            let total_w = 11 + text::str_width(msg, &TOMTHUMB);
-            let start_x = 64 - (total_w >> 1);
-            gfx::icons::draw_icon(canvas, start_x, sheet_y + 17, icon, Color::Fill);
-            text::draw_str(
-                canvas,
-                start_x + 11,
-                sheet_y + 23,
-                msg,
-                &TOMTHUMB,
-                Color::Fill,
-            );
-        }
+        gfx::views::dialog::draw_lock_sheet(
+            canvas,
+            title,
+            msg,
+            icon,
+            SHEET_H,
+            show_bar.then(|| self.hold.percent()),
+            show_hint,
+            y_offset,
+            self.sheet_anim.progress() >= 8,
+        );
     }
-}
-
-/// Render the bottom hint line: "HOLD [#] TO UNLOCK" with authentic inverted badge centered at center_x
-fn draw_unlock_hint(canvas: &mut Canvas, center_x: i16, base_y: i16) {
-    let start_x = center_x - 32;
-    text::draw_str(canvas, start_x, base_y + 5, "HOLD", &TOMTHUMB, Color::Fill);
-    gfx::widgets::dialog::draw_key_badge(canvas, start_x + 18, base_y, "#", "TO UNLOCK");
 }
 
 #[cfg(test)]

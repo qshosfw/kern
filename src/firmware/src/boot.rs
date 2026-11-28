@@ -30,7 +30,6 @@ pub use reset::clear_crash_strikes;
 
 /// Stages 2–6. Returns the ADC handle owned by the steady-state system loop.
 #[cfg(not(test))]
-#[inline(never)]
 pub fn run(hw: &mut crate::hardware::SystemHardware) -> py32_hal::adc::Adc {
     /// Independent watchdog window once recovery is behind us (ms).
     const WATCHDOG_TIMEOUT_MS: u32 = 6000;

@@ -4,7 +4,6 @@
 //! `CapImports` GOT binding, `BlockMap` paged configuration, process table
 //! registration, and execution class dispatch for installable packages.
 
-use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
 use kernel::runtime::KrxClass;
@@ -31,19 +30,23 @@ enum LoadedSlot {
     Background(usize),
 }
 
-#[inline(never)]
 fn reap_err(pid: kernel::proc::Pid, err: KrxLaunchError) -> KrxLaunchError {
     crate::orchestrator::reap_pid_only(pid);
     err
 }
 
-#[inline(never)]
 fn validate_krx_layout<'a>(
     summary: &'a kernel::runtime::KrxSummary<'_>,
-    sys_caps: Option<::abi::CapabilitySet>,
+    enforce_caps: bool,
     is_bg: bool,
     zone_a_off: usize,
-) -> Result<&'a kernel::runtime::SectionExecution, KrxLaunchError> {
+) -> Result<
+    (
+        &'a kernel::runtime::SectionExecution,
+        kernel::runtime::KrxProfile,
+    ),
+    KrxLaunchError,
+> {
     use super::background::ZONE_A_MAX_BYTES;
     let exec_class = summary
         .preamble
@@ -53,15 +56,25 @@ fn validate_krx_layout<'a>(
         return Err(KrxLaunchError::ImportBindingFailed);
     }
     let required_caps = summary.caps;
-    if let Some(granted) = sys_caps
-        && !granted.contains_all(required_caps)
-    {
+    let granted = crate::services::system_caps();
+    if enforce_caps && !granted.contains_all(required_caps) {
         return Err(KrxLaunchError::CapabilityDenied(
             required_caps.without(granted).first_cap(),
         ));
     }
     let exec = summary.exec().ok_or(KrxLaunchError::MissingExecution)?;
-    if sys_caps.is_some()
+    // Two-Tier Capability Security: packages requesting Signed System Tier capabilities
+    // (`FactoryCalib`, `RawPeripheral`, `StorageAdmin`) must carry a valid `SECTION_SEAL`.
+    if enforce_caps
+        && (required_caps.raw() & kernel::runtime::PRIVILEGED_CAP_MASK) != 0
+        && !kernel::runtime::KrxSeal::verify_summary(summary, exec)
+    {
+        let priv_missing = ::abi::CapabilitySet::from_raw(
+            required_caps.raw() & kernel::runtime::PRIVILEGED_CAP_MASK,
+        );
+        return Err(KrxLaunchError::CapabilityDenied(priv_missing.first_cap()));
+    }
+    if enforce_caps
         && kernel::sys::SystemDiagnostics::stack_margin_bytes()
             < (exec.min_stack_bytes as usize).min(96).saturating_add(32)
     {
@@ -70,8 +83,9 @@ fn validate_krx_layout<'a>(
     let profile = summary.profile(exec);
     let is_paged = matches!(exec_class, KrxClass::Paged);
     let is_p0 = profile.is_structured_paged();
+    let is_p1 = profile == kernel::runtime::KrxProfile::P1TransparentPaged;
     #[cfg(not(feature = "krx_paged"))]
-    if profile == kernel::runtime::KrxProfile::P1TransparentPaged {
+    if is_p1 {
         return Err(KrxLaunchError::UnsupportedProfile);
     }
     if is_bg && is_paged {
@@ -98,13 +112,22 @@ fn validate_krx_layout<'a>(
         avail
     };
     let pay_sz = exec.payload_size as usize;
-    if (is_p0 && pay_sz > code_limit) || (!is_paged && pay_sz > avail) {
+    if is_p1 {
+        if exec.payload_size > kernel::runtime::MAX_STREAMED_IMAGE_BYTES {
+            return Err(KrxLaunchError::PayloadTooLarge);
+        }
+    } else if (is_p0 && pay_sz > code_limit) || (!is_paged && pay_sz > avail) {
         return Err(KrxLaunchError::PayloadTooLarge);
     }
-    if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= avail {
+    let resident_prefix = if is_p1 {
+        (exec.got_offset as usize).min(code_limit)
+    } else {
+        exec.got_offset as usize
+    };
+    if (exec.got_offset & 3) != 0 || (!is_p1 && resident_prefix >= avail) {
         return Err(KrxLaunchError::ImportBindingFailed);
     }
-    if exec.payload_size > 0 {
+    if exec.payload_size > 0 && !is_p1 {
         let code_size = if exec.got_offset > 0 {
             (exec.got_offset as u32).min(code_limit as u32)
         } else {
@@ -113,8 +136,10 @@ fn validate_krx_layout<'a>(
         if (exec.entry_point & !1) >= code_size {
             return Err(KrxLaunchError::InvalidEntryPoint);
         }
+    } else if is_p1 && (exec.entry_point & !1) >= exec.payload_size.max(2) {
+        return Err(KrxLaunchError::InvalidEntryPoint);
     }
-    Ok(exec)
+    Ok((exec, profile))
 }
 
 fn activate_bg_slot(
@@ -141,7 +166,6 @@ fn activate_bg_slot(
     if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(pid) {
         pcb.mem_bytes = dst_cap as u16;
         pcb.set_state(kernel::proc::ProcState::ServiceIdle);
-        pcb.ledger.record_activation();
     }
     let rc = BgManager::invoke_slot_op(
         bg_slot_idx,
@@ -159,10 +183,9 @@ fn activate_bg_slot(
 fn load_krx_into_slot(
     storage: &mut crate::services::SystemStorage<'_>,
     path: &str,
-    sys_caps: Option<::abi::CapabilitySet>,
+    enforce_caps: bool,
     spawn: bool,
     start_arg: u32,
-    mut active_ctx: Option<&mut SysContext<'_, '_>>,
 ) -> Result<LoadedSlot, KrxLaunchError> {
     use super::background::BgManager;
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
@@ -172,7 +195,7 @@ fn load_krx_into_slot(
     let header_len = summary.preamble.header_len as usize;
     let is_bg = spawn && summary.exec_type.is_service_or_daemon();
     let zone_a_off = crate::data::arena::zone_a_used_bytes();
-    let exec = validate_krx_layout(summary, sys_caps, is_bg, zone_a_off)?;
+    let (exec, profile) = validate_krx_layout(summary, enforce_caps, is_bg, zone_a_off)?;
     let required_caps = summary.caps;
     let pay_sz = exec.payload_size as usize;
 
@@ -180,14 +203,7 @@ fn load_krx_into_slot(
 
     if spawn && !is_bg && super::native_runner::slot_ref().is_loaded {
         let old_pid = super::native_runner::slot_ref().pid;
-        if let Some(ctx) = active_ctx.as_deref_mut() {
-            unsafe {
-                super::native_runner::native_on_exit(&mut *(ctx as *mut SysContext<'_, '_>
-                    as *mut SysContext<'static, 'static>));
-            }
-        } else {
-            super::native_runner::init_native_slot();
-        }
+        unsafe { super::native_runner::native_on_exit() };
         if old_pid.0 != 0 {
             crate::orchestrator::reap_pid_only(old_pid);
         }
@@ -226,14 +242,9 @@ fn load_krx_into_slot(
         let slot_bytes = pay_sz
             .max((exec.got_offset as usize).saturating_add(16))
             .saturating_add(exec.min_heap_bytes as usize);
-        let Ok((idx, off)) = BgManager::alloc_slot(
-            pid,
-            summary.exec_type,
-            prio,
-            required_caps,
-            slot_bytes,
-            100,
-        ) else {
+        let Ok((idx, off)) =
+            BgManager::alloc_slot(pid, summary.exec_type, prio, required_caps, slot_bytes, 100)
+        else {
             return Err(reap_err(pid, KrxLaunchError::InsufficientRam));
         };
         bg_slot_idx = idx;
@@ -246,7 +257,11 @@ fn load_krx_into_slot(
         (zone_a_off, scratch_start.saturating_sub(zone_a_off))
     };
 
-    let to_read = if pay_sz > 0 { pay_sz.min(dst_cap) } else { dst_cap };
+    let to_read = if pay_sz > 0 {
+        pay_sz.min(dst_cap)
+    } else {
+        dst_cap
+    };
     let arena_buf = super::native_runner::transient_arena_bytes_mut();
     let Ok(payload_read) =
         storage.read_file_at(path, header_len, &mut arena_buf[dst_off..dst_off + to_read])
@@ -268,15 +283,138 @@ fn load_krx_into_slot(
         .map_err(|e| reap_err(pid, e));
     }
 
-    if let Err(e) = super::native_runner::load_native_from_storage(
-        path,
+    let hdr_base = hdr_buf.as_ptr() as usize;
+    let max_arena = crate::data::arena::TRANSIENT_ARENA_BYTES.saturating_sub(zone_a_off);
+    let load_base = (unsafe { super::native_runner::arena_base_ptr().add(zone_a_off) }) as u32;
+    let is_p0 = profile.is_structured_paged();
+    let is_paged = is_p0 || profile == kernel::runtime::KrxProfile::P1TransparentPaged;
+
+    super::native_runner::init_native_slot();
+    let (mut entry_thumb, got_base) = match super::native_runner::bind_krx_payload_at(
+        zone_a_off,
+        max_arena,
         payload_read,
-        hdr_buf.as_ptr(),
         summary,
+        exec,
         pid,
+        is_paged,
     ) {
-        return Err(reap_err(pid, e));
+        Ok(v) => v,
+        Err(e) => return Err(reap_err(pid, e)),
+    };
+
+    let slot = super::native_runner::slot_mut();
+    slot.pid = pid;
+    slot.is_paged = is_paged;
+    slot.profile = profile;
+    slot.got_base = got_base;
+    slot.caps = required_caps;
+    slot.set_pkg_path(path);
+    slot.pkg_ino = storage.lookup_ino(path).unwrap_or(0);
+
+    let overlay_size = super::native_runner::p0_overlay_size(exec) as u32;
+    let code_limit = max_arena as u32 - if is_p0 { overlay_size } else { 0 };
+
+    if is_p0 {
+        let leaf_mgr = unsafe { &mut *slot.overlay.leaf };
+        let (tbl_off, cnt) = summary.aux.leaf_map.map_or((0, 0), |map| {
+            (
+                (map.as_ptr() as usize).saturating_sub(hdr_base) as u32,
+                (map.len() / kernel::runtime::LeafEntry::SIZE).min(255) as u8,
+            )
+        });
+        leaf_mgr.configure(load_base + code_limit, overlay_size as u16, tbl_off, cnt);
+    } else if is_paged {
+        #[cfg(feature = "krx_paged")]
+        {
+            let win = unsafe { &mut *slot.overlay.window };
+            win.shadow_stack.clear();
+            let pay_size = if exec.payload_size > 0 {
+                exec.payload_size
+            } else {
+                payload_read as u32
+            };
+            let cache_base_off =
+                if exec.got_offset > 0 && (exec.got_offset as usize) < max_arena / 2 {
+                    (exec.got_offset + 7) & !7
+                } else {
+                    0
+                };
+            let avail_cache =
+                crate::data::arena::zone_b_cache_bytes().saturating_sub(cache_base_off as usize);
+            let (bmap_off, bmap_cnt) = summary.aux.block_map.map_or((0, 0), |map| {
+                (
+                    (map.as_ptr() as usize).saturating_sub(hdr_base) as u32,
+                    (map.len() / kernel::runtime::BlockEntry::SIZE) as u16,
+                )
+            });
+            win.cache.configure(
+                exec.page_size,
+                exec.cache_blocks,
+                avail_cache,
+                cache_base_off,
+                exec.rt_pin_mask,
+                header_len as u32 + cache_base_off as u32,
+                pay_size.saturating_sub(cache_base_off as u32),
+                bmap_off,
+                bmap_cnt,
+            );
+            if win.cache.page_count > 0 && (exec.entry_point & !1) >= cache_base_off as u32 {
+                let rel_ep = (exec.entry_point & !1) - cache_base_off as u32;
+                let init_page = (rel_ep >> win.cache.page_shift) as u16;
+                let init_off = (rel_ep & ((1u32 << win.cache.page_shift) - 1)) as u16;
+                if cache_base_off == 0 && bmap_off == 0 && init_page == 0 {
+                    let p0_sz = win.cache.code_total_size.min(win.cache.page_size() as u32) as u16;
+                    win.cache.access_clock = 1;
+                    win.cache.ways[0] = kernel::runtime::CacheWayMeta {
+                        resident_page: 0,
+                        loaded_size: p0_sz,
+                        last_access_tick: 1,
+                        flags: if (exec.rt_pin_mask & 1) != 0 {
+                            kernel::runtime::BLOCK_FLAG_PINNED
+                        } else {
+                            0
+                        },
+                        _pad: 0,
+                    };
+                    slot.current_page = 0;
+                    slot.current_slot = 0;
+                } else {
+                    slot.is_loaded = true;
+                    let resolved = super::native_runner::krx_page_fault(init_page, init_off);
+                    if resolved == 0 {
+                        super::native_runner::slot_mut().is_loaded = false;
+                        return Err(reap_err(pid, KrxLaunchError::InvalidEntryPoint));
+                    }
+                    entry_thumb = resolved;
+                }
+            }
+        }
     }
+
+    let slot = super::native_runner::slot_mut();
+    #[cfg(feature = "krx_paged")]
+    let code_size = if is_paged && !is_p0 {
+        let win = unsafe { &*slot.overlay.window };
+        ((win.cache.cache_base_off as u32)
+            + (win.cache.active_slots as u32 * win.cache.page_size() as u32))
+            .min(max_arena as u32)
+    } else if exec.got_offset > 0 {
+        (exec.got_offset as u32).min(code_limit)
+    } else {
+        (payload_read as u32).min(code_limit)
+    };
+    #[cfg(not(feature = "krx_paged"))]
+    let code_size = if exec.got_offset > 0 {
+        (exec.got_offset as u32).min(code_limit)
+    } else {
+        (payload_read as u32).min(code_limit)
+    };
+    slot.code_size = code_size as u16;
+    slot.entry_point = entry_thumb;
+    super::native_runner::set_live_api_caps(required_caps.raw());
+    slot.is_loaded = true;
+    super::fault::note_loaded_pkg(pid, path);
 
     Ok(LoadedSlot::Foreground(required_caps, app_name))
 }
@@ -284,77 +422,32 @@ fn load_krx_into_slot(
 /// Load a verified KRX package into Zone A (background daemon/service) or Zone B (foreground app).
 ///
 /// `start_arg` reaches the package's `on_start` (shortcut action ID; `0` for a plain launch).
-#[inline(never)]
-pub fn launch_krx_package(
-    ctx: &mut SysContext,
-    path: &str,
-    start_arg: u32,
-) -> Result<usize, KrxLaunchError> {
-    let caps = ctx.caps();
-    let storage_ptr = ctx.storage as *mut crate::services::SystemStorage<'_>;
-    match load_krx_into_slot(
-        unsafe { &mut *storage_ptr },
-        path,
-        Some(caps),
-        true,
-        start_arg,
-        Some(ctx),
-    )? {
+pub fn launch_krx_package(path: &str, start_arg: u32) -> Result<usize, KrxLaunchError> {
+    match load_krx_into_slot(crate::services::storage_mut(), path, true, true, start_arg)? {
         LoadedSlot::Background(slot_idx) => Ok(0xE0 + slot_idx),
         LoadedSlot::Foreground(required_caps, app_name) => {
             #[cfg(feature = "filesystem")]
-            crate::services::lang::bind_app(ctx.storage, path);
+            crate::services::lang::bind_app(crate::services::storage_mut(), path);
             super::native_runner::set_pending_start_arg(start_arg);
             let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
                 metadata: AppMetadata { name: app_name },
                 required_capabilities: required_caps,
             });
-            let _ = ctx.post_event(crate::apps::Shortcut::LaunchApp(dyn_id as u8).into());
+            let _ =
+                crate::services::post_event(crate::apps::Shortcut::LaunchApp(dyn_id as u8).into());
             Ok(dyn_id)
         }
     }
 }
 
-/// Load and invoke an in-place system action module (`scope::SYSTEM_ACTION`) without switching apps.
-pub fn invoke_action_krx_package<'a, 'hw>(
-    ctx: &mut SysContext<'a, 'hw>,
-    path: &str,
-) -> Result<(), KrxLaunchError> {
-    load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), false, 0, None)?;
-    #[cfg(feature = "filesystem")]
-    crate::services::lang::bind_app(ctx.storage, path);
-    unsafe {
-        let static_ctx =
-            &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
-        super::native_runner::native_on_start(static_ctx);
-    }
-    Ok(())
-}
-
-/// Forward a modal result to an in-place action module and unload its transient slot.
-pub fn finish_action_krx_package<'a, 'hw>(
-    ctx: &mut SysContext<'a, 'hw>,
-    result: &kernel::app::ModalResult<'_>,
-) -> kernel::app::EventResult {
-    unsafe {
-        let static_ctx =
-            &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
-        let res = super::native_runner::native_on_modal_result(static_ctx, result);
-        super::native_runner::native_on_exit(static_ctx);
-        #[cfg(feature = "filesystem")]
-        crate::services::lang::unbind_app();
-        res
-    }
-}
-
-/// Load and execute a standalone KRX module directly during early boot (before `SysContext` exists).
+/// Load and execute a standalone KRX module directly during early boot.
 pub fn try_launch_boot_module(
     _lcd: &mut drivers::st7565::St7565<bsp::LcdBus>,
     storage: &mut crate::services::SystemStorage<'_>,
     path: &str,
     param: usize,
 ) -> Result<u32, KrxLaunchError> {
-    load_krx_into_slot(storage, path, None, false, 0, None)?;
+    load_krx_into_slot(storage, path, false, false, 0)?;
 
     let res = unsafe {
         let rc = super::native_runner::invoke_boot_start(param);
@@ -365,8 +458,7 @@ pub fn try_launch_boot_module(
 }
 
 /// Display a detailed, actionable error popup for KRX package launch failures.
-#[inline(never)]
-pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
+pub fn show_launch_error_dialog(path: &str, err: KrxLaunchError) {
     let title = crate::apps::launcher::catalog::extract_filename(path);
     let mut msg_s = utils::format::InlineStr::<40>::new();
     let msg = if let KrxLaunchError::CapabilityDenied(Some(cap)) = err {
@@ -377,7 +469,7 @@ pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunch
         err.describe()
     };
 
-    ctx.show_confirm(
+    crate::services::show_confirm(
         crate::orchestrator::compositor::TAG_SYSTEM_ALERT,
         title,
         msg,
@@ -500,7 +592,7 @@ mod tests {
         let caps = ::abi::CapabilitySet::empty().with(::abi::Cap::ServiceRegistry);
         let pkg = build_bg_krx_package(KrxExecType::Daemon, caps);
         let summary = kernel::runtime::KrxPreamble::summarize(&pkg).expect("valid KRX summary");
-        let exec = validate_krx_layout(&summary, Some(::abi::CapabilitySet::ALL), true, 0)
+        let (exec, _) = validate_krx_layout(&summary, true, true, 0)
             .expect("Zone A daemon layout must validate");
 
         let pid = crate::orchestrator::proc_table_mut()
@@ -556,5 +648,19 @@ mod tests {
         assert_eq!(BgManager::active_count(), 0);
         assert_eq!(crate::data::arena::zone_a_used_bytes(), 0);
         crate::orchestrator::reap_pid_only(pid);
+    }
+
+    #[test]
+    fn privileged_capabilities_require_valid_section_seal() {
+        let priv_caps = ::abi::CapabilitySet::empty()
+            .with(::abi::Cap::DisplayDirect)
+            .with(::abi::Cap::StorageAdmin);
+        let unsigned_pkg = build_bg_krx_package(KrxExecType::App, priv_caps);
+        let summary =
+            kernel::runtime::KrxPreamble::summarize(&unsigned_pkg).expect("valid summary");
+        assert_eq!(
+            validate_krx_layout(&summary, true, false, 0).unwrap_err(),
+            KrxLaunchError::CapabilityDenied(Some(::abi::Cap::StorageAdmin))
+        );
     }
 }

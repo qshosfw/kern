@@ -11,7 +11,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from ... import REPO_ROOT
 from ...core.events import Event
@@ -54,17 +54,33 @@ class TerminalView:
 
         # Shell actions (visible in Shell mode)
         self.shell_tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        for icon, tip, cb in (
-            ("edit-copy-symbolic", "Copy (Ctrl+Shift+C)", self._copy_active),
-            ("edit-paste-symbolic", "Paste (Ctrl+Shift+V)", self._paste_vte),
-            ("zoom-out-symbolic", "Zoom Out", lambda: self._vte_zoom(-0.1)),
-            ("zoom-in-symbolic", "Zoom In", lambda: self._vte_zoom(0.1)),
-            ("view-refresh-symbolic", "Restart shell with latest radio env", lambda: self._spawn_vte(force=True)),
+        term_actions = Gio.SimpleActionGroup()
+        for name, cb in (
+            ("copy", self._copy_active),
+            ("paste", self._paste_vte),
+            ("zoom-in", lambda: self._vte_zoom(0.1)),
+            ("zoom-out", lambda: self._vte_zoom(-0.1)),
+            ("restart", lambda: self._spawn_vte(force=True)),
         ):
-            tb = Gtk.Button(icon_name=icon, tooltip_text=tip)
-            tb.add_css_class("flat")
-            tb.connect("clicked", lambda _b, f=cb: f())
-            self.shell_tools.append(tb)
+            act = Gio.SimpleAction.new(name, None)
+            act.connect("activate", lambda _a, _p, f=cb: f())
+            term_actions.add_action(act)
+        view.insert_action_group("term", term_actions)
+        restart_b = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Restart shell with latest radio env", action_name="term.restart")
+        restart_b.add_css_class("flat")
+        self.shell_tools.append(restart_b)
+        term_menu = Gio.Menu()
+        edit_sec = Gio.Menu()
+        edit_sec.append("Copy", "term.copy")
+        edit_sec.append("Paste", "term.paste")
+        term_menu.append_section(None, edit_sec)
+        zoom_sec = Gio.Menu()
+        zoom_sec.append("Zoom In", "term.zoom-in")
+        zoom_sec.append("Zoom Out", "term.zoom-out")
+        term_menu.append_section(None, zoom_sec)
+        more_b = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Terminal Menu", menu_model=term_menu)
+        more_b.add_css_class("flat")
+        self.shell_tools.append(more_b)
         bar.append(self.shell_tools)
 
         # RigWire actions (visible in RigWire mode)

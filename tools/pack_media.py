@@ -48,6 +48,132 @@ def crc16_ccitt(data: bytes) -> int:
     return crc
 
 
+def pack_bits_msb(rows: list[str], width: int) -> bytes:
+    """Continuous MSB-first bit-packing (`ceil(width * height / 8)` bytes, zero row-end padding)."""
+    out = bytearray()
+    cur = 0
+    nbits = 0
+    for r in rows:
+        if len(r) != width:
+            raise ValueError(f"row '{r}' has width {len(r)}, expected {width}")
+        for ch in r:
+            cur = (cur << 1) | (1 if ch == "#" else 0)
+            nbits += 1
+            if nbits == 8:
+                out.append(cur)
+                cur = 0
+                nbits = 0
+    if nbits > 0:
+        out.append(cur << (8 - nbits))
+    return bytes(out)
+
+
+def bdf_rows_to_bit_packed(hex_rows: list[str], w: int, h: int) -> bytes:
+    """Convert BDF hex rows (`rb` bytes/row) into continuous MSB-first `ceil(w * h / 8)` bytes."""
+    if w <= 0 or h <= 0:
+        return b""
+    rb = (w + 7) // 8
+    out = bytearray()
+    cur = 0
+    nbits = 0
+    for hex_row in hex_rows[:h]:
+        raw_b = bytes.fromhex(hex_row.ljust(rb * 2, "0")[: rb * 2])
+        for gx in range(w):
+            bit = (raw_b[gx >> 3] >> (7 - (gx & 7))) & 1
+            cur = (cur << 1) | bit
+            nbits += 1
+            if nbits == 8:
+                out.append(cur)
+                cur = 0
+                nbits = 0
+    if nbits > 0:
+        out.append(cur << (8 - nbits))
+    return bytes(out)
+
+
+BPE_TOKENS: list[int] = (
+    list(range(0x01, 0x0A))
+    + list(range(0x0B, 0x20))
+    + [0x7F, 0xC0, 0xC1]
+    + list(range(0xF5, 0xFE))
+)
+assert len(BPE_TOKENS) == 42
+
+
+def train_bpe_42(strings: list[bytes]) -> tuple[bytes, list[bytes]] | None:
+    """Train a 42-token (`96 B` padded) stack-bounded BPE table on UTF-8 strings."""
+    token_set = set(BPE_TOKENS)
+    if any(b in token_set for s in strings for b in s):
+        return None
+    seqs = [list(s) for s in strings]
+    sym_depth: dict[int, int] = {}
+    pairs_out = bytearray(96)
+    used = 0
+
+    for tidx, tok in enumerate(BPE_TOKENS):
+        counts: dict[tuple[int, int], int] = {}
+        for seq in seqs:
+            prev_pair = None
+            i = 0
+            n = len(seq)
+            while i + 1 < n:
+                pair = (seq[i], seq[i + 1])
+                d = max(sym_depth.get(pair[0], 1), sym_depth.get(pair[1], 1)) + 1
+                if d <= 12:
+                    if pair == prev_pair:
+                        prev_pair = None
+                        i += 1
+                        continue
+                    counts[pair] = counts.get(pair, 0) + 1
+                    prev_pair = pair
+                else:
+                    prev_pair = None
+                i += 1
+        if not counts:
+            break
+        best_pair, best_cnt = max(counts.items(), key=lambda kv: kv[1])
+        if best_cnt < 3:
+            break
+        a, b = best_pair
+        pairs_out[tidx * 2] = a
+        pairs_out[tidx * 2 + 1] = b
+        sym_depth[tok] = max(sym_depth.get(a, 1), sym_depth.get(b, 1)) + 1
+        used += 1
+        for s_idx, seq in enumerate(seqs):
+            out_s: list[int] = []
+            i = 0
+            n = len(seq)
+            while i < n:
+                if i + 1 < n and seq[i] == a and seq[i + 1] == b:
+                    out_s.append(tok)
+                    i += 2
+                else:
+                    out_s.append(seq[i])
+                    i += 1
+            seqs[s_idx] = out_s
+
+    if used == 0:
+        return None
+    raw_bytes = sum(len(s) for s in strings)
+    comp_bytes = 96 + sum(len(s) for s in seqs)
+    if comp_bytes + 32 >= raw_bytes:
+        return None
+    return bytes(pairs_out), [bytes(s) for s in seqs]
+    row_bytes = (width + 7) // 8
+    out = bytearray()
+    for r in rows:
+        if len(r) != width:
+            raise ValueError(f"row '{r}' has width {len(r)}, expected {width}")
+        for byte_i in range(row_bytes):
+            val = 0
+            for bit in range(8):
+                col = byte_i * 8 + bit
+                if col < width and r[col] == "#":
+                    val |= 0x80 >> bit
+            out.append(val)
+    return bytes(out)
+
+
 def pack_rows_msb(rows: list[str], width: int) -> bytes:
     row_bytes = (width + 7) // 8
     out = bytearray()
@@ -344,6 +470,7 @@ def pack_font_entry(cp: int, bmp_off: int, w: int, h: int, adv: int, xo: int, yo
 def build_tiny5_font(dst: Path) -> None:
     entries = bytearray()
     bitmaps = bytearray()
+    seen: dict[bytes, int] = {}
     cps = sorted(TINY5_GLYPHS.keys())
     for cp in cps:
         rows = TINY5_GLYPHS[cp]
@@ -351,27 +478,34 @@ def build_tiny5_font(dst: Path) -> None:
             entries.extend(pack_font_entry(cp, 0, 0, 0, 3, 0, 0))
         else:
             w, h = len(rows[0]), len(rows)
-            bmp_off = len(bitmaps)
-            bitmaps.extend(pack_rows_msb(rows, w))
+            bmp = pack_bits_msb(rows, w)
+            if bmp in seen:
+                bmp_off = seen[bmp]
+            else:
+                bmp_off = len(bitmaps)
+                seen[bmp] = bmp_off
+                bitmaps.extend(bmp)
             entries.extend(pack_font_entry(cp, bmp_off, w, h, w + 1, 0, 0))
 
     crc = crc16_ccitt(bytes(entries) + bytes(bitmaps))
     header = struct.pack(
         "<4sHHBBBBHH",
         FILE_ID_FONT_PACK,
-        0x0101,
+        0x0102,
         len(cps),
         6,  # line_height
         5,  # baseline
         3,  # Unicode BMP
-        1,  # has_tofu_fallback
+        3,  # has_tofu_fallback | FONT_PACK_FLAG_BIT_PACKED
         crc,
         0,
     )
     assert len(header) == 16
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(header + entries + bitmaps)
-    print(f"Packed {len(cps)} glyphs -> {dst} ({len(header)+len(entries)+len(bitmaps)} bytes)")
+    print(
+        f"Packed {len(cps)} glyphs ({len(seen)} unique bitmaps) -> {dst} ({len(header)+len(entries)+len(bitmaps)} bytes)"
+    )
 
 
 RANGE_PRESETS: dict[str, list[tuple[int, int]]] = {
@@ -437,15 +571,11 @@ def compile_bdf_font(src: Path, dst: Path, range_spec: str = "all") -> None:
             elif line == "ENDCHAR":
                 cp = cur["cp"]
                 if 0 <= cp <= 0xFFFF and allowed(cp) and cur["w"] <= 16 and cur["h"] <= 16:
-                    rb = (cur["w"] + 7) // 8 if cur["w"] > 0 else 0
-                    bmp = bytearray()
-                    for hex_row in cur["rows"][: cur["h"]]:
-                        raw_b = bytes.fromhex(hex_row.ljust(rb * 2, "0")[: rb * 2])
-                        bmp.extend(raw_b)
+                    bmp = bdf_rows_to_bit_packed(cur["rows"], cur["w"], cur["h"])
                     xo = max(-8, min(7, cur["xo"]))
                     yo = max(-8, min(7, cur["yo"]))
                     adv = max(0, min(255, cur["adv"]))
-                    glyphs[cp] = (cur["w"], cur["h"], adv, xo, yo, bytes(bmp))
+                    glyphs[cp] = (cur["w"], cur["h"], adv, xo, yo, bmp)
                 cur = None
                 in_bmp = False
             elif in_bmp and line:
@@ -457,16 +587,23 @@ def compile_bdf_font(src: Path, dst: Path, range_spec: str = "all") -> None:
             if cp in TINY5_GLYPHS and cp not in glyphs:
                 rows = TINY5_GLYPHS[cp]
                 w, h = len(rows[0]), len(rows)
-                glyphs[cp] = (w, h, w, 0, 0, pack_rows_msb(rows, w))
+                glyphs[cp] = (w, h, w, 0, 0, pack_bits_msb(rows, w))
 
     cps = sorted(glyphs.keys())
     entries = bytearray()
     bitmaps = bytearray()
+    seen: dict[bytes, int] = {}
     for cp in cps:
         w, h, adv, xo, yo, bmp = glyphs[cp]
-        bmp_off = len(bitmaps) if (w > 0 and h > 0) else 0
-        if w > 0 and h > 0:
-            bitmaps.extend(bmp)
+        if w > 0 and h > 0 and bmp and any(b != 0 for b in bmp):
+            if bmp in seen:
+                bmp_off = seen[bmp]
+            else:
+                bmp_off = len(bitmaps)
+                seen[bmp] = bmp_off
+                bitmaps.extend(bmp)
+        else:
+            w, h, bmp_off = 0, 0, 0
         entries.extend(pack_font_entry(cp, bmp_off, w, h, adv, xo, yo))
 
     line_height = max(1, min(255, ascent + descent))
@@ -475,12 +612,12 @@ def compile_bdf_font(src: Path, dst: Path, range_spec: str = "all") -> None:
     header = struct.pack(
         "<4sHHBBBBHH",
         FILE_ID_FONT_PACK,
-        0x0101,
+        0x0102,
         len(cps),
         line_height,
         baseline,
         3,  # Unicode BMP
-        1,  # has_tofu_fallback
+        3,  # has_tofu_fallback | FONT_PACK_FLAG_BIT_PACKED
         crc,
         0,
     )
@@ -488,7 +625,7 @@ def compile_bdf_font(src: Path, dst: Path, range_spec: str = "all") -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(header + entries + bitmaps)
     print(
-        f"Packed {len(cps)} BDF glyphs (line_h={line_height}, baseline={baseline}, range={range_spec}) -> "
+        f"Packed {len(cps)} BDF glyphs ({len(seen)} unique bitmaps, line_h={line_height}, baseline={baseline}, range={range_spec}) -> "
         f"{dst} ({len(header)+len(entries)+len(bitmaps)} bytes)"
     )
 
@@ -607,22 +744,35 @@ def compile_lang_pack(
     for k, v in raw_short.items():
         add_entry(f"{k} [short]", fnv1a_32_short(k.encode("utf-8")), v)
 
+    sorted_hashes = sorted(hashed.keys())
+    raw_vbs = [hashed[h][1] for h in sorted_hashes]
+    bpe_res = train_bpe_42(raw_vbs)
+    if bpe_res is not None:
+        bpe_dict, encoded_vbs = bpe_res
+        bpe_flag = 4
+        ver = 0x0101
+    else:
+        bpe_dict = b""
+        encoded_vbs = raw_vbs
+        bpe_flag = 0
+        ver = 0x0100
+
     entries = bytearray()
     pool = bytearray()
-    for h in sorted(hashed.keys()):
-        _k, vb = hashed[h]
+    for h, vb in zip(sorted_hashes, encoded_vbs):
         off = len(pool)
         if off >= (1 << 24):
             raise ValueError("LNG1 string pool exceeded 24-bit (16 MB) limit")
         pool.extend(vb)
         entries.extend(struct.pack("<IHBB", h, off & 0xFFFF, (off >> 16) & 0xFF, len(vb)))
 
-    flags = (1 if "__LANG_NAME__" in raw_full else 0) | (2 if raw_short else 0)
-    crc = crc16_ccitt(bytes(entries) + bytes(pool))
+    flags = (1 if "__LANG_NAME__" in raw_full else 0) | (2 if raw_short else 0) | bpe_flag
+    body = bytes(bpe_dict) + bytes(entries) + bytes(pool)
+    crc = crc16_ccitt(body)
     header = struct.pack(
         "<4sHH4sBBH",
         FILE_ID_LANG_PACK,
-        0x0100,
+        ver,
         len(hashed),
         code_bytes,
         font_hint & 0xFF,
@@ -631,7 +781,7 @@ def compile_lang_pack(
     )
     assert len(header) == 16
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(header + entries + pool)
+    dst.write_bytes(header + body)
 
     wide_labels = []
     if lint_fonts:
@@ -645,8 +795,8 @@ def compile_lang_pack(
 
     print(
         f"Packed {len(raw_full)} strings + {len(raw_short)} short variants "
-        f"(code={lang_code!r}, font_hint={font_hint}, 0 collisions) -> "
-        f"{dst} ({len(header)+len(entries)+len(pool)} bytes)"
+        f"(code={lang_code!r}, font_hint={font_hint}, bpe={bool(bpe_flag)}, 0 collisions) -> "
+        f"{dst} ({len(header)+len(body)} bytes)"
     )
     if wide_labels:
         print(f"  [lint] {len(wide_labels)} label(s) > {max_px}px (will auto-marquee when focused):")
@@ -672,7 +822,7 @@ def inspect_pack(path: Path) -> None:
         _, ver, count, code_b, fhint, flags, crc = struct.unpack("<4sHH4sBBH", data[:16])
         calc = crc16_ccitt(data[16:])
         code = code_b.rstrip(b"\x00").decode("ascii", errors="replace")
-        pool_off = 16 + (count << 3)
+        pool_off = (112 if (flags & 4) else 16) + (count << 3)
         print(f"LNG1 v{ver>>8}.{ver&0xFF}: {count} entries (code={code!r}, font_hint=0x{fhint:02X}, flags={flags}, pool_off={pool_off}, crc=0x{crc:04X} {'OK' if crc==calc else 'MISMATCH'})")
     else:
         raise ValueError(f"Unknown FourCC: {ident!r}")

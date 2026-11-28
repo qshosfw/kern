@@ -34,7 +34,7 @@ const DEFAULT_CALIB_RLE: [u8; 310] = [
 /// Expand the RLE-compressed default calibration image into a 512-byte buffer.
 #[inline(always)]
 pub fn fill_default_calibration(dst: &mut [u8; 512]) {
-    utils::format::decode_rle_escape(&DEFAULT_CALIB_RLE, 0xFF, 0, dst);
+    utils::codec::decode_rle_escape(&DEFAULT_CALIB_RLE, 0xFF, 0, dst);
 }
 
 pub const CALIB_FILE_PATH: &str = "/sys/calib.dat";
@@ -93,12 +93,12 @@ impl CalibSignature {
 }
 
 /// Compute a 32-byte silicon binding signature linking calibration data to the MCU UID.
-#[inline(never)]
 pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibSignature {
     static NONCE: [u8; 16] = [0x5Au8; 16];
     let hw_serial = bsp::uid::get_hardware_serial64();
     #[cfg(feature = "secure_fs")]
-    let auth_tag = crate::security::keychain::compute_hw_mac(mcu_uid, &NONCE, CALIB_SIG_IDENT, calib);
+    let auth_tag =
+        crate::security::keychain::compute_hw_mac(mcu_uid, &NONCE, CALIB_SIG_IDENT, calib);
     #[cfg(not(feature = "secure_fs"))]
     let auth_tag = {
         let mut key16 = [0u8; 16];
@@ -117,7 +117,6 @@ pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibS
 }
 
 /// Constant-time byte-slice equality to prevent timing side-channels on MAC tags.
-#[inline(never)]
 fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -145,7 +144,6 @@ pub fn verify_device_signature(
 
 /// Strict semantic validation of calibration memory block.
 /// Rejects erased flash (all 0xFF), zeroed memory (all 0x00), or physically invalid values.
-#[inline(never)]
 pub fn is_valid_calibration(calib: &[u8]) -> bool {
     if calib.len() < 512 {
         return false;
@@ -191,32 +189,6 @@ pub fn is_valid_calibration(calib: &[u8]) -> bool {
         && ((read_u16(0x18A) | read_u16(0x18C)) & !0x01FF) == 0
 }
 
-/// Declarative service interface for system calibration access.
-pub trait CalibrationService {
-    fn is_valid(&self) -> bool;
-    fn is_device_bound(&self) -> bool;
-    fn battery_calib_const(&self) -> u16;
-    fn battery_curve(&self) -> [u16; 6];
-    fn battery_mv_from_adc(&self, raw_adc: u16) -> u16;
-    fn battery_percent_from_adc(&self, raw_adc: u16) -> u8;
-    fn xtal_freq_low(&self) -> i16;
-    fn lna_calib(&self) -> u16;
-    fn mix_calib(&self) -> u16;
-    fn volume_gain(&self) -> u8;
-    fn dac_gain(&self) -> u8;
-    fn squelch_thresholds(
-        &self,
-        freq_hz: u32,
-        level: u8,
-    ) -> kernel::service::radio::squelch::SquelchThresholds;
-    fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8;
-    fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4];
-    fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8;
-    fn vox_thresholds(&self, level: u8) -> (u16, u16);
-    fn mic_gain_db(&self, level: u8) -> u8;
-    fn raw_bytes(&self) -> &[u8; 512];
-}
-
 /// Concrete in-memory system calibration holder (zero-copy 512-byte CalibrationBlock view).
 #[repr(C, align(4))]
 pub struct SystemCalibration {
@@ -230,12 +202,10 @@ const _: () = {
     assert!(core::mem::align_of::<SystemCalibration>() >= 4);
 };
 
-#[inline(never)]
 pub(crate) fn read_valid_calib(vfs: &mut SystemStorage, path: &str, buf: &mut [u8; 512]) -> bool {
     matches!(vfs.read_file(path, buf), Ok(512) if is_valid_calibration(buf))
 }
 
-#[inline(never)]
 fn write_protected_sys_file(
     vfs: &mut SystemStorage,
     path: &str,
@@ -252,24 +222,21 @@ fn write_protected_sys_file(
     res
 }
 
-#[inline(never)]
 fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 12]) {
     let sig = compute_device_signature(data, mcu_uid);
     let _ = write_protected_sys_file(vfs, CALIB_SIG_PATH, sig.as_bytes());
 }
 
-#[cfg(feature = "filesystem")]
 #[inline(never)]
-pub fn persist_calib_bundle(vfs: &mut SystemStorage, data: &[u8; 512]) {
+pub(crate) fn persist_calib_bundle(vfs: &mut SystemStorage, raw_calib: &[u8; 512]) {
     let _ = vfs.create_dir("/sys");
-    let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, data);
-    let _ = write_protected_sys_file(vfs, CALIB_BAK_PATH, data);
+    let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, raw_calib);
+    let _ = write_protected_sys_file(vfs, CALIB_BAK_PATH, raw_calib);
     let mcu_uid = bsp::uid::read_mcu_uid();
-    sign_and_save_sig(vfs, data, &mcu_uid);
+    sign_and_save_sig(vfs, raw_calib, &mcu_uid);
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 pub fn reformat_storage(
     vfs: &mut SystemStorage,
     fallback_calib: &[u8; 512],
@@ -314,8 +281,13 @@ impl SystemCalibration {
     }
 
     #[inline(always)]
-    pub fn is_valid(&self) -> bool {
+    pub const fn is_valid(&self) -> bool {
         self.valid
+    }
+
+    #[inline(always)]
+    pub const fn is_device_bound(&self) -> bool {
+        self.bound
     }
 
     #[inline(always)]
@@ -333,7 +305,6 @@ impl SystemCalibration {
         self.as_block().volume_gain
     }
 
-    #[inline(always)]
     pub fn squelch_thresholds(
         &self,
         freq_hz: u32,
@@ -386,7 +357,6 @@ impl SystemCalibration {
     }
 
     /// Load calibration into self from VFS with fallback to backup, factory default, and signature verification.
-    #[inline(never)]
     pub fn load_into(&mut self, vfs: &mut SystemStorage, mcu_uid: &[u8; 12]) {
         let mut loaded = read_valid_calib(vfs, CALIB_FILE_PATH, &mut self.raw);
 
@@ -426,7 +396,6 @@ impl SystemCalibration {
     }
 
     /// Atomically commit validated calibration with automatic backup, readback verification, and rollback.
-    #[inline(never)]
     pub fn commit_with_backup(
         &mut self,
         vfs: &mut SystemStorage,
@@ -460,7 +429,6 @@ impl SystemCalibration {
         Ok(())
     }
 
-    #[inline(never)]
     pub fn commit_slice(&mut self, vfs: &mut SystemStorage, data: &[u8]) -> Result<(), ()> {
         if data.len() != 512 || !is_valid_calibration(data) {
             return Err(());
@@ -493,84 +461,6 @@ impl SystemCalibration {
 
     #[inline(always)]
     pub fn raw_bytes(&self) -> &[u8; 512] {
-        &self.raw
-    }
-}
-
-impl CalibrationService for SystemCalibration {
-    fn is_valid(&self) -> bool {
-        self.valid
-    }
-
-    fn is_device_bound(&self) -> bool {
-        self.bound
-    }
-
-    fn battery_calib_const(&self) -> u16 {
-        self.battery_calib_const()
-    }
-
-    fn battery_curve(&self) -> [u16; 6] {
-        self.battery_curve()
-    }
-
-    fn battery_mv_from_adc(&self, raw_adc: u16) -> u16 {
-        self.battery_mv_from_adc(raw_adc)
-    }
-
-    fn battery_percent_from_adc(&self, raw_adc: u16) -> u8 {
-        self.battery_percent_from_adc(raw_adc)
-    }
-
-    fn xtal_freq_low(&self) -> i16 {
-        self.xtal_freq_low()
-    }
-
-    fn lna_calib(&self) -> u16 {
-        self.as_block().lna_calib()
-    }
-
-    fn mix_calib(&self) -> u16 {
-        self.as_block().mix_calib()
-    }
-
-    fn volume_gain(&self) -> u8 {
-        self.as_block().volume_gain()
-    }
-
-    fn dac_gain(&self) -> u8 {
-        self.as_block().dac_gain()
-    }
-
-    fn squelch_thresholds(
-        &self,
-        freq_hz: u32,
-        level: u8,
-    ) -> kernel::service::radio::squelch::SquelchThresholds {
-        self.squelch_thresholds(freq_hz, level)
-    }
-
-    fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8 {
-        self.tx_power_bias(freq_hz, power_level)
-    }
-
-    fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4] {
-        self.rssi_thresholds(freq_hz)
-    }
-
-    fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8 {
-        self.s_meter_level(freq_hz, raw_rssi)
-    }
-
-    fn vox_thresholds(&self, level: u8) -> (u16, u16) {
-        self.vox_thresholds(level)
-    }
-
-    fn mic_gain_db(&self, level: u8) -> u8 {
-        self.mic_gain_db(level)
-    }
-
-    fn raw_bytes(&self) -> &[u8; 512] {
         &self.raw
     }
 }

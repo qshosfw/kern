@@ -107,7 +107,7 @@ class HandsetStage(Gtk.Box):
         self._hold_timers: dict[str, int] = {}
         self._frame_pending = False
         self.alt_hints = False
-        self.playback_override: Callable[[], tuple[bytes, frozenset[str], str, bool] | None] | None = None
+        self._sizing = "desktop"
         self.on_rec_event: Callable[[], None] | None = None
 
         # --- Full-Scale Interactive 3D Handset DrawingArea ---
@@ -144,8 +144,11 @@ class HandsetStage(Gtk.Box):
 
         self.append(self.area)
 
-        # --- Compact Bottom Hardware Action Strip ---
-        strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3, halign=Gtk.Align.CENTER)
+        # --- Single Bottom Control Row: [hardware & keyboard pill]  [mic & headphone pill] ---
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.CENTER, margin_bottom=8)
+        self._bottom_row = controls
+
+        strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         strip.add_css_class("stage-toolbar")
         self._quick_btns: dict[str, Gtk.Button] = {}
         for bid, icon, tip, cb in (
@@ -154,6 +157,7 @@ class HandsetStage(Gtk.Box):
             ("headless", "video-display-symbolic", "Headless Mode (F6 · Hold MENU+EXIT 3s on radio to exit)", lambda: self._run_quick("headless")),
             ("record", "media-record-symbolic", "Record GIF (Ctrl+R)", self._on_record),
             ("shot", "camera-photo-symbolic", "Save Snapshot (Ctrl+S)", self._on_snapshot),
+            ("keyboard", "input-keyboard-symbolic", "Keyboard → Radio (Ctrl+K)", self._on_toggle_keyboard),
         ):
             b = Gtk.Button(icon_name=icon, tooltip_text=tip)
             b.add_css_class("flat")
@@ -162,24 +166,11 @@ class HandsetStage(Gtk.Box):
             b.connect("clicked", lambda _b, f=cb: f())
             strip.append(b)
             self._quick_btns[bid] = b
-        self.append(strip)
-
-        # --- Compact Bottom Status Row: Keyboard Bridge Chip + Discord-Style Mic & Headphone Toggles ---
-        bottom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.CENTER, margin_bottom=8)
-
-        self.kbd_chip = Gtk.Button()
-        self.kbd_chip.add_css_class("kbd-chip")
-        chip_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        self.kbd_chip_icon = Gtk.Image(icon_name="input-keyboard-symbolic")
-        self.kbd_chip_lbl = Gtk.Label(label="Keyboard → Radio")
-        chip_in.append(self.kbd_chip_icon)
-        chip_in.append(self.kbd_chip_lbl)
-        self.kbd_chip.set_child(chip_in)
-        self.kbd_chip.connect("clicked", lambda _b: self._on_toggle_keyboard())
-        bottom_row.append(self.kbd_chip)
+        self.kbd_btn = self._quick_btns["keyboard"]
+        controls.append(strip)
 
         # Discord-style Mic & Headphone controls (Headless RigWire audio + Kenwood sound card)
-        audio_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        audio_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         audio_grp.add_css_class("stage-toolbar")
 
         self.mic_btn = Gtk.Button(icon_name="microphone-sensitivity-muted-symbolic", tooltip_text="Microphone Mute / Unmute (Kenwood TX)")
@@ -196,8 +187,8 @@ class HandsetStage(Gtk.Box):
         self.hp_btn.connect("clicked", lambda _b: self._toggle_headphones())
         audio_grp.append(self.hp_btn)
 
-        bottom_row.append(audio_grp)
-        self.append(bottom_row)
+        controls.append(audio_grp)
+        self.append(controls)
 
         # Subscribe to runtime events
         runtime.events.subscribe("link.frame", lambda _e: self.schedule_frame(), main_thread=False)
@@ -246,10 +237,38 @@ class HandsetStage(Gtk.Box):
         self.refresh_state()
         self.area.queue_draw()
 
+    def set_compact(self, compact: bool) -> None:
+        """Mini-Dock: trim side/vertical gutters so the window hugs the handset."""
+        side = 2 if compact else 10
+        self.area.set_margin_start(side)
+        self.area.set_margin_end(side)
+        self.area.set_margin_top(2 if compact else 6)
+        self.set_spacing(4 if compact else 6)
+        self._bottom_row.set_margin_bottom(6 if compact else 8)
+
+    def set_sizing(self, mode: str) -> None:
+        """
+        Handset sizing policy (drawing always keeps aspect ratio and is centred):
+          "mini"    — fixed 1:1 handset; the Mini-Dock window hugs it.
+          "desktop" — 1:1 width (fixed side pane), height may shrink to 70 % on short screens.
+          "phone"   — fills the page, scaling between 70 % and the available space.
+        """
+        if mode == self._sizing:
+            return
+        self._sizing = mode
+        phone = mode == "phone"
+        self.set_hexpand(phone)
+        self.area.set_hexpand(phone)
+        self.area.set_halign(Gtk.Align.FILL if phone else Gtk.Align.CENTER)
+        self.area.set_valign(Gtk.Align.CENTER if mode == "mini" else Gtk.Align.FILL)
+        self.sync_geometry()
+
     def sync_geometry(self) -> tuple[int, int]:
         lw, lh = compute_handset_geometry(self.runtime.active_model)
-        self.area.set_content_width(lw)
-        self.area.set_content_height(lh)
+        kw = 0.7 if self._sizing == "phone" else 1.0
+        kh = 1.0 if self._sizing == "mini" else 0.7
+        self.area.set_content_width(int(lw * kw))
+        self.area.set_content_height(int(lh * kh))
         return lw, lh
 
     def _on_model_changed(self) -> None:
@@ -320,28 +339,23 @@ class HandsetStage(Gtk.Box):
             self.hp_btn.add_css_class("audio-muted")
 
     def update_keyboard_chip(self, *, enabled: bool, live_typing: bool) -> None:
-        for cls in ("on", "off", "typing"):
-            self.kbd_chip.remove_css_class(cls)
+        """Keyboard bridge state on the single keyboard icon: accent when routing keys, typing tint when live-typing."""
+        btn = self.kbd_btn
+        for cls in ("active-toggle", "kbd-typing"):
+            btn.remove_css_class(cls)
         if live_typing:
-            state, text = "typing", "Live typing · Esc to stop"
+            btn.add_css_class("kbd-typing")
+            tip = "Live typing · Esc or click to stop"
         elif enabled:
-            state, text = "on", "Keyboard → Radio"
+            btn.add_css_class("active-toggle")
+            tip = "Keyboard → Radio on · click to turn off (Ctrl+K) · hold Alt for key hints"
         else:
-            state, text = "off", "Keyboard off"
-        self.kbd_chip.add_css_class(state)
-        self.kbd_chip_icon.set_from_icon_name("input-keyboard-symbolic")
-        self.kbd_chip_lbl.set_text(text)
-        self.kbd_chip.set_tooltip_text(
-            "Click to stop live typing"
-            if live_typing
-            else "Click to toggle keyboard & scroll-wheel rotary control (Ctrl+K) · hold Alt for key hints"
-        )
+            tip = "Keyboard → Radio off · click to route keyboard & scroll wheel to the radio (Ctrl+K)"
+        btn.set_tooltip_text(tip)
+        btn.update_state([Gtk.AccessibleState.PRESSED], [1 if (enabled or live_typing) else 0])
 
     def current_display_state(self) -> tuple[bytes, frozenset[str], str, bool]:
-        if self.playback_override is not None:
-            ov = self.playback_override()
-            if ov is not None:
-                return ov
+        """Live radio state (never recorded clip frames; those render in the Capture preview)."""
         lk = self.runtime.link
         if not lk.connected:
             return bytes(1024), frozenset(self.pressed_keys), "off", False

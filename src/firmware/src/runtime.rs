@@ -13,7 +13,7 @@ pub mod fault;
 pub mod loader;
 #[cfg(feature = "krx_native")]
 pub mod native_runner;
-#[cfg(feature = "app_hibernation")]
+#[cfg(any(test, feature = "app_hibernation"))]
 pub mod swap;
 #[cfg(feature = "krx_native")]
 pub mod syscall;
@@ -26,19 +26,20 @@ pub use crate::data::arena::{
 pub use loader::*;
 #[cfg(feature = "krx_native")]
 pub use native_runner::*;
-#[cfg(feature = "app_hibernation")]
+#[cfg(any(test, feature = "app_hibernation"))]
 pub use swap::*;
 #[cfg(feature = "krx_native")]
 pub use syscall::*;
 
 /// Read and parse a KRX package header from storage into the top of `TRANSIENT_ARENA`'s scratch
 /// tail, returning `(hdr_buf, summary)` without touching P0 root code or allocating stack frames.
-#[inline(never)]
 pub fn read_krx_summary_in_scratch(
     storage: &mut crate::services::SystemStorage,
     path: &str,
-) -> Result<(&'static [u8], &'static kernel::runtime::KrxSummary<'static>), kernel::runtime::KrxLaunchError>
-{
+) -> Result<
+    (&'static [u8], &'static kernel::runtime::KrxSummary<'static>),
+    kernel::runtime::KrxLaunchError,
+> {
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
         (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
@@ -69,7 +70,6 @@ pub fn read_krx_summary_in_scratch(
 
 #[cfg(not(feature = "krx_native"))]
 pub fn launch_krx_package(
-    _ctx: &mut crate::services::SysContext<'_, '_>,
     _path: &str,
     _start_arg: u32,
 ) -> Result<usize, kernel::runtime::KrxLaunchError> {
@@ -77,9 +77,4 @@ pub fn launch_krx_package(
 }
 
 #[cfg(not(feature = "krx_native"))]
-pub fn show_launch_error_dialog(
-    _ctx: &mut crate::services::SysContext<'_, '_>,
-    _path: &str,
-    _err: kernel::runtime::KrxLaunchError,
-) {
-}
+pub fn show_launch_error_dialog(_path: &str, _err: kernel::runtime::KrxLaunchError) {}

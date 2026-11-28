@@ -108,6 +108,7 @@ class DockRuntime:
         self.on_hide_window: Callable[[], None] | None = None
         self.on_quit: Callable[[], None] | None = None
         self.on_toggle_mini: Callable[[], None] | None = None
+        self.mini_mode_state: Callable[[], bool] = lambda: False
         self.on_navigate_page: Callable[[str], None] | None = None
 
         self.tray = SystemTrayService(
@@ -477,84 +478,65 @@ class DockRuntime:
         if self.on_present_window is not None:
             self.on_present_window()
 
+    _TRAY_STATUS: dict[str, str] = {
+        "offline": "Not Connected",
+        "online": "Connected",
+        "tx": "Transmitting",
+        "headless": "Headless",
+        "hardened": "Hardened",
+        "dfu": "Bootloader",
+    }
+
     def build_tray_menu(self) -> list[dict[str, Any]]:
-        online = self.link.connected and self.link.link_mode == "rigwire"
-        state, _title, body = self._tray_state()
+        """
+        Short, HIG-style tray menu (no icons, one status line, at most one submenu):
+        status · Show/Mini-Dock · quick radio toggles or Connect ▸ · plugin items · Quit.
+        Everything else lives in the main window and the command palette.
+        """
+        lk = self.link
+        online = lk.connected and lk.link_mode == "rigwire"
+        state, _title, _body = self._tray_state()
+        name = lk.volume_name.removeprefix("Quansheng ") if lk.connected else APP_NAME
+        sep = {"separator": True}
+
         items: list[dict[str, Any]] = [
-            {"label": f"{self.link.volume_name if self.link.connected else 'Kern Dock'} ({state.upper()})", "enabled": False},
-            {"label": body, "enabled": False},
-            {"separator": True},
+            {"label": f"{name} — {self._TRAY_STATUS.get(state, '')}", "enabled": False},
+            sep,
             {"label": "Show Kern Dock", "handler": lambda: self.on_present_window() if self.on_present_window else None},
-            {"label": "Toggle Compact Mini-Dock", "handler": lambda: self.on_toggle_mini() if self.on_toggle_mini else None},
-            {"label": "Open External Terminal", "handler": lambda: self.open_external_terminal()},
-            {"separator": True},
+            {"label": "Mini-Dock", "checked": self.mini_mode_state(), "handler": lambda: self.on_toggle_mini() if self.on_toggle_mini else None},
+            sep,
         ]
-        if self.link.connected:
-            items.extend(
-                [
-                    {"label": "Swap VFO A / B", "enabled": online, "handler": self.link.toggle_vfo},
-                    {
-                        "label": "Flashlight",
-                        "enabled": online,
-                        "checked": self.link.torch_on,
-                        "handler": lambda: self.link.set_flashlight(not self.link.torch_on),
-                    },
-                    {
-                        "label": "Keypad Lock",
-                        "enabled": online,
-                        "checked": self.link.keypad_locked,
-                        "handler": lambda: self.link.set_keypad_lock(not self.link.keypad_locked),
-                    },
-                    {
-                        "label": "Headless Mode",
-                        "enabled": online,
-                        "checked": self.link.headless,
-                        "handler": lambda: self.link.set_headless(not self.link.headless),
-                    },
-                    {"label": "Disconnect", "handler": lambda: self.link.disconnect()},
-                ]
-            )
+
+        if lk.connected:
+            items += [
+                {"label": "Flashlight", "enabled": online, "checked": lk.torch_on, "handler": lambda: lk.set_flashlight(not lk.torch_on)},
+                {"label": "Keypad Lock", "enabled": online, "checked": lk.keypad_locked, "handler": lambda: lk.set_keypad_lock(not lk.keypad_locked)},
+                {"label": "Disconnect", "handler": lk.disconnect},
+            ]
         else:
-            for p in self.port_monitor.ports[:4]:
-                items.append(
-                    {
-                        "label": f"Connect {p.pretty_name} ({p.device})",
-                        "handler": lambda po=p: self.connect_async(po.device, po),
-                    }
-                )
-            for e in self.discover_emulators()[:4]:
-                items.append(
-                    {
-                        "label": f"Connect {e.name} [Emulated] ({e.host_port})",
-                        "handler": lambda url=e.wire_url: self.connect_async(url),
-                    }
-                )
-            items.append({"label": "Launch Offline Demo Radio", "handler": lambda: self.connect_async("demo")})
+            conn: list[dict[str, Any]] = [
+                {"label": p.pretty_name, "handler": lambda po=p: self.connect_async(po.device, po)} for p in self.port_monitor.ports[:5]
+            ]
+            conn += [{"label": f"{e.name} (Emulator)", "handler": lambda url=e.wire_url: self.connect_async(url)} for e in self.discover_emulators()[:3]]
+            if conn:
+                conn.append(sep)
+            conn.append({"label": "Demo Radio", "handler": lambda: self.connect_async("demo")})
+            items.append({"label": "Connect", "children": conn})
 
         plugin_items = self.tray_menu.items()
         if plugin_items:
-            items.append({"separator": True})
-            for pi in plugin_items:
-                items.append(
-                    {
-                        "label": pi.label,
-                        "enabled": pi.enabled() if pi.enabled else True,
-                        "checked": pi.toggle_state() if pi.toggle_state else None,
-                        "handler": pi.handler,
-                    }
-                )
-
-        items.extend(
-            [
-                {"separator": True},
+            items.append(sep)
+            items += [
                 {
-                    "label": "Hardened Mode",
-                    "checked": self.security.hardened,
-                    "handler": lambda: self.set_hardened(not self.security.hardened),
-                },
-                {"label": "Quit Kern Dock", "handler": lambda: self.on_quit() if self.on_quit else None},
+                    "label": pi.label,
+                    "enabled": pi.enabled() if pi.enabled else True,
+                    "checked": pi.toggle_state() if pi.toggle_state else None,
+                    "handler": pi.handler,
+                }
+                for pi in plugin_items
             ]
-        )
+
+        items += [sep, {"label": "Quit", "handler": lambda: self.on_quit() if self.on_quit else None}]
         return items
 
     def set_hardened(self, enabled: bool) -> None:

@@ -17,9 +17,9 @@ u32 leaf2_entry(u32 op, const KrxApiTable* api, void* param) {
         static const char lbl_hold[] = "Hold";
         static const char lbl_exit[] = "Cancel";
 
-        u32 is_chg = krx_call(api, OP_IO_POWER, SUB_IO_POWER_CHARGING, 0u, 0u);
-        u32 is_low = krx_call(api, OP_IO_POWER, SUB_IO_POWER_LOW, 0u, 0u) |
-                     krx_call(api, OP_IO_POWER, SUB_IO_POWER_CRITICAL, 0u, 0u);
+        u32 is_chg = krx_prop_get32(api, KRX_PROP_CHARGING);
+        u32 is_low = krx_prop_get32(api, KRX_PROP_BATT_LOW) |
+                     krx_prop_get32(api, KRX_PROP_BATT_CRIT);
 
         const char* msg = (is_low && !is_chg) ? msg_low : msg_ok;
         u8 msg_len = (is_low && !is_chg) ? (u8)(sizeof(msg_low) - 1u) : (u8)(sizeof(msg_ok) - 1u);

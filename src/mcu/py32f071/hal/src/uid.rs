@@ -168,7 +168,6 @@ impl SystemInfo {
 
     /// Reads the factory bootloader version string (e.g. `"7.02.02"`) directly from internal MCU
     /// Flash (`BOOTLOADER_ROM_SCAN_BASE..+BOOTLOADER_ROM_SCAN_LEN`), falling back to `"7.02.02"` on host targets.
-    #[inline(never)]
     pub fn bootloader_version_str() -> &'static str {
         #[cfg(all(not(test), target_arch = "arm"))]
         unsafe {
@@ -270,7 +269,6 @@ impl SystemInfo {
     }
 
     /// Reads the first 12 bytes (96-bit) of the unique device identifier.
-    #[inline(never)]
     pub fn read_uid_12() -> [u8; 12] {
         #[allow(unused_mut)]
         let mut uid = [0u8; 12];

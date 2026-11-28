@@ -52,6 +52,10 @@ impl SpiDevice for Py32Spi1 {
         let _ = hal::spi::write_byte(byte);
     }
     #[inline(always)]
+    fn write_bytes(&mut self, buf: &[u8]) {
+        let _ = hal::spi::write_bytes(buf);
+    }
+    #[inline(always)]
     fn transfer_byte(&mut self, byte: u8) -> u8 {
         hal::spi::transfer_byte(byte).unwrap_or(0)
     }
@@ -97,13 +101,12 @@ impl SpiDevice for Py32Spi2 {
 pub struct RadioBus;
 
 impl RadioBus {
-    #[inline(never)]
+    #[inline(always)]
     fn delay_bus() {
-        // ~0.5us setup/hold scaled to current sysclk (~22 cycles @ 48MHz, ~34 @ 72MHz)
-        cortex_m::asm::delay((hal::rcc::sysclk_hz() >> 21).max(1));
+        // Cached O(1) ~0.45us setup/hold scaled to active sysclk (zero RCC MMIO reads)
+        cortex_m::asm::delay(hal::rcc::radio_half_bit_cycles());
     }
 
-    #[inline(never)]
     fn bitbang_write_bits(data: u16, bits: u8) {
         for i in (0..bits).rev() {
             board_pins::BK_SCL.set_low();
@@ -119,7 +122,6 @@ impl RadioBus {
         board_pins::BK_SCL.set_low();
     }
 
-    #[inline(never)]
     fn begin_cmd(cmd: u8) {
         board_pins::BK_CSN.set_high();
         board_pins::BK_SCL.set_low();
@@ -129,7 +131,6 @@ impl RadioBus {
         Self::bitbang_write_bits(cmd as u16, 8);
     }
 
-    #[inline(never)]
     fn end_cmd() {
         board_pins::BK_CSN.set_high();
 
@@ -265,6 +266,10 @@ impl SpiDevice for LcdBus {
     #[inline(always)]
     fn write_byte(&mut self, byte: u8) {
         Py32Spi1.write_byte(byte);
+    }
+    #[inline(always)]
+    fn write_bytes(&mut self, buf: &[u8]) {
+        Py32Spi1.write_bytes(buf);
     }
     #[inline(always)]
     fn transfer_byte(&mut self, byte: u8) -> u8 {
@@ -492,7 +497,6 @@ impl Board {
         hal::uart::set_baud(baud);
     }
 
-    #[inline(never)]
     pub fn init() -> Self {
         // Disable unused timers & DAC to prevent dynamic clock power leakage
         unsafe {
@@ -579,7 +583,6 @@ pub fn set_status_led(led: StatusLed) {
 }
 
 /// Immediately quench all RF PA/TX stages, audio amp, and flashlight during a fault.
-#[inline(never)]
 pub fn bk4829_fault_quench() {
     use kern_platform_traits::radio::RadioBus as _;
     board_pins::AUDIO_PA.set_low();
@@ -687,9 +690,43 @@ impl BspKeyMatrix {
         }
     }
 
+    #[inline(always)]
+    fn set_all_cols_low() {
+        #[cfg(not(feature = "target_k10pro"))]
+        {
+            let bsrr = (Self::GPIOB_BASE + Self::BSRR_OFFSET) as *mut u32;
+            unsafe {
+                bsrr.write_volatile(Self::PIN_MASK_COLS << 16);
+            }
+        }
+        #[cfg(feature = "target_k10pro")]
+        {
+            for (idx, col) in board_pins::KB_COLS.iter().enumerate() {
+                #[cfg(feature = "swd_debug")]
+                if idx == 3 {
+                    continue;
+                }
+                let _ = idx;
+                col.set_low();
+            }
+        }
+    }
+
     /// Scan the 5-column matrix and dedicated PTT pin into a 19-bit active-key bitmask.
     pub fn scan_raw_mask() -> u32 {
         let settle_2us = (hal::rcc::sysclk_hz() >> 19) + 5;
+
+        // Fast idle check: pull all matrix columns low at once. If all row pull-ups remain high
+        // and PTT is inactive, zero keys (matrix, side1/2, or PTT) are pressed — skip 5-col settle loops.
+        Self::set_all_cols_low();
+        cortex_m::asm::delay(settle_2us);
+        let any_row_low = Self::read_rows_raw() != Self::PIN_MASK_ROWS;
+        let ptt_down = Self::read_ptt_raw();
+        if !any_row_low {
+            Self::set_cols_high();
+            return if ptt_down { 1 << 18 } else { 0 };
+        }
+
         let settle_1us = (settle_2us >> 1).max(16);
         let mut mask: u32 = 0;
 
@@ -772,7 +809,6 @@ impl kern_platform_traits::input::KeyMatrix for BspKeyMatrix {
 pub struct BspVoiceAdc;
 
 impl BspVoiceAdc {
-    #[inline(never)]
     unsafe fn adc_convert_single(cr2: u32) -> i32 {
         use py32_pac as pac;
         unsafe {
@@ -786,7 +822,6 @@ impl BspVoiceAdc {
         }
     }
 
-    #[inline(never)]
     unsafe fn adc_select_channel(ch: u32) {
         use py32_pac as pac;
         unsafe {

@@ -117,6 +117,9 @@ mod tests {
         }
         // Values outside the reserved negative band are preserved as Ok raw u32 values.
         assert!(!Status::is_err_raw((-100isize) as usize));
-        assert_eq!(Status::from_raw(0xDEAD_BEEF_u32 as usize), Ok(0xDEAD_BEEF_u32 as usize));
+        assert_eq!(
+            Status::from_raw(0xDEAD_BEEF_u32 as usize),
+            Ok(0xDEAD_BEEF_u32 as usize)
+        );
     }
 }

@@ -46,7 +46,6 @@ fn fmix64(mut k: u64) -> u64 {
 }
 
 /// Shared MurmurHash3 64-bit chunk-mixing accumulator over aligned 32-bit little-endian word pairs.
-#[inline(never)]
 fn murmur3_64_words(words: &[u32]) -> u64 {
     let mut h: u64 = 0x9e3779b97f4a7c15; // DeltaFW golden ratio seed
     let mut i = 0;
@@ -82,7 +81,6 @@ fn murmur3_64(bytes: &[u8]) -> u64 {
 
 /// Generates a deterministic 64-bit serial from the 16-byte CPU ID at 0x1FFF3000.
 /// 100% bitwise identical to DeltaFW's `GetSerial()` in `identifier.c`.
-#[inline(never)]
 pub fn get_hardware_serial64() -> u64 {
     let id_bytes = read_cpu_id_16();
     let mut words = [0u32; 4];
@@ -98,7 +96,6 @@ pub fn get_hardware_serial64() -> u64 {
 }
 
 /// Derives an IEEE EUI-48 (6-byte) MAC address from a precomputed 64-bit hardware serial into `dst`.
-#[inline(never)]
 pub fn mac_from_serial64_into(serial: u64, dst: &mut [u8; 6]) {
     let bytes = serial.to_be_bytes();
     for i in 0..6 {
@@ -149,7 +146,6 @@ pub fn get_mac_tag_str() -> &'static str {
 }
 
 /// Encodes any 64-bit hardware identifier into `dst` (13 Crockford Base32 chars + 1 Mod-37 checksum + NUL).
-#[inline(never)]
 pub fn encode_crockford64_into(serial: u64, dst: &mut [u8; 15]) {
     let (mut lo, mut hi) = (serial as u32, (serial >> 32) as u32);
     let ptr = dst.as_mut_ptr();
@@ -191,7 +187,6 @@ pub fn encode_crockford64(serial: u64) -> [u8; 15] {
 
 /// Populates `mac` (EUI-48) and `crockford` (14-char Base32 + NUL) from a single
 /// 64-bit hardware serial read, returning the raw 64-bit serial.
-#[inline(never)]
 pub fn fill_device_identity(mac: &mut [u8; 6], crockford: &mut [u8; 15]) -> u64 {
     let serial = get_hardware_serial64();
     mac_from_serial64_into(serial, mac);
@@ -235,7 +230,6 @@ impl FactoryCertStatus {
 
 /// Scans `bytes` for a `1-sq` / `qs-1` tag (case-insensitive) and returns a slice of up to 16
 /// printable serial bytes, or falls back to an un-tagged `>= 8`-char ASCII run in `[80..]` if present.
-#[inline(never)]
 pub fn extract_qs1_slice(bytes: &[u8]) -> Option<&[u8]> {
     let n = bytes.len();
     let p = bytes.as_ptr();

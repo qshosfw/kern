@@ -151,7 +151,6 @@ impl BatteryDriver {
         self.battery_type.get()
     }
 
-    #[inline(never)]
     pub fn set_calib_const(&mut self, calib_const: u16) {
         if calib_const >= 1000 && calib_const <= 3500 {
             self.calib_const = calib_const;
@@ -161,7 +160,6 @@ impl BatteryDriver {
 
     /// Converts raw 12-bit ADC reading (Channel 8 / PB0) to battery millivolts using precomputed
     /// Q16 calibration, ratiometric `vdda_mv` compensation (against 3300 mV nominal), and user tweak.
-    #[inline(never)]
     pub fn adc_to_mv(&self, raw_adc: u16, vdda_mv: u16) -> u16 {
         if raw_adc == 0 {
             return 0;
@@ -203,18 +201,21 @@ impl BatteryDriver {
     }
 
     /// Apply a user calibration offset.
-    #[inline(never)]
     pub fn set_calib_tweak(&mut self, mv: i16) {
         let delta = mv as i32 - self.calib_tweak_mv as i32;
         if delta == 0 {
             return;
         }
         self.calib_tweak_mv = mv;
-        Self::shift_mv(&mut self.smoothed_mv, delta);
-        Self::shift_mv(&mut self.ocv_mv, delta);
-        Self::shift_mv(&mut self.last_mv, delta);
-        Self::shift_mv(&mut self.base_mv, delta);
-        Self::shift_mv(&mut self.pre_tx_ocv, delta);
+        for v in [
+            &mut self.smoothed_mv,
+            &mut self.ocv_mv,
+            &mut self.last_mv,
+            &mut self.base_mv,
+            &mut self.pre_tx_ocv,
+        ] {
+            Self::shift_mv(v, delta);
+        }
         self.charge_counter = 0;
         self.drift_counter = 0;
         if self.ocv_mv > 0 {
@@ -222,14 +223,12 @@ impl BatteryDriver {
         }
     }
 
-    #[inline(never)]
     fn ema_u16(cur: u16, sample: u16, shift: u32) -> u16 {
         let weight = (1u32 << shift) - 1;
         let round = 1u32 << (shift - 1);
         ((cur as u32 * weight + sample as u32 + round) >> shift) as u16
     }
 
-    #[inline(never)]
     fn eval_hysteresis(&self, active: bool, pct: u8, limit_and_pct: u32) -> bool {
         let limit_mv = limit_and_pct as u16;
         let enter_pct = (limit_and_pct >> 16) as u8;
@@ -278,7 +277,6 @@ impl BatteryDriver {
         quiescent_ma.saturating_add(dynamic_ma)
     }
 
-    #[inline(never)]
     fn calculate_percentage(&self, ocv: u16) -> u8 {
         if self.has_calib_curve {
             let cal = if self.calib_const >= 1000 && self.calib_const <= 3500 {

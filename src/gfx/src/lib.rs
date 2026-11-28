@@ -1,15 +1,14 @@
 #![no_std]
 
+pub mod assets;
 pub mod bmp;
 pub mod canvas;
 pub mod draw;
-pub mod fonts;
-pub mod gui;
-pub mod icons;
-pub mod media;
+pub mod elements;
 pub mod text;
-pub mod widgets;
+pub mod views;
 
+pub use assets::{fonts, icons, media};
 pub use canvas::{Canvas, Color, LCD_HEIGHT, LCD_WIDTH};
 pub use kernel::ui::{Icon, StatusGlyph};
 
@@ -62,7 +61,7 @@ impl GfxGlyph {
 
     #[inline(always)]
     pub const fn y_offset(&self) -> i8 {
-        -(((self.metrics >> 5) & 0x07) as i8)
+        -(((self.metrics >> 5) as u8) as i8)
     }
 }
 

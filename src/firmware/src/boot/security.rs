@@ -3,12 +3,16 @@
 use crate::config::MasterConfig;
 use crate::security::PasscodeState;
 use crate::services::SystemStorage;
-use crate::services::radio::RadioMelodyExt;
 use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
 use drivers::st7565::St7565;
 
-#[inline(never)]
+fn play_boot_notes(radio: &mut Bk4829<'_, bsp::RadioBus>, notes: &[drivers::audio::ToneNote]) {
+    let seq = &mut crate::radio_state().tone_seq;
+    seq.enqueue(radio, notes);
+    seq.drain_blocking(radio);
+}
+
 fn wait_ms_wdt(mut ms: u16) {
     while ms > 0 {
         let step = ms.min(20);
@@ -18,14 +22,12 @@ fn wait_ms_wdt(mut ms: u16) {
     }
 }
 
-#[inline(never)]
 pub fn draw_locked_screen(lcd: &mut St7565<bsp::LcdBus>, sub_msg: &str) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, "Locked", "Too many tries", sub_msg, false);
+    gfx::views::dialog::draw_dialog(canvas, "Locked", "Too many tries", sub_msg, false);
     lcd.blit(canvas);
 }
 
-#[inline(never)]
 pub fn handle_lockout_penalty(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus>,
@@ -48,22 +50,24 @@ pub fn handle_lockout_penalty(
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
-#[inline(never)]
 pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus>) {
-    radio.play_beep(crate::services::melody::BeepType::Warning);
+    play_boot_notes(
+        radio,
+        crate::services::melody::MelodyEngine::beep_notes(
+            crate::services::melody::BeepType::Warning,
+        ),
+    );
     radio.set_status_led(bsp::StatusLed::Red);
     wait_ms_wdt(900);
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
-#[inline(never)]
 pub fn render_verify_modal(lcd: &mut St7565<bsp::LcdBus>, pct: u8) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog_progress(canvas, "", "Verifying...", pct);
+    gfx::views::dialog::draw_dialog_progress(canvas, "", "Verifying...", pct);
     lcd.blit(canvas);
 }
 
-#[inline(never)]
 pub fn lcd_verify_progress_hook(lcd: &mut St7565<bsp::LcdBus>) -> crate::security::ProgressHook {
     fn on_verify_progress(ctx: *mut (), pct: u8) {
         let lcd = unsafe { &mut *(ctx as *mut St7565<bsp::LcdBus>) };
@@ -88,12 +92,16 @@ pub fn handle_unlock_success(
         backlight.wake();
     }
     if !stealth && master_cfg.audio.key_beep != 0 {
-        radio.play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+        play_boot_notes(
+            radio,
+            crate::services::melody::MelodyEngine::dialog_notes(
+                crate::services::melody::DialogSoundType::Unlock,
+            ),
+        );
     }
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
-#[inline(never)]
 pub fn handle_unlock_failure(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus>,
@@ -118,16 +126,15 @@ pub fn handle_unlock_failure(
             &mut msg_buf,
         )
     };
-    gfx::widgets::draw_modal_popup(canvas, None, msg);
+    gfx::elements::draw_modal_popup(canvas, None, msg);
     lcd.blit(canvas);
 
     flash_error_and_pause(radio);
 }
 
-#[inline(never)]
 fn process_unlock_submission(
     hw: &mut crate::hardware::SystemHardware,
-    text_model: &mut gfx::gui::modules::text_input::TextInputModel,
+    text_model: &mut gfx::views::TextPromptState,
     passcode_state: &mut PasscodeState,
     master_cfg: &MasterConfig,
     stealth: bool,
@@ -156,15 +163,13 @@ fn process_unlock_submission(
     unlocked
 }
 
-#[inline(never)]
 pub fn run_boot_unlock_prompt(
     hw: &mut crate::hardware::SystemHardware,
     passcode_state: &mut PasscodeState,
     master_cfg: &MasterConfig,
     adc: &py32_hal::adc::Adc,
 ) {
-    use gfx::gui::modules::text_input::TextInputView;
-    use gfx::gui::view::View;
+    use gfx::views::{TextPromptView, View};
 
     let cfg = crate::security::passcode::get_passcode_config(hw.filesystem);
     if !cfg.is_set {
@@ -209,7 +214,7 @@ pub fn run_boot_unlock_prompt(
         cfg.expose_len,
     );
     text_model.is_k1 = master_cfg.is_k1();
-    let mut text_view = TextInputView::new();
+    let mut text_view = TextPromptView::new();
 
     loop {
         py32_hal::wdt::Watchdog::feed();
@@ -252,13 +257,7 @@ pub fn run_boot_unlock_prompt(
 
         // 3. Process submission
         if text_model.is_done && !text_model.buffer.is_empty() {
-            if process_unlock_submission(
-                hw,
-                text_model,
-                passcode_state,
-                master_cfg,
-                stealth,
-            ) {
+            if process_unlock_submission(hw, text_model, passcode_state, master_cfg, stealth) {
                 break;
             }
         }
