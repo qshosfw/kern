@@ -420,7 +420,8 @@ pub unsafe fn op_sys_query(a0: usize, a1: usize, a2: usize) -> usize {
             let Some(dst) = (unsafe { ptr_slice_mut(a1 as *mut u8, 7) }) else {
                 return 1;
             };
-            let (total_hrs, rem) = py32_hal::div::udivmod(crate::services::power().uptime_secs, 3600);
+            let (total_hrs, rem) =
+                py32_hal::div::udivmod(crate::services::power().uptime_secs, 3600);
             let (days, h) = py32_hal::div::udivmod(total_hrs, 24);
             let (_, d0) = py32_hal::div::udivmod(days, 28);
             let (m, s) = utils::math::div60_u16(rem as u16);

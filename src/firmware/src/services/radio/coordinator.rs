@@ -6,7 +6,7 @@
 
 use super::dwell::DwellController;
 pub use kernel::service::radio::*;
-use utils::units::{Frequency, Hertz};
+use utils::units::Frequency;
 
 /// Dual Watch / Multi-VFO dwelling operational modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,24 +213,27 @@ pub struct RadioCoordinator {
     pub vfo_memory_index: [Option<u16>; 3],
     /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
     pub adaptive_squelch: [AdaptiveSquelchTracker; 3],
+    /// Sub-Hz Fractional-N Vernier carrier offset in deci-Hertz (0.1 Hz units) per VFO.
+    pub fine_offset_dhz: [i16; 3],
 
-    // ── Large channel storage array (150+ bytes) ─────────────────────────
-    pub channels: [ChannelConfig; 3],
+    // ── Canonical 64-byte power-of-two VFO channel records (3 × 64 B = 192 B) ─
+    pub channels: [ChannelRecord; 3],
 }
 
 impl RadioCoordinator {
     pub const fn new() -> Self {
-        let mut ch_a = ChannelConfig::new(433_500_000);
-        ch_a.power = RfPowerLevel::High;
-        ch_a.bandwidth = Bandwidth::Narrow12k5;
+        let mut ch_a = ChannelRecord::new(433_500_000);
+        ch_a.power_mw = 5000;
+        ch_a.bandwidth_50hz = 250;
 
-        let mut ch_b = ChannelConfig::new(145_500_000);
-        ch_b.power = RfPowerLevel::Low;
-        ch_b.bandwidth = Bandwidth::Wide25k;
+        let mut ch_b = ChannelRecord::new(145_500_000);
+        ch_b.power_mw = 500;
+        ch_b.bandwidth_50hz = 500;
+        ch_b.flags = ChannelRecord::FLAG_WIDE_FILTER;
 
-        let mut ch_c = ChannelConfig::new(144_800_000);
-        ch_c.power = RfPowerLevel::Low;
-        ch_c.bandwidth = Bandwidth::Narrow12k5;
+        let mut ch_c = ChannelRecord::new(144_800_000);
+        ch_c.power_mw = 500;
+        ch_c.bandwidth_50hz = 250;
 
         Self {
             active_vfo: VfoSlot::VfoA,
@@ -270,6 +273,7 @@ impl RadioCoordinator {
                 AdaptiveSquelchTracker::new(),
                 AdaptiveSquelchTracker::new(),
             ],
+            fine_offset_dhz: [0; 3],
             channels: [ch_a, ch_b, ch_c],
         }
     }
@@ -282,13 +286,10 @@ impl RadioCoordinator {
             (144_800_000, RfPowerLevel::Low, Bandwidth::Narrow12k5),
         ];
         for (i, &(freq, power, bw)) in INIT_CH.iter().enumerate() {
-            let ch = &mut self.channels[i];
-            ch.rx_freq = Frequency::new(freq);
-            ch.step = StepSetting::DEFAULT;
-            ch.power = power;
-            ch.bandwidth = bw;
-            ch.squelch_level = 4;
-            ch.ste_mode = CssTailMode::Tone55Hz;
+            let mut ch = ChannelRecord::new(freq);
+            ch.set_power_level(power);
+            ch.set_bandwidth(bw);
+            self.channels[i] = ch;
         }
         self.fsk_config = FskSidecarConfig::DEFAULT;
         self.vfo_memory_index[1] = Some(1);
@@ -305,18 +306,18 @@ impl RadioCoordinator {
     }
 
     #[inline(always)]
-    pub fn active_channel(&self) -> &ChannelConfig {
+    pub fn active_channel(&self) -> &ChannelRecord {
         &self.channels[self.active_vfo.index().min(self.channels.len() - 1)]
     }
 
     #[inline(always)]
-    pub fn active_channel_mut(&mut self) -> &mut ChannelConfig {
+    pub fn active_channel_mut(&mut self) -> &mut ChannelRecord {
         let idx = self.active_vfo.index().min(self.channels.len() - 1);
         &mut self.channels[idx]
     }
 
     #[inline(always)]
-    pub fn listening_channel(&self) -> &ChannelConfig {
+    pub fn listening_channel(&self) -> &ChannelRecord {
         &self.channels[self.listening_vfo.index().min(self.channels.len() - 1)]
     }
 
@@ -353,7 +354,7 @@ impl RadioCoordinator {
         }
     }
 
-    pub fn effective_tx_channel(&self) -> &ChannelConfig {
+    pub fn effective_tx_channel(&self) -> &ChannelRecord {
         let slot = self.effective_tx_slot();
         &self.channels[slot.index().min(self.channels.len() - 1)]
     }
@@ -638,7 +639,7 @@ impl RadioCoordinator {
     pub fn toggle_reverse<R: RfChannel + RfSubaudible>(&mut self, radio: &mut R, slot: VfoSlot) {
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &mut self.channels[idx];
-        ch.reverse = !ch.reverse;
+        ch.set_reverse(!ch.reverse());
         let rx_freq = ch.effective_rx_freq();
         let rx_sub = ch.effective_rx_subaudible();
         if self.is_slot_hardware_active(slot) {
@@ -674,7 +675,7 @@ impl RadioCoordinator {
         offset_dhz: i16,
     ) {
         let idx = slot.index().min(self.channels.len() - 1);
-        self.channels[idx].fine_offset_dhz = offset_dhz;
+        self.fine_offset_dhz[idx] = offset_dhz;
         let carrier_hz = self.channels[idx].effective_rx_freq().raw();
         if self.is_slot_hardware_active(slot) {
             radio.set_sub_hz_offset(carrier_hz, offset_dhz);
@@ -692,12 +693,12 @@ impl RadioCoordinator {
     ) {
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &mut self.channels[idx];
-        ch.rx_freq = Frequency::new(freq_hz);
+        ch.rx_frequency_hz = freq_hz;
         if let Some(bw) = bandwidth {
-            ch.bandwidth = bw;
+            ch.set_bandwidth(bw);
         }
         if let Some(st) = step {
-            ch.step = st;
+            ch.set_step_setting(st);
         }
         if self.is_slot_hardware_active(slot) {
             radio.configure_channel(&self.channels[idx]);
@@ -729,7 +730,7 @@ impl RadioCoordinator {
         match op {
             0 => {
                 let mode = ModulationMode::from_u8(val);
-                self.channels[idx].modulation = mode;
+                self.channels[idx].set_modulation_mode(mode);
                 if hw_active {
                     RfModulation::set_modulation(radio, mode);
                 }
@@ -743,7 +744,7 @@ impl RadioCoordinator {
             }
             2 => {
                 let pwr = RfPowerLevel::from_u8(val);
-                self.channels[idx].power = pwr;
+                self.channels[idx].set_power_level(pwr);
                 if hw_active {
                     RfChannel::set_power_level(radio, pwr);
                 }
@@ -765,10 +766,10 @@ impl RadioCoordinator {
         let slot = self.active_vfo;
         let idx = slot.index().min(self.channels.len() - 1);
         if set_rx {
-            self.channels[idx].rx_subaudible = tone;
+            self.channels[idx].set_rx_subaudible_tone(tone);
         }
         if set_tx {
-            self.channels[idx].tx_subaudible = tone;
+            self.channels[idx].set_tx_subaudible_tone(tone);
         }
         if set_rx && self.is_slot_hardware_active(slot) {
             radio.set_rx_subaudible(tone);
@@ -865,8 +866,8 @@ impl RadioCoordinator {
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &self.channels[idx];
         let tx_inhibited =
-            ch.tx_inhibit() || ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0;
-        let carrier_active = ch.busy_lock && self.carrier_active && self.listening_vfo == slot;
+            ch.tx_inhibit() || ch.rx_frequency_hz == 0 || ch.effective_tx_freq().raw() == 0;
+        let carrier_active = ch.busy_lock() && self.carrier_active && self.listening_vfo == slot;
         let tone_matched = ch.effective_rx_subaudible() != SubaudibleTone::None
             && self.subaudible_matched
             && self.listening_vfo == slot;
@@ -1014,9 +1015,9 @@ impl RadioCoordinator {
         let tx_ch = self.effective_tx_channel();
         let tx_subaudible = tx_ch.effective_tx_subaudible();
         let tx_freq = tx_ch.effective_tx_freq();
-        let tx_power = tx_ch.power;
-        let tx_mod = tx_ch.modulation;
-        let tx_bw = tx_ch.bandwidth;
+        let tx_power = tx_ch.power_level();
+        let tx_mod = tx_ch.modulation_mode();
+        let tx_bw = tx_ch.bandwidth();
 
         radio.set_tx_subaudible(tx_subaudible);
         if tx_subaudible != SubaudibleTone::None {
@@ -1118,7 +1119,7 @@ impl RadioCoordinator {
         }
 
         let tx_ch = self.effective_tx_channel();
-        let ste_mode = tx_ch.ste_mode;
+        let ste_mode = tx_ch.ste_mode();
         if tx_ch.effective_tx_subaudible().is_ctcss() && ste_mode != CssTailMode::None {
             radio.send_css_tail(ste_mode);
             radio.mute_mic(true);
@@ -1172,7 +1173,8 @@ impl RadioCoordinator {
     /// Query the complete display activity state of a VFO.
     pub fn vfo_activity_state(&self, slot: VfoSlot) -> VfoActivityState {
         if self.is_transmitting
-            && self.effective_tx_channel().rx_freq == self.channels[slot.index()].rx_freq
+            && self.effective_tx_channel().rx_frequency_hz
+                == self.channels[slot.index()].rx_frequency_hz
         {
             VfoActivityState::Transmitting
         } else if self.arbitrator.locked_slot() == Some(slot) {
@@ -1192,12 +1194,12 @@ impl RadioCoordinator {
     }
 
     #[inline(always)]
-    pub fn vfo_channel(&self, slot: VfoSlot) -> &ChannelConfig {
+    pub fn vfo_channel(&self, slot: VfoSlot) -> &ChannelRecord {
         &self.channels[slot.index().min(self.channels.len() - 1)]
     }
 
     #[inline(always)]
-    pub fn vfo_channel_mut(&mut self, slot: VfoSlot) -> &mut ChannelConfig {
+    pub fn vfo_channel_mut(&mut self, slot: VfoSlot) -> &mut ChannelRecord {
         let idx = slot.index().min(self.channels.len() - 1);
         &mut self.channels[idx]
     }
@@ -1210,11 +1212,10 @@ impl RadioCoordinator {
             return;
         }
         let next = self.channels[idx]
-            .rx_freq
-            .raw()
+            .rx_frequency_hz
             .saturating_add_signed(step_hz)
             .clamp(18_000_000, 1_300_000_000);
-        self.channels[idx].rx_freq = utils::units::Frequency::new(next);
+        self.channels[idx].rx_frequency_hz = next;
         let eff_rx = self.channels[idx].effective_rx_freq();
         if self.is_slot_hardware_active(slot) {
             radio.set_rx_frequency(eff_rx);
@@ -1267,107 +1268,6 @@ impl RadioCoordinator {
                 radio.mute_mic(false);
             }
         }
-    }
-
-    #[inline(never)]
-    fn load_record_into_channel(ch: &mut ChannelConfig, rec: &crate::data::ChannelRecord) {
-        use crate::data::ChannelRecord;
-        ch.rx_freq = Frequency::<Hertz>::new(rec.rx_frequency_hz);
-        ch.tx_shift = if rec.tx_frequency_hz != 0 && rec.tx_frequency_hz != rec.rx_frequency_hz {
-            let rx = rec.rx_frequency_hz;
-            let tx = rec.tx_frequency_hz;
-            if tx >= rx {
-                RepeaterShift::Positive(Frequency::<Hertz>::new(tx - rx))
-            } else {
-                RepeaterShift::Negative(Frequency::<Hertz>::new(rx - tx))
-            }
-        } else {
-            RepeaterShift::Simplex
-        };
-        ch.step = StepSetting::from_hz_x10(rec.step_hz_x10);
-        ch.bandwidth =
-            if rec.bandwidth_50hz >= 400 || (rec.flags & ChannelRecord::FLAG_WIDE_FILTER) != 0 {
-                Bandwidth::Wide25k
-            } else if rec.bandwidth_50hz > 0 && rec.bandwidth_50hz <= 150 {
-                Bandwidth::Narrow6k25
-            } else {
-                Bandwidth::Narrow12k5
-            };
-        ch.modulation = ModulationMode::from_u8(rec.modulation);
-        ch.power = if rec.power_mw == 0 || rec.power_mw >= 4000 {
-            RfPowerLevel::High
-        } else if rec.power_mw >= 1500 {
-            RfPowerLevel::Medium
-        } else {
-            RfPowerLevel::Low
-        };
-        ch.rx_subaudible = rec.rx_subaudible_tone();
-        ch.tx_subaudible = rec.tx_subaudible_tone();
-        ch.squelch_level = rec.squelch_level;
-        ch.flags = rec.flags;
-        ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
-        ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
-        ch.compander = CompanderMode::from_u8(rec.compand);
-        ch.scrambler = if rec.scram_mode == 0 {
-            ScramblerMode::Off
-        } else {
-            ScramblerMode::InvertFrequency(rec.scram_param.max(rec.scram_mode))
-        };
-        ch.ste_mode = CssTailMode::from_u8(rec.ste);
-        ch.mic_gain_db = rec.mic_gain;
-        ch.roger_id = rec.roger;
-        ch.tot_limit_15s = rec.tx_limit;
-        ch.proto = rec.proto;
-        ch.proto_ref = rec.proto_ref;
-    }
-
-    #[inline(never)]
-    fn save_channel_to_record(ch: &ChannelConfig, rec: &mut crate::data::ChannelRecord) {
-        use crate::data::ChannelRecord;
-        const BW_50HZ: [u16; 3] = [500, 250, 125];
-        const PWR_MW: [u16; 3] = [500, 2000, 5000];
-
-        rec.rx_frequency_hz = ch.rx_freq.raw();
-        rec.tx_frequency_hz = match ch.tx_shift {
-            RepeaterShift::Simplex => 0,
-            RepeaterShift::Positive(off) => ch.rx_freq.raw().saturating_add(off.raw()),
-            RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
-        };
-        rec.step_hz_x10 = ch.step.in_hz_x10();
-        rec.bandwidth_50hz = BW_50HZ[ch.bandwidth as usize];
-        rec.modulation = ch.modulation.to_u8();
-        rec.power_mw = PWR_MW[ch.power as usize];
-        rec.set_rx_subaudible_tone(ch.rx_subaudible);
-        rec.set_tx_subaudible_tone(ch.tx_subaudible);
-        rec.squelch_level = ch.squelch_level;
-
-        let mut flags =
-            ch.flags & !(ChannelRecord::FLAG_REVERSE | ChannelRecord::FLAG_BUSY_LOCKOUT);
-        if ch.reverse {
-            flags |= ChannelRecord::FLAG_REVERSE;
-        }
-        if ch.busy_lock {
-            flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
-        }
-        rec.flags = flags;
-        rec.compand = ch.compander as u8;
-        match ch.scrambler {
-            ScramblerMode::Off => {
-                rec.scram_mode = 0;
-                rec.scram_param = 0;
-            }
-            ScramblerMode::InvertFrequency(code) => {
-                rec.scram_mode = 1;
-                rec.scram_param = code;
-            }
-        }
-        rec.ste = ch.ste_mode as u8;
-        rec.mic_gain = ch.mic_gain_db;
-        rec.roger = ch.roger_id;
-        rec.tx_limit = ch.tot_limit_15s;
-        rec.proto = ch.proto;
-        rec.proto_ref = ch.proto_ref;
-        rec.record_crc = rec.compute_crc();
     }
 
     // ── Memory Channel Loading & Serialization ──
@@ -1476,17 +1376,18 @@ impl RadioCoordinator {
         &mut self,
         slot: VfoSlot,
         memory_idx: Option<u16>,
-        rec: &crate::data::ChannelRecord,
+        rec: &ChannelRecord,
     ) {
         let idx = slot.index().min(self.channels.len() - 1);
-        Self::load_record_into_channel(&mut self.channels[idx], rec);
+        self.channels[idx] = *rec;
         self.vfo_memory_index[idx] = memory_idx;
     }
 
     /// Serialize current VFO tuning parameters into a ChannelRecord with zero attribute loss.
-    pub fn save_vfo_to_channel(&self, slot: VfoSlot, rec: &mut crate::data::ChannelRecord) {
+    pub fn save_vfo_to_channel(&self, slot: VfoSlot, rec: &mut ChannelRecord) {
         let idx = slot.index().min(self.channels.len() - 1);
-        Self::save_channel_to_record(&self.channels[idx], rec);
+        *rec = self.channels[idx];
+        rec.record_crc = rec.compute_crc();
     }
 
     /// Apply a comprehensive, generic ModulationProfile (modulation, bandwidth, AF response,
@@ -1499,8 +1400,8 @@ impl RadioCoordinator {
     ) {
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &mut self.channels[idx];
-        ch.modulation = profile.mode;
-        ch.bandwidth = profile.default_bandwidth;
+        ch.set_modulation_mode(profile.mode);
+        ch.set_bandwidth(profile.default_bandwidth);
 
         if self.is_slot_hardware_active(slot) {
             kernel::service::radio::RfModulation::set_modulation(radio, profile.mode);
@@ -1559,7 +1460,7 @@ impl RadioCoordinator {
                     return Some(RadioEvent::TotExpired);
                 } else if pwr.mcu_temp_deci_c >= 780 || (vdda_valid && pwr.vdda_mv < 2950) {
                     if !self.pa_thermal_foldback_active
-                        || self.effective_tx_channel().power != RfPowerLevel::Low
+                        || self.effective_tx_channel().power_level() != RfPowerLevel::Low
                     {
                         self.pa_thermal_foldback_active = true;
                         radio.tx_ramp_up(0);
@@ -1568,7 +1469,7 @@ impl RadioCoordinator {
                     && (pwr.mcu_temp_deci_c >= 650
                         || pwr.is_low
                         || (vdda_valid && pwr.vdda_mv < 3050))
-                    && self.effective_tx_channel().power == RfPowerLevel::High
+                    && self.effective_tx_channel().power_level() == RfPowerLevel::High
                 {
                     self.pa_thermal_foldback_active = true;
                     radio.tx_ramp_up(1);
@@ -1721,7 +1622,7 @@ impl RadioCoordinator {
         } else {
             self.dwell.on_carrier_refresh();
 
-            let tone_cfg = self.listening_channel().rx_subaudible != SubaudibleTone::None;
+            let tone_cfg = self.listening_channel().rx_subaudible != 0;
             let tone_present = if tone_cfg {
                 radio.is_subaudible_matched()
             } else {
@@ -1767,7 +1668,7 @@ impl RadioCoordinator {
             (((self.rssi_moving_avg[idx] as i32 * 3) + current_rssi as i32) >> 2) as i16;
 
         // Dynamic AM Linearity Mapping: adjust front-end gain inversely to carrier RSSI in AM mode
-        let listening_mod = self.channels[idx].modulation;
+        let listening_mod = self.channels[idx].modulation_mode();
         if matches!(listening_mod, ModulationMode::Am | ModulationMode::AmB) {
             radio.compensate_am_linearity(current_rssi);
         }
@@ -1872,19 +1773,19 @@ mod tests {
     }
 
     impl RfChannel for MockRadio {
-        fn configure_channel(&mut self, config: &ChannelConfig) {
+        fn configure_channel(&mut self, config: &ChannelRecord) {
             self.rx_freq = config.effective_rx_freq().raw();
-            self.bandwidth = config.bandwidth;
-            self.rx_subaudible = config.rx_subaudible;
+            self.bandwidth = config.bandwidth();
+            self.rx_subaudible = config.rx_subaudible_tone();
             if self.configured_count < self.configured_freqs.len() {
                 self.configured_freqs[self.configured_count] = self.rx_freq;
                 self.configured_count += 1;
             }
         }
-        fn set_rx_frequency(&mut self, freq: Frequency<Hertz>) {
+        fn set_rx_frequency(&mut self, freq: Frequency<utils::units::Hertz>) {
             self.rx_freq = freq.raw();
         }
-        fn set_tx_frequency(&mut self, freq: Frequency<Hertz>) {
+        fn set_tx_frequency(&mut self, freq: Frequency<utils::units::Hertz>) {
             self.tx_freq = freq.raw();
         }
         fn set_power_level(&mut self, _level: RfPowerLevel) {}
@@ -2039,8 +1940,8 @@ mod tests {
     fn test_coordinator_lock_restoration_reconfigures_radio_and_dual_watch() {
         let mut coord = RadioCoordinator::new();
         let mut radio = MockRadio::new();
-        coord.channels[0].rx_freq = Frequency::new(145_500_000);
-        coord.channels[1].rx_freq = Frequency::new(433_500_000);
+        coord.channels[0].rx_frequency_hz = 145_500_000;
+        coord.channels[1].rx_frequency_hz = 433_500_000;
         coord.active_vfo = VfoSlot::VfoA;
         coord.listening_vfo = VfoSlot::VfoA;
         coord.dual_watch = DualWatchMode::Off;
@@ -2079,9 +1980,9 @@ mod tests {
     fn test_coordinator_ptt_ctcss_lead_in_tail_and_bclo_gating() {
         let mut coord = RadioCoordinator::new();
         let mut radio = MockRadio::new();
-        coord.channels[0].rx_freq = Frequency::new(145_700_000);
-        coord.channels[0].tx_subaudible = SubaudibleTone::Ctcss(885);
-        coord.channels[0].busy_lock = true;
+        coord.channels[0].rx_frequency_hz = 145_700_000;
+        coord.channels[0].set_tx_subaudible_tone(SubaudibleTone::Ctcss(885));
+        coord.channels[0].set_busy_lock(true);
         coord.bclo_policy = BcloPolicy::CarrierOnly;
 
         let ui = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
@@ -2123,8 +2024,8 @@ mod tests {
     fn test_coordinator_dual_watch_freezes_when_locked_and_alternates() {
         let mut coord = RadioCoordinator::new();
         let mut radio = MockRadio::new();
-        coord.channels[0].rx_freq = Frequency::new(145_500_000);
-        coord.channels[1].rx_freq = Frequency::new(433_500_000);
+        coord.channels[0].rx_frequency_hz = 145_500_000;
+        coord.channels[1].rx_frequency_hz = 433_500_000;
         coord.listening_vfo = VfoSlot::VfoA;
         coord.dual_watch = DualWatchMode::EqualDwell { dwell_ms: 20 };
 
@@ -2152,13 +2053,13 @@ mod tests {
         let mut coord = RadioCoordinator::new();
         let mut radio = MockRadio::new();
         coord.dual_watch = DualWatchMode::Off;
-        coord.channels[0].rx_freq = Frequency::new(145_500_000);
-        coord.channels[0].bandwidth = Bandwidth::Narrow12k5;
-        coord.channels[0].rx_subaudible = SubaudibleTone::Ctcss(885);
-        coord.channels[0].busy_lock = true;
-        coord.channels[1].rx_freq = Frequency::new(433_500_000);
-        coord.channels[1].bandwidth = Bandwidth::Wide25k;
-        coord.channels[1].tx_subaudible = SubaudibleTone::DcsNormal(0o023);
+        coord.channels[0].rx_frequency_hz = 145_500_000;
+        coord.channels[0].set_bandwidth(Bandwidth::Narrow12k5);
+        coord.channels[0].set_rx_subaudible_tone(SubaudibleTone::Ctcss(885));
+        coord.channels[0].set_busy_lock(true);
+        coord.channels[1].rx_frequency_hz = 433_500_000;
+        coord.channels[1].set_bandwidth(Bandwidth::Wide25k);
+        coord.channels[1].set_tx_subaudible_tone(SubaudibleTone::DcsNormal(0o023));
         coord.cross_band = CrossBandMode::FixedTxOnB;
         coord.bclo_policy = BcloPolicy::ToneMismatchOnly;
         coord.listening_vfo = VfoSlot::VfoA;
@@ -2246,7 +2147,7 @@ mod tests {
             record.record_crc = record.compute_crc();
             coord.load_channel_into_vfo(&mut radio, VfoSlot::VfoA, Some(0), &record);
             assert_eq!(
-                coord.vfo_channel(VfoSlot::VfoA).step.in_hz(),
+                coord.vfo_channel(VfoSlot::VfoA).step_setting().in_hz(),
                 if units == 0 {
                     12_500
                 } else {
@@ -2342,7 +2243,7 @@ mod tests {
             TxPermission::BlockedTxInhibited
         );
         coord.channels[0].set_tx_inhibit(false);
-        coord.channels[0].tx_subaudible = SubaudibleTone::Ctcss(1035);
+        coord.channels[0].set_tx_subaudible_tone(SubaudibleTone::Ctcss(1035));
         assert_eq!(
             coord.request_ptt_start(&mut radio, vfo_app),
             TxPermission::Granted

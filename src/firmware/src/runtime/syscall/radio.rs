@@ -78,8 +78,8 @@ pub fn radio_prop_get(id: u8) -> usize {
         prop::RF_FREQ | prop::RF_BANDWIDTH | prop::RF_MODULATION | prop::RF_TX => {
             let ch = coord.active_channel();
             match id {
-                prop::RF_FREQ => ch.rx_freq.raw() as usize,
-                prop::RF_BANDWIDTH => ch.bandwidth.in_hz() as usize,
+                prop::RF_FREQ => ch.rx_frequency_hz as usize,
+                prop::RF_BANDWIDTH => ch.bandwidth().in_hz() as usize,
                 prop::RF_MODULATION => ch.modulation as usize,
                 _ => coord.is_transmitting as usize,
             }

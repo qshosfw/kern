@@ -87,11 +87,7 @@ fn stat_or_root<D: kernfs::BlockDevice>(
 }
 
 #[inline(always)]
-fn require_active_transfer(
-    t: &mut ActiveTransfer,
-    tid: u16,
-    now: u32,
-) -> Result<(), Status> {
+fn require_active_transfer(t: &mut ActiveTransfer, tid: u16, now: u32) -> Result<(), Status> {
     if !t.active || t.transfer_id != tid {
         return Err(Status::BadSession);
     }

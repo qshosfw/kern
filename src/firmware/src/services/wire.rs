@@ -300,7 +300,7 @@ fn active_radio_slot(
     instance: u8,
 ) -> (
     kernel::service::radio::VfoSlot,
-    &'static mut kernel::service::radio::ChannelConfig,
+    &'static mut kernel::service::radio::ChannelRecord,
 ) {
     use kernel::service::radio::VfoSlot;
     let coord = &mut crate::radio_state().coord;
@@ -381,12 +381,12 @@ fn on_handle_get(
             match facet {
                 FACET_RADIO_TUNING => {
                     c.wr_u32(ch.effective_rx_freq().raw());
-                    c.wr_u32(ch.step.in_hz());
+                    c.wr_u32(ch.step_setting().in_hz());
                     c.wr_u8(coord.active_vfo as u8);
                 }
                 FACET_RADIO_MODULATION => {
-                    c.wr_u8(ch.modulation.to_u8());
-                    c.wr_u32(ch.bandwidth.in_hz());
+                    c.wr_u8(ch.modulation);
+                    c.wr_u32(ch.bandwidth().in_hz());
                 }
                 FACET_RADIO_SQUELCH => {
                     let rv = crate::services::radio::radio_view();
@@ -395,7 +395,7 @@ fn on_handle_get(
                     c.wr_u8(rv.is_rx_open() as u8);
                 }
                 FACET_RADIO_TRANSMIT => {
-                    c.put(&[coord.is_slot_tx_active(slot) as u8, ch.power as u8]);
+                    c.put(&[coord.is_slot_tx_active(slot) as u8, ch.power_level() as u8]);
                 }
                 FACET_RADIO_DIGITAL => c.zeroes(2),
                 _ => return Err(Status::Unsupported),

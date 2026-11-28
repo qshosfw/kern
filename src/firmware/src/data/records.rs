@@ -7,7 +7,7 @@
 //!   single bit-shift (`offset = 16 + (index << N)`).
 //! - Naturally aligned `#[repr(C)]` layouts for zero-copy deserialization on Cortex-M0+.
 
-use super::channel_record::ChannelRecord;
+use super::ChannelRecord;
 use super::file_header::FILE_ID_VFO;
 
 // ── 1. ZoneRecord (32 Bytes, 2^5, `/user/zones.zn`, Header `ZONE`) ──────────

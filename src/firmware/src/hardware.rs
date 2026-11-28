@@ -327,7 +327,7 @@ impl<'a> SystemHardware<'a> {
             view.active_vfo = state.coord.active_vfo as u8;
             view.listening_vfo = state.coord.listening_vfo as u8;
             view.squelch_level = act.squelch_level;
-            view.tx_power = act.power as u8;
+            view.tx_power = act.power_level() as u8;
             view.flags = if state.coord.is_transmitting {
                 kernel::service::radio::RADIO_FLAG_TX
             } else {

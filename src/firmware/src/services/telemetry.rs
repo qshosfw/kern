@@ -14,7 +14,7 @@ pub fn sample_battery_and_system(adc: &Adc, audio_active: bool) {
         backlight_level: drivers::backlight::BACKLIGHT_DUTY
             .load(core::sync::atomic::Ordering::Relaxed),
         tx_active: coord.is_slot_tx_active(slot),
-        tx_power_level: ch.power as u8,
+        tx_power_level: ch.power_level() as u8,
         rx_active: coord.is_slot_rx_active(slot),
         audio_active,
         keypad_led: false,

@@ -826,7 +826,7 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
 // ── Kernel Facet Trait Implementations ──────────────────────────────────────
 
 impl<'a, B: Bk4829Bus> kernel::service::radio::RfChannel for Bk4829<'a, B> {
-    fn configure_channel(&mut self, config: &kernel::service::radio::ChannelConfig) {
+    fn configure_channel(&mut self, config: &kernel::service::radio::ChannelRecord) {
         let was_rx_active = self.rx_demod_active;
         if was_rx_active {
             if !crate::audio::AudioAmplifier::<B>::is_hangover_active() {
@@ -835,9 +835,12 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfChannel for Bk4829<'a, B> {
             self.set_af(AfType::Mute);
         }
         self.set_rx_frequency(config.effective_rx_freq());
-        <Self as kernel::service::radio::RfModulation>::set_bandwidth(self, config.bandwidth);
-        <Self as kernel::service::radio::RfModulation>::set_modulation(self, config.modulation);
-        self.set_power_level(config.power);
+        <Self as kernel::service::radio::RfModulation>::set_bandwidth(self, config.bandwidth());
+        <Self as kernel::service::radio::RfModulation>::set_modulation(
+            self,
+            config.modulation_mode(),
+        );
+        self.set_power_level(config.power_level());
         <Self as kernel::service::radio::RfSubaudible>::set_rx_subaudible(
             self,
             config.effective_rx_subaudible(),
@@ -847,7 +850,10 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfChannel for Bk4829<'a, B> {
             config.effective_tx_subaudible(),
         );
         <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, config.squelch_level);
-        <Self as kernel::service::radio::RfAudioPath>::set_af_response(self, &config.af_response);
+        <Self as kernel::service::radio::RfAudioPath>::set_af_response(
+            self,
+            &kernel::service::radio::AfResponse::default(),
+        );
         if was_rx_active {
             if self.is_squelch_open() {
                 self.set_af(self.active_demod_af);
