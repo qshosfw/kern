@@ -602,27 +602,27 @@ flowchart TB
 
 | Region | Budget | Allocation |
 |---|---|---|
-| **MCU Internal Flash** | 128 KB (`118 KB` budget / ratcheted ceiling in `kern.toml`) | Resident microkernel, drivers, KernFS, GFX, Ascon crypto, RigWire host, KRX loader |
-| **MCU Internal SRAM** | 16 KB | Static kernel state, 8 KB relocatable KRX execution arena, staging buffer, call &amp; IRQ stacks |
-| **External SPI Flash (`PY25Q16`)** | 2 MB (512 × 4 KB sectors) | KernFS: `/apps/*.krx`, `/apps/*.mod`, `/user/*`, `/pref/*.cfg`, `/sys/*`, fonts, icons &amp; locales |
+| **MCU Internal Flash** | 128 KB (`118 KB` budget / ratcheted ceiling in `kern.toml`) | Resident microkernel, drivers, KernFS, 4-layer GFX, Ascon crypto, RigWire host, KRX loader |
+| **MCU Internal SRAM** | 16 KB | Static kernel state, 6 KB relocatable/paged KRX execution arena (Zone A + Zone B), disjoint 512 B `KERNEL_IO_SCRATCH`, call &amp; IRQ stacks |
+| **External SPI Flash (`PY25Q16`)** | 2 MB (512 × 4 KB sectors) | KernFS v2.1: `/apps/*.krx`, `/apps/*.mod`, `/user/*`, `/pref/*.cfg`, `/sys/*`, `FNT1` fonts, icons &amp; `LNG1` locales |
 
 ### Workspace Crate Breakdown (`Cargo.toml`)
 
 | Crate | Path | Responsibility |
 |---|---|---|
-| **`abi`** | [`src/abi/`](src/abi/) | Single source of truth for syscall opcodes (`ops.rs`), capabilities (`cap.rs`), system properties (`prop.rs`), package headers (`pkg.rs`), C-ABI types (`types.rs`), and the `abigen` host generator that emits `sdk/c/krx_ops.h` |
-| **`kernel`** | [`src/kernel/`](src/kernel/) | Pure `#![no_std]` microkernel contracts: `app`, `boot`, `caps`, `dev`, `event` (`Key`, `Char`, `Encoder`, `Bus`, `Usb`, `Tick`), `ipc`, `mem`, `nav`, `power`, `proc`, `runtime`, `sched`, `security`, `service` (radio coordinator, tone gen, vernier, VOX, power, storage), `store`, `tag`, `ui`, and `wire` |
-| **`kernfs`** | [`src/fs/`](src/fs/) | Power-loss-safe copy-on-write 256-byte page SPI Flash filesystem (`device`, `format`, `fs`, `gc`) with host test suite |
-| **`drivers`** | [`src/drivers/`](src/drivers/) | Peripheral drivers implementing `Driver` (`descriptor`, `bus`, `init`): `bk4829` (`af`, `agc`, `fsk`, `registers`, `squelch`, `subaudible`, `tuning`), `bk1080`, `audio` (LN4898 PA + hangover), `backlight`, `battery` (voltage curves &amp; power sensing), `keyboard` (19-key debounced matrix), `st7565`, `py25q16`, `filesystem`, `usb` (`cdc`, `descriptors`, `msc`, `fat`), `uart`, `wire`, `gnss`, and `registry` |
-| **`gfx`** | [`src/gfx/`](src/gfx/) | 2D `Canvas` abstraction (monochrome &amp; 2-bit grayscale), primitives (`draw`, `bmp`), typography (`text`, `fonts`), 1-bit `icons`, binary `media` pack reader, `widgets`, and `gui` components (menus, option sheets, text input) |
-| **`crypto`** | [`src/crypto/`](src/crypto/) | `ascon` (Ascon-128 AEAD/MAC/Hash256), `crc` (CRC-16/CRC-32), `cobs` framing, `trng`, and fixed buffers |
+| **`abi`** | [`src/abi/`](src/abi/) | Single source of truth for the 22 orthogonal ABI v5 syscall opcodes (`ops.rs`), capabilities (`cap.rs`), unified `0x00..=0xFE` durable &amp; live properties (`prop.rs`), typed `Status` (`status.rs`), package headers (`pkg.rs`), C-ABI types (`types.rs`), and `abigen` (`./kern abi`) |
+| **`kernel`** | [`src/kernel/`](src/kernel/) | Pure `#![no_std]` microkernel contracts: `app`, `boot`, `caps`, `dev`, `event` (`Key`, `Char`, `Encoder`, `Bus`, `Usb`, `Tick`), lock-free `EventRing` `ipc`, `mem`, `nav`, `power`, `32 B` `Pcb` `proc`, `runtime` (`N0`/`N1`/`P0`/`P1 v2`), `sched`, `security`, `service` (radio coordinator, tone gen, vernier, VOX, power, storage, `SerialRouter`), `store`, `tag`, `ui`, and `wire` (`WireEngine` + RigWire v2) |
+| **`kernfs`** | [`src/fs/`](src/fs/) | Power-loss-safe copy-on-write 256-byte page SPI Flash filesystem v2.1 (`64 B` 12-root `Inode` up to `384 KiB`/file, `device`, `format`, `fs`, `gc`) with host test suite |
+| **`drivers`** | [`src/drivers/`](src/drivers/) | Peripheral drivers implementing `Driver` (`descriptor`, `bus`, `init`): `bk4829` (`af`, `agc`, `fsk`, `registers`, `squelch`, `subaudible`, `tuning`), `bk1080`, `audio` (LN4898 PA + hangover), `backlight`, `battery`, `keyboard` (19-key debounced matrix), `st7565` (dirty-span DMA), `py25q16`, `filesystem`, `usb` (`cdc`, `descriptors`, `msc`, `fat`), `gnss`, and `registry` |
+| **`gfx`** | [`src/gfx/`](src/gfx/) | 4-layer 2D graphics stack: `canvas` (`1,024 B` 1-bit VRAM + `dirty_x0/x1` DMA spans), `assets` (`FNT1` fonts &amp; `8×8`/`16×16` icons), `elements` (`frame`, `badge`, `row`, `tab_bar`, `meter`), and `views` (`dialog`, `list`, `grid`, `sheet`, `input`, `status_bar`, `toast`) |
+| **`crypto`** | [`src/crypto/`](src/crypto/) | `ascon` (Ascon-128 AEAD/MAC/Hash256), `crc` (CRC-16/CRC-32), in-place `cobs` framing, `trng`, and fixed buffers |
 | **`calib`** | [`src/calib/`](src/calib/) | 512-byte factory calibration parsing, TX power bias tables, squelch thresholds, crystal trim, and battery curves |
-| **`util`** | [`src/util/`](src/util/) | Divisionless Cortex-M0+ integer `math`, `dsp`, fixed-point `units` (`Frequency`), `bytes`, `format`, `gsm7`, `mbuf`, `path`, and packed `serde` helpers |
+| **`util`** | [`src/util/`](src/util/) | Cortex-M0+ integer `math`, unified `codec` (`PackBits`, `LZSS`, `BPE`), `dsp`, fixed-point `units` (`Frequency`), `bytes`, `format`, `gsm7`, `path`, and packed `serde` helpers |
 | **`hal-traits`** | [`src/hal-traits/`](src/hal-traits/) | Hardware-agnostic trait boundaries decoupling drivers from MCU silicon |
-| **`py32f071-pac` / `hal`** | [`src/mcu/py32f071/`](src/mcu/py32f071/) | Register PAC and bare-metal HAL for `PY32F071xB`: `rcc`, `gpio`, `spi`, `i2c`, `uart`, `usbd`, `adc`, `dma`, `tim`, `lptim`, `exti`, `pwr`, `rtc`, `flash`, `crc`, `comp`, `wdt`, `uid`, `delay` |
+| **`py32f071-pac` / `hal`** | [`src/mcu/py32f071/`](src/mcu/py32f071/) | Register PAC and bare-metal HAL for `PY32F071xB`: `rcc`, `div` (`32÷32` hardware divider), `dma` (7-channel `DMA1`), `gpio`, `spi` (DMA bursts), `i2c`, `uart` (circular `DMA1_Ch6` RX), `usbd`, `adc` (injected `JSQR` telemetry), `tim`, `lptim`, `exti`, `pwr`, `rtc`, `flash`, `crc`, `comp`, `wdt`, `uid`, `delay` |
 | **`bsp`** | [`src/board/uv-k1/`](src/board/uv-k1/) | Board support package (`board`, `hw`, `pins/k1_family`, `pins/k10_pro`, `entropy`, `uid`) with static dispatch |
-| **`firmware`** | [`src/firmware/`](src/firmware/) | Resident OS image: `boot` (crash-loop strike recovery, backup domain, security), `config` (modular `/pref/*.cfg`), `data` (static arena &amp; tables), `orchestrator` (app stack, compositor, modals, keypad lock), `runtime` (KRX N0/N1/P0/P1 loader &amp; syscalls), `services` (radio coordinator, melody presets, calibration, power, telemetry, RigWire dispatcher), `system` (main loop, `headless`, `remote` TX failsafe, `power` STOP sleep/APO), and `panic` |
-| **`kern-sdk`** | [`sdk/rust/`](sdk/rust/) | Rust `#![no_std]` PIC package author SDK wrapping `kern_call` |
+| **`firmware`** | [`src/firmware/`](src/firmware/) | Resident OS composition root: `boot` (crash-loop strike recovery, backup domain, security, non-blocking splash), `config` (6 modular `/pref/*.cfg` domains), `data` (`TRANSIENT_ARENA` &amp; `KERNEL_IO_SCRATCH`), `orchestrator` (app stack, compositor, modals, keypad lock), `runtime` (single-stage KRX loader &amp; ABI v5 syscalls), `services` (radio coordinator, `ToneSequencer` melody engine, calibration, power, telemetry, RigWire v2 dispatcher), `system` (main loop, `headless`, `remote` TX failsafe, `power` STOP sleep/APO), and `panic` |
+| **`kern-sdk`** | [`sdk/rust/`](sdk/rust/) | Rust `#![no_std]` PIC package author SDK wrapping ABI v5 `kern_call` (alongside `sdk/c`, `sdk/zig`, `sdk/luau`, and `sdk/host`) |
 
 ### Repository Layout
 

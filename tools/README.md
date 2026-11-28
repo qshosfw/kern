@@ -17,6 +17,9 @@ Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 - `./kern abi [--check]` — KRX ABI header generator. Not a script: it runs the `abigen` host binary of the `src/abi` crate, which prints `sdk/c/krx_ops.h` from the compiled `abi!` and `abi_sub!` tables.
 - `bloat.py` — ELF symbol, section, rodata, call-site, and monomorphization analyzer (`./kern bloat`). Supports baseline capture and delta diffing across commits.
 - `archlint.py` — Heuristic static architectural smell scanner (`./kern lint`). Flags layer violations, division traps, unaligned packed fields, oversized functions, and duplicate logic.
+- `check_firmware_invariants.py` — Strict CI/agent invariant verifier enforcing `R-NO-CHIP-IN-KERNEL` (`src/kernel` & `src/gfx` chip-isolation), zero-heap rules, driver decoupling debt tracking, and Flash budget ceilings.
+- `luau_krx.py` — Zero-VM `--!strict` Luau AOT subset compiler targeting freestanding ARMv6-M Thumb-1 `.krx` binaries against ABI v5 (`sdk/luau/krx.d.luau`).
+- `test_rigwire_sdk.py` — Cross-language SDK & protocol verification suite testing `RigWire v2`, Ascon-128 AEAD/MAC, COBS framing, FourCC tables, and `.krx` PIC compilation across Python, ANSI C89/C99, C++98, ES5 JS, Zig (`sdk/zig/krx.zig`), and Luau (`tools/luau_krx.py`).
 
 ### Packaging & Assets
 - `kfw.py` — `.kfw` v1.0 firmware container packer, inspector, verifier, signer, and extractor (`./kern kfw`). Zero-dependency Python stdlib implementation using 100% Ascon cryptography (`Ascon-Hash256`, `Ascon-AEAD128`, `Ascon-128-MAC`, post-quantum `LMS-Ascon`) and Solid `ARMTHUMB+LZMA2` compression.
@@ -34,6 +37,7 @@ Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 - `flasher.py` — Serial bootloader flashing utility invoked by `./kern flash`.
 
 ### Hardware Emulation & Integration Tests
+- `../emu/` (`kern-emu`) — Native Rust cycle-accurate ARMv6-M + `PY32F071xB` silicon twin (`DIV` @ `0x4002_3800`, 7-channel `DMA1`, `ADC1 JSQR`, `SPI1`/`SPI2`, `USART1` circular DMA, `PY25Q16` 2 MB NOR flash, `ST7565` LCD, `BK4829` RF transceiver). Run tests via `cargo test --manifest-path emu/Cargo.toml --target x86_64-unknown-linux-gnu`.
 - `emulator_helper.py` — Launcher for the external QEMU `uv-k5-v3` hardware emulator and Web UI (`./kern emu`). Respects `KERN_EMU_DIR` and `KERN_QEMU_BIN` environment overrides.
 - `test_kern_emulator.py` — Headless QEMU integration suite verifying boot sequences, keypad navigation, app lifecycle, and display rendering.
 - `test_wire_emu.py` — Headless QEMU integration test for RigWire protocol commands over virtualized serial.
