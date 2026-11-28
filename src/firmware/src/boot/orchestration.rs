@@ -121,7 +121,7 @@ pub fn run_boot_splash(
         let elapsed = now_ms.wrapping_sub(start_ms);
 
         if cur_frame < FRAMES {
-            let next_frame_ms = (target_splash_ms * cur_frame) / FRAMES;
+            let next_frame_ms = (target_splash_ms * cur_frame) >> 4;
             if elapsed >= next_frame_ms {
                 cur_frame += 1;
                 render_splash_frame(

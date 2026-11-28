@@ -18,14 +18,21 @@ pub const fn div10_u16(x: u16) -> (u16, u8) {
     (q, r)
 }
 
-/// Fast reciprocal division and modulo by 10 for 32-bit unsigned integers.
+/// Pure 32-bit shift-add division and modulo by 10 for Cortex-M0+ (zero `__aeabi_lmul`).
 ///
-/// Exact for all `x <= 4,294,967,295`.
-/// `((x * 0xCCCC_CCCD) >> 35)`.
+/// Exact for all `x <= u32::MAX` (Hacker's Delight §10-8).
 pub const fn div10_u32(x: u32) -> (u32, u8) {
-    let q = ((x as u64 * 0xCCCC_CCCD) >> 35) as u32;
-    let r = (x - q * 10) as u8;
-    (q, r)
+    let mut q = (x >> 1) + (x >> 2);
+    q = q + (q >> 4);
+    q = q + (q >> 8);
+    q = q + (q >> 16);
+    q >>= 3;
+    let mut r = x - q * 10;
+    if r >= 10 {
+        q += 1;
+        r -= 10;
+    }
+    (q, r as u8)
 }
 
 /// Fast reciprocal division and modulo by 100 for 16-bit unsigned integers.
@@ -95,12 +102,13 @@ pub const fn div60_u32(x: u32) -> (u32, u8) {
     (q, r)
 }
 
-/// Fast reciprocal division by 1000 for unsigned 32-bit integers.
+/// Pure 32-bit division by 1000 for Cortex-M0+ (zero `__aeabi_lmul`).
 ///
-/// Exact for all `x <= 4,294,967,295`.
-/// Uses a 64-bit multiply and 40-bit shift: `((x * 0x4189_374C) >> 40)`.
+/// Exact for all `x <= u32::MAX`.
 pub const fn div1000_u32(x: u32) -> u32 {
-    ((x as u64 * 0x4189_374C) >> 40) as u32
+    let (q10, _) = div10_u32(x);
+    let (q100, _) = div10_u32(q10);
+    div10_u32(q100).0
 }
 
 /// Fast reciprocal division by 7600 for unsigned 32-bit integers.
@@ -119,12 +127,12 @@ pub const fn div5200_u32(x: u32) -> u32 {
     ((x as u64 * 0xC9A6_34FD) >> 44) as u32
 }
 
-/// Fast reciprocal division by 10000 for unsigned 32-bit integers.
+/// Pure 32-bit division by 10000 for Cortex-M0+ (zero `__aeabi_lmul`).
 ///
 /// Exact for all `x <= u32::MAX`.
 #[inline(always)]
 pub const fn div10000_u32(x: u32) -> u32 {
-    ((x as u64 * 0xD1B7_1759) >> 45) as u32
+    div10_u32(div1000_u32(x)).0
 }
 
 #[cfg(test)]
