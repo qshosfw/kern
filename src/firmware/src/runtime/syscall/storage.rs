@@ -3,13 +3,6 @@
 use super::{parse_str, parse_user_path, ptr_ref, ptr_slice, ptr_slice_mut, str_or_default};
 use kernel::proc::abi::{KrxDirEntry, KrxFsReq};
 
-#[inline(always)]
-fn active_storage_mut()
--> Option<&'static mut kernfs::KernFS<'static, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>>
-{
-    Some(crate::services::storage_mut())
-}
-
 fn app_config_path_into<'a>(app_name: &str, buf: &'a mut [u8; 32]) -> &'a str {
     const PFX: &[u8] = b"/pref/app/";
     const SFX: &[u8] = b".cfg";
@@ -319,30 +312,22 @@ unsafe fn dispatch_fs_write(
 }
 
 pub unsafe fn op_fs_read(a0: usize, a1: usize, _a2: usize) -> usize {
-    let Some(st) = active_storage_mut() else {
-        return 0;
-    };
     let Some(r) = (unsafe { ptr_ref(a1 as *const KrxFsReq) }) else {
         return 0;
     };
-    unsafe { dispatch_fs_read(st, a0 as u8, r) }
+    unsafe { dispatch_fs_read(crate::services::storage_mut(), a0 as u8, r) }
 }
 
 pub unsafe fn op_fs_write(a0: usize, a1: usize, _a2: usize) -> usize {
-    let Some(st) = active_storage_mut() else {
-        return 1;
-    };
     let Some(r) = (unsafe { ptr_ref(a1 as *const KrxFsReq) }) else {
         return 1;
     };
-    unsafe { dispatch_fs_write(st, a0 as u8, r) }
+    unsafe { dispatch_fs_write(crate::services::storage_mut(), a0 as u8, r) }
 }
 
 pub unsafe fn op_fs_meta(a0: usize, a1: usize, a2: usize) -> usize {
     use ::abi::sub::fs_meta;
-    let Some(st) = active_storage_mut() else {
-        return 1;
-    };
+    let st = crate::services::storage_mut();
     let path = a1 as *const u8;
     let plen = a2 as u8;
     match a0 as u8 {

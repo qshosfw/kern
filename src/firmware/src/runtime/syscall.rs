@@ -190,6 +190,7 @@ pub unsafe fn ptr_ref_mut<'a, T>(ptr: *mut T) -> Option<&'a mut T> {
     unsafe { p.as_mut() }
 }
 
+#[inline(never)]
 pub unsafe fn ptr_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if guest_range_valid(ptr as usize, len, false) {
         Some(unsafe { core::slice::from_raw_parts(ptr, len) })
@@ -198,6 +199,7 @@ pub unsafe fn ptr_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     }
 }
 
+#[inline(never)]
 pub unsafe fn ptr_slice_mut<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]> {
     if guest_range_valid(ptr as usize, len, true) {
         Some(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
@@ -206,12 +208,13 @@ pub unsafe fn ptr_slice_mut<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]
     }
 }
 
-pub unsafe fn slice_or_empty<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
-    unsafe { ptr_slice(ptr, len) }.unwrap_or(&[])
-}
-
+#[inline(never)]
 pub unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     unsafe { ptr_slice(ptr, len) }.and_then(utils::format::ascii_str)
+}
+
+pub unsafe fn slice_or_empty<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+    unsafe { ptr_slice(ptr, len) }.unwrap_or(&[])
 }
 
 pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {

@@ -86,6 +86,19 @@ fn stat_or_root<D: kernfs::BlockDevice>(
     }
 }
 
+#[inline(always)]
+fn require_active_transfer(
+    t: &mut ActiveTransfer,
+    tid: u16,
+    now: u32,
+) -> Result<(), Status> {
+    if !t.active || t.transfer_id != tid {
+        return Err(Status::BadSession);
+    }
+    t.last_activity_ms = now;
+    Ok(())
+}
+
 /// Dispatch a `CH_DATA` (0x03) opcode directly against `KernFS`.
 #[inline(never)]
 pub fn dispatch_data_op<D: kernfs::BlockDevice, H: WireDataHost>(
@@ -158,10 +171,7 @@ pub fn dispatch_data_op<D: kernfs::BlockDevice, H: WireDataHost>(
             let tid = c.rd_u16()?;
             let off = c.rd_u32()? as usize;
             let length = c.rd_u16()?;
-            if !t.active || t.transfer_id != tid {
-                return Err(Status::BadSession);
-            }
-            t.last_activity_ms = now;
+            require_active_transfer(t, tid, now)?;
             if t.mode == TRANSFER_MODE_WRITE {
                 let data = c.inp;
                 let end = off.checked_add(data.len()).ok_or(Status::InvalidArg)?;
@@ -197,10 +207,7 @@ pub fn dispatch_data_op<D: kernfs::BlockDevice, H: WireDataHost>(
         OP_TRANSFER_CLOSE => {
             let tid = c.rd_u16()?;
             let expected_crc = c.rd_u32()?;
-            if !t.active || t.transfer_id != tid {
-                return Err(Status::BadSession);
-            }
-            t.last_activity_ms = now;
+            require_active_transfer(t, tid, now)?;
             t.active = false;
             let mut actual_crc = 0u32;
             if t.mode == TRANSFER_MODE_WRITE {

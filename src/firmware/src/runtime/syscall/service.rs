@@ -420,19 +420,11 @@ pub unsafe fn op_sys_query(a0: usize, a1: usize, a2: usize) -> usize {
             let Some(dst) = (unsafe { ptr_slice_mut(a1 as *mut u8, 7) }) else {
                 return 1;
             };
-            let mut rem = crate::services::power().uptime_secs;
-            let mut d = 1u8;
-            let mut h = 0u8;
-            while rem >= 3600 {
-                rem -= 3600;
-                h += 1;
-                if h == 24 {
-                    h = 0;
-                    d = if d == 28 { 1 } else { d + 1 };
-                }
-            }
+            let (total_hrs, rem) = py32_hal::div::udivmod(crate::services::power().uptime_secs, 3600);
+            let (days, h) = py32_hal::div::udivmod(total_hrs, 24);
+            let (_, d0) = py32_hal::div::udivmod(days, 28);
             let (m, s) = utils::math::div60_u16(rem as u16);
-            dst.copy_from_slice(&[0xEA, 0x07, 1, d, h, m as u8, s]);
+            dst.copy_from_slice(&[0xEA, 0x07, 1, (d0 + 1) as u8, h as u8, m as u8, s]);
             0
         }
         sys_query::FLUSH => usize::from(

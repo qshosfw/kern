@@ -233,11 +233,7 @@ impl Orchestrator {
     }
 }
 
-enum FilterFlow {
-    Continue,
-    DirtyContinue,
-    Stop(bool),
-}
+use kernel::shell::FilterFlow;
 
 impl Orchestrator {
     fn handle_f_key_action(&mut self, code: KeyCode) {
